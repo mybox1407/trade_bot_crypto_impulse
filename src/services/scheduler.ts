@@ -43,7 +43,7 @@ type SignalResult = {
 };
 
 const BE_THRESHOLD_PERCENT = 0.35;
-const LOCK_RATIO = 0.5;
+const LOCK_RATIO = 0.3; //06_09_2026 было 0.5
 
 const PARTIAL_THRESHOLD_PERCENT = 0.8;
 const TRAILING_DISTANCE_PERCENT = 0.35;
