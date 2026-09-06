@@ -10,7 +10,19 @@ export const TRADING_PAIRS = [
   'UNI/USDT',
   'GRAM/USDT',
   'SUI/USDT',
-  'NEAR/USDT'
+  'NEAR/USDT',
+  'BNB/USDT',
+  'DOGE/USDT',
+  'TRX/USDT',
+  'ASTER/USDT',
+  'AAVE/USDT',
+  'ONDO/USDT',
+  'ICP/USDT',
+  'WLD/USDT',
+  'ARB/USDT',
+  'DASH/USDT',
+  'PENGU/USDT',
+  'VIRTUAL/USDT'
 ];
 
 export const SIGNAL_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 минут
