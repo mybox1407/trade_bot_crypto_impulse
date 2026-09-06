@@ -16,8 +16,8 @@ export const TRADE_FEE_RATE = 0.0004;
 
 export const ENABLE_TREND_UP_TRADES = true;
 
-const MIN_ADX_TREND = 20;
-const MIN_ADX_RANGE = 18;
+const MIN_ADX_TREND = 22;
+const MIN_ADX_RANGE = 20;
 const BB_SQUEEZE_THRESHOLD = 0.05;
 
 // breakout_watch filters
