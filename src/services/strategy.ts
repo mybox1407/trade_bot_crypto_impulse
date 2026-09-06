@@ -294,10 +294,10 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     previousMacd.MACD! > previousMacd.signal! &&
     lastMacd.MACD! < lastMacd.signal!;
 
-  // ИЗМЕНЕНИЕ 3: RSI-окно расширено — тренд 45-75, пробой 45-65
+  // ИЗМЕНЕНИЕ 3: RSI-окно расширено — тренд 45-75, пробой 50-70
   const rsiBull = regime === 'trend_up'
     ? (lastRsi > 45 && lastRsi < 75)
-    : (lastRsi > 45 && lastRsi < 65);
+    : (lastRsi > 50 && lastRsi < 70);  // было 45-65, теперь 50-70 для пробоя
 
   const rsiBear = lastRsi < 60 && lastRsi > 35;
 
@@ -347,15 +347,18 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
     const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;  // теперь 0.7 ATR
 
+    // ИЗМЕНЕНИЕ 4: RSI для пробоя — 50-70 вместо 55+
     const breakoutUp =
       price > lastBb.upper + atrBuffer &&
       candleBody >= minBody &&
-      lastRsi > 55;
+      lastRsi > 50 &&
+      lastRsi < 70;
 
     const breakoutDown =
       price < lastBb.lower - atrBuffer &&
       candleBody >= minBody &&
-      lastRsi < 45;
+      lastRsi < 50 &&
+      lastRsi > 30;
 
     if (breakoutUp) {
       side = 'long';
@@ -378,9 +381,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     buy = false;
     sell = false;
     side = 'none';
-    takeProfitPrice = null;
-    stopLossPrice = null;
-    positionSize = null;
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    positionSize: null;
   }
 
   // Existing protection: skip a signal if price has moved away
