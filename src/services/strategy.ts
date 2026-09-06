@@ -16,13 +16,13 @@ export const TRADE_FEE_RATE = 0.0004;
 
 export const ENABLE_TREND_UP_TRADES = true;
 
-const MIN_ADX_TREND = 22;
+const MIN_ADX_TREND = 21;
 const MIN_ADX_RANGE = 20;
 const BB_SQUEEZE_THRESHOLD = 0.05;
 
 // breakout_watch filters
 const BREAKOUT_ATR_BUFFER_K = 0.2;
-const BREAKOUT_BODY_ATR_MIN = 0.7;  // было 0.5, теперь 0.7 ATR
+const BREAKOUT_BODY_ATR_MIN = 0.6;  // было 0.5, теперь 0.7 ATR
 
 // Skip entry if price moved too far from the original signal level.
 // Поднят с 0.5 до 1.0 — режет ~7% сигналов вместо 38%
