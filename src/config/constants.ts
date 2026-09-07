@@ -24,4 +24,4 @@ export const TRADING_PAIRS = [
 ];
 
 export const SIGNAL_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 минут
-export const POSITION_CHECK_INTERVAL_MS = 5 * 1000; // 15 секунд
+export const POSITION_CHECK_INTERVAL_MS = 3 * 1000; // 15 секунд
