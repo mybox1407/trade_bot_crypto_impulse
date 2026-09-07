@@ -68,7 +68,7 @@ export interface ClosedTrade {
   netPnL: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual';
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop';
 }
 
 let balance = STARTING_BALANCE;
