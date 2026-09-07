@@ -23,5 +23,5 @@ export const TRADING_PAIRS = [
   'VIRTUAL/USDT'
 ];
 
-export const SIGNAL_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 минут
+export const SIGNAL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 15 минут
 export const POSITION_CHECK_INTERVAL_MS = 3 * 1000; // 15 секунд
