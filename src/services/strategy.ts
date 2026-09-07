@@ -381,9 +381,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     buy = false;
     sell = false;
     side = 'none';
-    takeProfitPrice: null;
-    stopLossPrice: null;
-    positionSize: null;
+    takeProfitPrice = null;
+    stopLossPrice = null;
+    positionSize = null;
   }
 
   // Existing protection: skip a signal if price has moved away
@@ -405,6 +405,59 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
         `from signal (max ${ENTRY_SLIPPAGE_ATR_MAX.toFixed(2)} ATR)`;
     }
   }
+
+  // ========== НОВОЕ: Фильтр EMA20 > 1.5% для trend_up/trend_down ==========
+  // Отсекает входы после сильного движения (ICP, ARB)
+  if (
+    side !== 'none' &&
+    regimeIndicators &&
+    regimeIndicators.ema20 > 0 &&
+    (regime === 'trend_up' || regime === 'trend_down')
+  ) {
+    const distanceFromEma20 =
+      side === 'long'
+        ? (price - regimeIndicators.ema20) / regimeIndicators.ema20 * 100
+        : (regimeIndicators.ema20 - price) / regimeIndicators.ema20 * 100;
+
+    if (distanceFromEma20 > 1.5) {
+      return {
+        price,
+        buy: false,
+        sell: false,
+        side: 'none' as 'long' | 'short' | 'none',
+        takeProfitPrice: null,
+        stopLossPrice: null,
+        positionSize: null,
+        regime,
+        skipReason: `Too extended from EMA20 (${distanceFromEma20.toFixed(2)}%)`,
+        indicators: {
+          macdCrossUp,
+          macdCrossDown,
+          lastRsi,
+          lastAtr,
+          rsiBull,
+          rsiBear,
+          bbUpper: lastBb.upper,
+          bbMiddle: lastBb.middle,
+          bbLower: lastBb.lower,
+          regimeReady: regimeInfo.ready,
+          regimeIndicators,
+          breakoutAtrBufferK: BREAKOUT_ATR_BUFFER_K,
+          breakoutBodyAtrMin: BREAKOUT_BODY_ATR_MIN,
+          entrySlippageAtrMax: ENTRY_SLIPPAGE_ATR_MAX,
+          maxEntryExtensionTrendAtr: MAX_ENTRY_EXTENSION_TREND_ATR,
+          maxEntryExtensionBreakoutAtr: MAX_ENTRY_EXTENSION_BREAKOUT_ATR,
+          entryExtensionAtr: null,
+          maxEntryExtensionAtr: null,
+          entryTooExtended: false,
+          trendUpTradesEnabled: ENABLE_TREND_UP_TRADES,
+          tradeFeeRate: TRADE_FEE_RATE,
+          ready: true
+        }
+      };
+    }
+  }
+  // ========== КОНЕЦ НОВОГО ФИЛЬРА ==========
 
   // ИЗМЕНЕНИЕ 2: Entry-quality filter — мерим extension от границы BB в пробоях
   if (side !== 'none' && lastAtr > 0) {
