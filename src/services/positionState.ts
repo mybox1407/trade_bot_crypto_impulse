@@ -457,7 +457,7 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual'
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop'
 ) {
   const index = currentPositions.findIndex(
     position => position.id === positionId
