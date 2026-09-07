@@ -11,7 +11,6 @@ export const TRADING_PAIRS = [
   'GRAM/USDT',
   'SUI/USDT',
   'NEAR/USDT',
-  'BNB/USDT',
   'DOGE/USDT',
   'TRX/USDT',
   'ASTER/USDT',
