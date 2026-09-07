@@ -81,14 +81,17 @@ export function notifyPositionClose(data: {
   realizedPnL: number;
   netPnL: number;
   netPnLPercent: number;
-  reason: 'take_profit' | 'stop_loss' | 'manual';
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop';
   positionAgeSeconds: number;
   balance: number;
   positionId: string;
 }) {
   const emoji = data.netPnL >= 0 ? '✅' : '❌';
   const pnlEmoji = data.netPnL >= 0 ? '📈' : '📉';
-  const reasonEmoji = data.reason === 'take_profit' ? '🎯' : data.reason === 'stop_loss' ? '🛑' : '✋';
+  const reasonEmoji = 
+    data.reason === 'take_profit' ? '🎯' : 
+    data.reason === 'stop_loss' ? '🛑' : 
+    data.reason === 'time_stop' ? '⏱' : '✋';
   
   const sideText = data.side === 'long' ? 'LONG' : 'SHORT';
   const pnlSign = data.netPnL >= 0 ? '+' : '';
