@@ -20,7 +20,6 @@ export const TRADING_PAIRS = [
   'ICP/USDT',
   'WLD/USDT',
   'ARB/USDT',
-  'DASH/USDT',
   'PENGU/USDT',
   'VIRTUAL/USDT'
 ];
