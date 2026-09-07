@@ -353,8 +353,6 @@ export function openPosition(data: {
     };
   }
 
-  // EntryFee НЕ вычитаем из баланса при открытии.
-  // Комиссии учитываются только при закрытии позиции в netPnL.
   reservedCapital += notional;
 
   const position: VirtualPosition = {
@@ -491,7 +489,6 @@ export function closePosition(
   const exitFee =
     exitPrice * position.quantity * TRADE_FEE_RATE;
 
-  // EntryFee + ExitFee вычитаются из realizedPnL для расчёта netPnL
   const netPnL = realizedPnL - exitFee - position.entryFee;
 
   const netPnLPercent =
@@ -553,7 +550,7 @@ export function closePosition(
     realizedPnLPercent,
     entryFee: position.entryFee,
     exitFee,
-    totalFee,
+    totalFee: position.entryFee + exitFee,
     netPnL,
     netPnLPercent,
     balanceBefore,
@@ -646,11 +643,9 @@ export function partialClosePosition(
   const exitFee =
     exitPrice * quantityToClose * TRADE_FEE_RATE;
 
-  // Пропорциональная часть entryFee для закрываемого количества
   const proportionalEntryFee =
     position.entryFee * (quantityToClose / position.quantity);
 
-  // NetPnL = RealizedPnL − ExitFee − пропорциональная EntryFee
   const netPnL = realizedPnL - exitFee - proportionalEntryFee;
 
   const oldQuantity = position.quantity;
@@ -658,11 +653,9 @@ export function partialClosePosition(
 
   position.quantity -= quantityToClose;
 
-  // Keep notional/reserved capital based on original entry price.
   position.notional = position.quantity * position.entryPrice;
   position.reservedCapital = position.notional;
 
-  // Уменьшаем entryFee на пропорциональную часть
   position.entryFee -= proportionalEntryFee;
 
   const closedNotional =
