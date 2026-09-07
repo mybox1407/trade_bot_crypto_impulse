@@ -48,6 +48,11 @@ const LOCK_RATIO = 0.5;
 const PARTIAL_THRESHOLD_PERCENT = 0.8;
 const TRAILING_DISTANCE_PERCENT = 0.35;
 
+// Time-stop: выход из сделок без импульса за 15 минут
+const TIME_STOP_SECONDS = 900;           // 15 минут = 1 бар 15m
+const TIME_STOP_MFE_PERCENT = 0.25;      // "импульс был"
+const TIME_STOP_MAX_LOSS_PERCENT = -0.6; // не трогаем уже глубоко минусовые
+
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
 const MIN_LOCKED_PERCENT =
@@ -711,6 +716,35 @@ async function checkPositions() {
         const partialClosed = position.metadata?.partialClosed ?? false;
         const trailingActive = position.metadata?.trailingActive ?? false;
 
+        // ========== TIME-STOP: выход из сделок без импульса за 15 минут ==========
+        if (
+          !partialClosed &&
+          positionAgeSeconds >= TIME_STOP_SECONDS &&
+          maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
+          unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
+        ) {
+          const result = closePosition(
+            position.id,
+            currentPrice,
+            'time_stop'
+          );
+
+          if (!result.ok) {
+            throw new Error(
+              `Failed to time-stop ${position.symbol}: ${result.message}`
+            );
+          }
+
+          console.log(
+            `[${new Date().toISOString()}] ⏱ ${position.symbol}: TIME STOP | ` +
+              `MFE ${maxUnrealizedPnLPercent.toFixed(2)}% after ${positionAgeSeconds}s | ` +
+              `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
+          );
+
+          continue; // не идём дальше по блоку для этой позиции
+        }
+        // ========== КОНЕЦ TIME-STOP ==========
+
         if (
           !partialClosed &&
           maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT
@@ -1064,7 +1098,8 @@ export function startScheduler() {
     `[${new Date().toISOString()}] BE: +${BE_THRESHOLD_PERCENT}% | ` +
       `Ratchet lock: ${LOCK_RATIO * 100}% | ` +
       `Partial: +${PARTIAL_THRESHOLD_PERCENT}% | ` +
-      `Trailing: ${TRAILING_DISTANCE_PERCENT}%`
+      `Trailing: ${TRAILING_DISTANCE_PERCENT}% | ` +
+      `Time-stop: ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}%`
   );
 
   const positionPercent =
