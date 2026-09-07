@@ -406,13 +406,13 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     }
   }
 
-  // ========== НОВОЕ: Фильтр EMA20 > 1.5% для trend_up/trend_down ==========
-  // Отсекает входы после сильного движения (ICP, ARB)
+  // ========== НОВОЕ: Фильтр EMA20 > 1.5% для trend_up/trend_down/breakout_watch ==========
+  // Отсекает входы после сильного движения (ICP, ARB #1)
   if (
     side !== 'none' &&
     regimeIndicators &&
     regimeIndicators.ema20 > 0 &&
-    (regime === 'trend_up' || regime === 'trend_down')
+    (regime === 'trend_up' || regime === 'trend_down' || regime === 'breakout_watch')
   ) {
     const distanceFromEma20 =
       side === 'long'
