@@ -32,10 +32,10 @@ const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 const MAX_ENTRY_EXTENSION_BREAKOUT_ATR = 1.5;
 
 // Exit management
-const BE_TRIGGER_ATR = 0.8;           // BE срабатывает после +0.8 ATR в прибыли
-const PARTIAL_CLOSE_ATR = 1.0;        // Закрытие 50% на +1.0 ATR
-const TRAILING_STOP_ATR = 0.8;        // Трейлинг-стоп на 0.8 ATR от максимума
-const TIME_STOP_SECONDS = 1800;       // 30 минут (было 900с)
+const BE_TRIGGER_ATR = 0.8;
+const PARTIAL_CLOSE_ATR = 1.0;
+const TRAILING_STOP_ATR = 0.8;
+// TIME_STOP_SECONDS удалён — теперь в executor: BARS_PER_TIME_STOP = 2 (15m)
 
 // Счётчики вето (сбрасываются внешним кодом при рестарте)
 export const vetoCounters = {
@@ -88,7 +88,7 @@ function mean(values: number[]) {
 
 function getVolumeSpike(volumes: number[], avgVol20: number) {
   const latestVolume = volumes[volumes.length - 1] ?? 0;
-  return latestVolume >= avgVol20 * 1.2;  // 1.2× вместо 1.3×
+  return latestVolume >= avgVol20 * 1.2;
 }
 
 export function detectMarketRegime(candles: Candle[]) {
@@ -168,11 +168,6 @@ export function detectMarketRegime(candles: Candle[]) {
   const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
   const compression = bbWidth <= BB_SQUEEZE_THRESHOLD;
 
-  // Счётчик: сжатие
-  if (compression) {
-    vetoCounters.bbSqueeze++;
-  }
-
   const strongTrendUp =
     lastClose > lastEma200 &&
     lastEma20 > lastEma50 &&
@@ -192,11 +187,6 @@ export function detectMarketRegime(candles: Candle[]) {
     lastAdx.adx >= 15 &&
     lastAdx.adx <= 28 &&
     getVolumeSpike(volumes, avgVol20);
-
-  // Счётчик: volumeSpike (для breakoutWatch)
-  if (getVolumeSpike(volumes, avgVol20)) {
-    vetoCounters.volumeSpike++;
-  }
 
   const highVolatility =
     atrPct > 0.025 ||
@@ -315,12 +305,12 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     previousMacd.MACD! > previousMacd.signal! &&
     lastMacd.MACD! < lastMacd.signal!;
 
-  // Счётчик: macdCross
+  // Счётчик: macdCross (только для кандидатов)
   if (macdCrossUp || macdCrossDown) {
     vetoCounters.macdCross++;
   }
 
-  // RSI: тренд 45-75, пробой 50-75 (поднят потолок с 70 до 75)
+  // RSI: тренд 45-75, пробой 50-75
   const rsiBull = regime === 'trend_up'
     ? (lastRsi > 45 && lastRsi < 75)
     : (lastRsi > 50 && lastRsi < 75);
@@ -343,7 +333,6 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
 
-  // ========== Вспомогательные функции для частичного закрытия и трейлинга ==========
   const partialCloseInfo = {
     enabled: false,
     closeFraction: 0,
@@ -368,6 +357,14 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     buy = true;
     stopLossPrice = price - lastAtr * 1.4;
     takeProfitPrice = price + lastAtr * 2.8;
+
+    // Partial + trailing для трендов (опционально)
+    partialCloseInfo.enabled = true;
+    partialCloseInfo.closeFraction = 0.5;
+    partialCloseInfo.triggerAtr = PARTIAL_CLOSE_ATR;
+
+    trailingInfo.enabled = true;
+    trailingInfo.stopAtr = TRAILING_STOP_ATR;
   }
 
   if (
@@ -380,6 +377,14 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     sell = true;
     stopLossPrice = price + lastAtr * 1.4;
     takeProfitPrice = price - lastAtr * 2.8;
+
+    // Partial + trailing для трендов (опционально)
+    partialCloseInfo.enabled = true;
+    partialCloseInfo.closeFraction = 0.5;
+    partialCloseInfo.triggerAtr = PARTIAL_CLOSE_ATR;
+
+    trailingInfo.enabled = true;
+    trailingInfo.stopAtr = TRAILING_STOP_ATR;
   }
 
   if (regime === 'breakout_watch') {
@@ -387,7 +392,6 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
     const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
 
-    // RSI для пробоя: 50-75 (было 50-70)
     const breakoutUp =
       price > lastBb.upper + atrBuffer &&
       candleBody >= minBody &&
@@ -416,7 +420,6 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
       stopLossPrice = price - lastAtr * 1.5;
       takeProfitPrice = price + lastAtr * 3.0;
 
-      // Partial + trailing для пробоев
       partialCloseInfo.enabled = true;
       partialCloseInfo.closeFraction = 0.5;
       partialCloseInfo.triggerAtr = PARTIAL_CLOSE_ATR;
@@ -467,12 +470,12 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     }
   }
 
-  // ========== Фильтр: EMA20 extension (ТОЛЬКО для трендов, НЕ для пробоев) ==========
+  // ========== Фильтр: EMA20 extension (ТОЛЬКО для трендов) ==========
   if (
     side !== 'none' &&
     regimeIndicators &&
     regimeIndicators.ema20 > 0 &&
-    (regime === 'trend_up' || regime === 'trend_down')  // убран breakout_watch
+    (regime === 'trend_up' || regime === 'trend_down')
   ) {
     const distanceFromEma20 =
       side === 'long'
@@ -515,11 +518,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
           trendUpTradesEnabled: ENABLE_TREND_UP_TRADES,
           tradeFeeRate: TRADE_FEE_RATE,
           ready: true,
-          // Exit management
           beTriggerAtr: BE_TRIGGER_ATR,
           partialCloseAtr: PARTIAL_CLOSE_ATR,
           trailingStopAtr: TRAILING_STOP_ATR,
-          timeStopSeconds: TIME_STOP_SECONDS,
           partialCloseInfo,
           trailingInfo
         }
@@ -613,14 +614,11 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
       trendUpTradesEnabled: ENABLE_TREND_UP_TRADES,
       tradeFeeRate: TRADE_FEE_RATE,
       ready: true,
-      // Exit management
       beTriggerAtr: BE_TRIGGER_ATR,
       partialCloseAtr: PARTIAL_CLOSE_ATR,
       trailingStopAtr: TRAILING_STOP_ATR,
-      timeStopSeconds: TIME_STOP_SECONDS,
       partialCloseInfo,
       trailingInfo,
-      // Veto counters (snapshot)
       vetoCounters: { ...vetoCounters }
     }
   };
