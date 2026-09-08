@@ -178,7 +178,7 @@ export function logPositionClose(row: {
   netPnLPercent: number;
   balanceBefore: number;
   balanceAfter: number;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop';
+  reason: string;
   positionAgeSeconds: number;
   openedAt: string;
   closedAt: string;
