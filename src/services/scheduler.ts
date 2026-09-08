@@ -48,13 +48,13 @@ const PARTIAL_CLOSE_ATR = 1.0;
 const TRAILING_DISTANCE_ATR = 0.8;
 
 // 15m таймфрейм: 30 мин = 2 бара
-const BARS_PER_TIME_STOP = 8;
-const BAR_DURATION_SECONDS = 3600; // 15m = 900s
+const BARS_PER_TIME_STOP = 2;
+const BAR_DURATION_SECONDS = 900; // 15m = 900s
 
-const TIME_STOP_MFE_ATR = 0.7; // жёстче: 0.7 ATR за 2 бара
+const TIME_STOP_MFE_ATR = 0.7;
 const TIME_STOP_MAX_LOSS_ATR = 1.0;
 
-const MIN_LOCKED_PERCENT = 0.25; // 0.25% вместо ~0.13%
+const MIN_LOCKED_PERCENT = 0.25;
 
 let signalCheckInterval: NodeJS.Timeout | null = null;
 let positionCheckInterval: NodeJS.Timeout | null = null;
@@ -774,8 +774,10 @@ async function checkPositions() {
 
         const mfeInAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
 
+        // ========== RATCHET: отключаем для breakout_watch ==========
         if (
           !beTriggered &&
+          position.metadata?.regime !== 'breakout_watch' &&
           mfeInAtr >= beTriggerAtr
         ) {
           const lockedPercent =
@@ -1129,8 +1131,8 @@ export function startScheduler() {
   );
   console.log(
     `[${new Date().toISOString()}] Exit management: ` +
-      `BE @ +${BE_TRIGGER_ATR} ATR | ` +
-      `Partial @ +${PARTIAL_CLOSE_ATR} ATR | ` +
+      `BE @ +${BE_TRIGGER_ATR} ATR (no breakout) | ` +
+      `Partial @ +${PARTIAL_CLOSE_ATR} ATR (breakout: 0.6) | ` +
       `Trailing @ ${TRAILING_DISTANCE_ATR} ATR (breakout: 0.8, trend: 1.0) | ` +
       `Time-stop ${BARS_PER_TIME_STOP} bars (${BARS_PER_TIME_STOP * 15}min) @ MFE<${TIME_STOP_MFE_ATR} ATR`
   );
