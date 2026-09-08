@@ -46,14 +46,15 @@ type SignalResult = {
 const BE_TRIGGER_ATR = 0.8;
 const PARTIAL_CLOSE_ATR = 1.0;
 const TRAILING_DISTANCE_ATR = 0.8;
-const TIME_STOP_SECONDS = 1800;
-const TIME_STOP_MFE_ATR = 0.5;
+
+// 15m таймфрейм: 30 мин = 2 бара
+const BARS_PER_TIME_STOP = 2;
+const BAR_DURATION_SECONDS = 900; // 15m = 900s
+
+const TIME_STOP_MFE_ATR = 0.7; // жёстче: 0.7 ATR за 2 бара
 const TIME_STOP_MAX_LOSS_ATR = 1.0;
 
-const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
-const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
-const MIN_LOCKED_PERCENT =
-  ROUND_TRIP_FEE_PERCENT + BE_SLIPPAGE_BUFFER_PERCENT;
+const MIN_LOCKED_PERCENT = 0.25; // 0.25% вместо ~0.13%
 
 let signalCheckInterval: NodeJS.Timeout | null = null;
 let positionCheckInterval: NodeJS.Timeout | null = null;
@@ -731,11 +732,13 @@ async function checkPositions() {
         const mfeAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
         const lossAtr = atr > 0 ? unrealizedPnL / (atr * position.quantity) : 0;
 
+        // 15m: считаем возраст в барах стратегии, не в секундах
+        const barAge = Math.floor(positionAgeSeconds / BAR_DURATION_SECONDS);
+
         if (
           !partialClosed &&
-          positionAgeSeconds >= TIME_STOP_SECONDS &&
-          mfeAtr < TIME_STOP_MFE_ATR &&
-          lossAtr > TIME_STOP_MAX_LOSS_ATR
+          barAge >= BARS_PER_TIME_STOP &&
+          (mfeAtr < TIME_STOP_MFE_ATR || lossAtr > TIME_STOP_MAX_LOSS_ATR)
         ) {
           const result = closePosition(
             position.id,
@@ -752,7 +755,7 @@ async function checkPositions() {
           console.log(
             `[${new Date().toISOString()}] ⏱ ${position.symbol}: TIME STOP | ` +
               `MFE ${mfeAtr.toFixed(2)} ATR (${maxUnrealizedPnLPercent.toFixed(2)}%) ` +
-              `after ${positionAgeSeconds}s | ` +
+              `after ${barAge} bars (${positionAgeSeconds}s) | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
 
@@ -761,7 +764,13 @@ async function checkPositions() {
 
         const beTriggerAtr = position.metadata?.beTriggerAtr ?? BE_TRIGGER_ATR;
         const partialCloseAtr = position.metadata?.partialCloseAtr ?? PARTIAL_CLOSE_ATR;
-        const trailingStopAtr = position.metadata?.trailingStopAtr ?? TRAILING_DISTANCE_ATR;
+
+        // 1.0 ATR для трендов, 0.8 ATR для пробоев
+        const baseTrailingAtr =
+          position.metadata?.regime === 'breakout_watch' ? 0.8 : 1.0;
+
+        const trailingStopAtr =
+          position.metadata?.trailingStopAtr ?? baseTrailingAtr;
 
         const mfeInAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
 
@@ -920,7 +929,12 @@ async function checkPositions() {
                   candidateTrailingStop
                 );
 
-          if (nextTrailingStop !== statePosition.stopLossPrice) {
+          // Не дёргать SL, если сдвиг меньше 0.3 ATR
+          const shouldUpdate =
+            Math.abs(nextTrailingStop - statePosition.stopLossPrice) / atr >= 0.3 &&
+            nextTrailingStop !== statePosition.stopLossPrice;
+
+          if (shouldUpdate) {
             const updated = updatePositionStopLoss(
               statePosition.id,
               nextTrailingStop
@@ -1117,8 +1131,8 @@ export function startScheduler() {
     `[${new Date().toISOString()}] Exit management: ` +
       `BE @ +${BE_TRIGGER_ATR} ATR | ` +
       `Partial @ +${PARTIAL_CLOSE_ATR} ATR | ` +
-      `Trailing @ ${TRAILING_DISTANCE_ATR} ATR | ` +
-      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_ATR} ATR`
+      `Trailing @ ${TRAILING_DISTANCE_ATR} ATR (breakout: 0.8, trend: 1.0) | ` +
+      `Time-stop ${BARS_PER_TIME_STOP} bars (${BARS_PER_TIME_STOP * 15}min) @ MFE<${TIME_STOP_MFE_ATR} ATR`
   );
 
   const positionPercent =
