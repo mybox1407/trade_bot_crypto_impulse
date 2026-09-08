@@ -43,12 +43,12 @@ type SignalResult = {
 };
 
 // ========== EXIT MANAGEMENT: согласовано с strategy.ts ==========
-const BE_TRIGGER_ATR = 0.8;           // BE после +0.8 ATR (было BE_THRESHOLD_PERCENT 0.35%)
-const PARTIAL_CLOSE_ATR = 1.0;        // Частичное закрытие на +1.0 ATR (было 0.8%)
-const TRAILING_DISTANCE_ATR = 0.8;    // Трейлинг на 0.8 ATR (было TRAILING_DISTANCE_PERCENT 0.35%)
-const TIME_STOP_SECONDS = 1800;       // 30 минут (было 900с / 15 мин)
-const TIME_STOP_MFE_ATR = 0.5;        // "Импульс был" = MFE >= 0.5 ATR
-const TIME_STOP_MAX_LOSS_ATR = 1.0;   // Не трогаем глубже -1.0 ATR
+const BE_TRIGGER_ATR = 0.8;
+const PARTIAL_CLOSE_ATR = 1.0;
+const TRAILING_DISTANCE_ATR = 0.8;
+const TIME_STOP_SECONDS = 1800;
+const TIME_STOP_MFE_ATR = 0.5;
+const TIME_STOP_MAX_LOSS_ATR = 1.0;
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
@@ -307,7 +307,6 @@ async function checkSignals() {
           );
         }
 
-        // Логирование счётчиков вето
         if (indicators?.vetoCounters) {
           console.log(
             `   Veto counters: EMA20=${indicators.vetoCounters.ema20Extension}, ` +
@@ -456,7 +455,6 @@ async function checkSignals() {
               entryTooExtended:
                 indicators?.entryTooExtended ?? false,
 
-              // Exit management
               partialCloseInfo: indicators?.partialCloseInfo ?? null,
               trailingInfo: indicators?.trailingInfo ?? null,
               beTriggerAtr: indicators?.beTriggerAtr ?? BE_TRIGGER_ATR,
@@ -729,7 +727,6 @@ async function checkPositions() {
         const trailingActive = position.metadata?.trailingActive ?? false;
         const beTriggered = position.metadata?.beTriggered ?? false;
 
-        // ========== TIME-STOP: 30 минут, MFE >= 0.5 ATR ==========
         const atr = position.metadata?.lastAtr ?? 0;
         const mfeAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
         const lossAtr = atr > 0 ? unrealizedPnL / (atr * position.quantity) : 0;
@@ -761,23 +758,20 @@ async function checkPositions() {
 
           continue;
         }
-        // ========== КОНЕЦ TIME-STOP ==========
 
-        // ========== EXIT MANAGEMENT по ATR ==========
         const beTriggerAtr = position.metadata?.beTriggerAtr ?? BE_TRIGGER_ATR;
         const partialCloseAtr = position.metadata?.partialCloseAtr ?? PARTIAL_CLOSE_ATR;
         const trailingStopAtr = position.metadata?.trailingStopAtr ?? TRAILING_DISTANCE_ATR;
 
         const mfeInAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
 
-        // BE после +0.8 ATR (вместо процента)
         if (
           !beTriggered &&
           mfeInAtr >= beTriggerAtr
         ) {
           const lockedPercent =
             MIN_LOCKED_PERCENT +
-            (mfeInAtr - beTriggerAtr) * LOCK_RATIO;
+            (mfeInAtr - beTriggerAtr) * 0.5;
 
           const ratchetStop =
             position.side === 'long'
@@ -813,7 +807,6 @@ async function checkPositions() {
           }
         }
 
-        // Partial 50% на +1.0 ATR
         if (
           !partialClosed &&
           mfeInAtr >= partialCloseAtr
@@ -894,7 +887,6 @@ async function checkPositions() {
           );
         }
 
-        // Трейлинг после partial
         if (trailingActive || partialClosed) {
           const statePosition = getPositions().find(
             item => item.id === position.id
@@ -953,7 +945,6 @@ async function checkPositions() {
             );
           }
         }
-        // ========== КОНЕЦ EXIT MANAGEMENT ==========
 
         const activePosition = getPositions().find(
           item => item.id === position.id
@@ -1026,12 +1017,10 @@ async function checkPositions() {
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else if (hitStopLoss) {
-          const closeReason = beTriggered ? 'breakeven_stop' : 'stop_loss';
-
           const result = closePosition(
             position.id,
             currentPrice,
-            closeReason
+            beTriggered ? 'breakeven_stop' : 'stop_loss'
           );
 
           if (!result.ok) {
@@ -1041,7 +1030,7 @@ async function checkPositions() {
           }
 
           console.log(
-            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT ${closeReason.toUpperCase()} | ` +
+            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT ${beTriggered ? 'BE' : 'STOP'} | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else {
@@ -1070,7 +1059,7 @@ async function checkPositions() {
           action: hitTakeProfit
             ? 'close_tp'
             : hitStopLoss
-              ? closeReason === 'breakeven_stop' ? 'close_be' : 'close_sl'
+              ? beTriggered ? 'close_be' : 'close_sl'
               : 'hold',
           positionAgeSeconds
         });
