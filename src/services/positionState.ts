@@ -31,17 +31,14 @@ export interface VirtualPosition {
     bbWidth: number;
     atrPct: number;
 
-    // Indicators at the exact moment of entry.
     ema20?: number;
     ema50?: number;
     ema200?: number;
 
-    // Entry-quality metrics.
     entryExtensionAtr?: number;
     maxEntryExtensionAtr?: number;
     entryTooExtended?: boolean;
 
-    // Position management metrics.
     maxUnrealizedPnL?: number;
     maxUnrealizedPnLPercent?: number;
     worstUnrealizedPnL?: number;
@@ -51,7 +48,6 @@ export interface VirtualPosition {
     trailingActive?: boolean;
     trailingStopPrice?: number;
 
-    // Exit management parameters (from strategy.ts).
     beTriggerAtr?: number;
     partialCloseAtr?: number;
     trailingStopAtr?: number;
@@ -82,7 +78,7 @@ export interface ClosedTrade {
   netPnL: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop';
+  reason: string;
 }
 
 let balance = STARTING_BALANCE;
@@ -470,7 +466,7 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop'
+  reason: string
 ) {
   const index = currentPositions.findIndex(
     position => position.id === positionId
