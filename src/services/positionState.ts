@@ -50,6 +50,20 @@ export interface VirtualPosition {
     partialClosed?: boolean;
     trailingActive?: boolean;
     trailingStopPrice?: number;
+
+    // Exit management parameters (from strategy.ts).
+    beTriggerAtr?: number;
+    partialCloseAtr?: number;
+    trailingStopAtr?: number;
+    partialCloseInfo?: {
+      enabled: boolean;
+      closeFraction: number;
+      triggerAtr: number;
+    } | null;
+    trailingInfo?: {
+      enabled: boolean;
+      stopAtr: number;
+    } | null;
   };
 }
 
@@ -68,7 +82,7 @@ export interface ClosedTrade {
   netPnL: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop';
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop';
 }
 
 let balance = STARTING_BALANCE;
@@ -456,7 +470,7 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop'
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop'
 ) {
   const index = currentPositions.findIndex(
     position => position.id === positionId
