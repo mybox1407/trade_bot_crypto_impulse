@@ -48,8 +48,8 @@ const PARTIAL_CLOSE_ATR = 1.0;
 const TRAILING_DISTANCE_ATR = 0.8;
 
 // 15m таймфрейм: 30 мин = 2 бара
-const BARS_PER_TIME_STOP = 2;
-const BAR_DURATION_SECONDS = 900; // 15m = 900s
+const BARS_PER_TIME_STOP = 8;
+const BAR_DURATION_SECONDS = 3600; // 15m = 900s
 
 const TIME_STOP_MFE_ATR = 0.7; // жёстче: 0.7 ATR за 2 бара
 const TIME_STOP_MAX_LOSS_ATR = 1.0;
