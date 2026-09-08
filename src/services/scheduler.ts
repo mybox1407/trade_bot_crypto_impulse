@@ -42,16 +42,13 @@ type SignalResult = {
   reason: string;
 };
 
-const BE_THRESHOLD_PERCENT = 0.35;
-const LOCK_RATIO = 0.5; 
-
-const PARTIAL_THRESHOLD_PERCENT = 0.8;
-const TRAILING_DISTANCE_PERCENT = 0.35;
-
-// Time-stop: выход из сделок без импульса за 15 минут
-const TIME_STOP_SECONDS = 900;           // 15 минут = 1 бар 15m
-const TIME_STOP_MFE_PERCENT = 0.25;      // "импульс был"
-const TIME_STOP_MAX_LOSS_PERCENT = -0.6; // не трогаем уже глубоко минусовые
+// ========== EXIT MANAGEMENT: согласовано с strategy.ts ==========
+const BE_TRIGGER_ATR = 0.8;           // BE после +0.8 ATR (было BE_THRESHOLD_PERCENT 0.35%)
+const PARTIAL_CLOSE_ATR = 1.0;        // Частичное закрытие на +1.0 ATR (было 0.8%)
+const TRAILING_DISTANCE_ATR = 0.8;    // Трейлинг на 0.8 ATR (было TRAILING_DISTANCE_PERCENT 0.35%)
+const TIME_STOP_SECONDS = 1800;       // 30 минут (было 900с / 15 мин)
+const TIME_STOP_MFE_ATR = 0.5;        // "Импульс был" = MFE >= 0.5 ATR
+const TIME_STOP_MAX_LOSS_ATR = 1.0;   // Не трогаем глубже -1.0 ATR
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
@@ -310,6 +307,18 @@ async function checkSignals() {
           );
         }
 
+        // Логирование счётчиков вето
+        if (indicators?.vetoCounters) {
+          console.log(
+            `   Veto counters: EMA20=${indicators.vetoCounters.ema20Extension}, ` +
+              `ExtATR=${indicators.vetoCounters.entryExtensionAtr}, ` +
+              `RSI=${indicators.vetoCounters.rsiCapBreakout}, ` +
+              `Vol=${indicators.vetoCounters.volumeSpike}, ` +
+              `MACD=${indicators.vetoCounters.macdCross}, ` +
+              `BB=${indicators.vetoCounters.bbSqueeze}`
+          );
+        }
+
         console.log(`   Signal: ${buy ? 'BUY' : sell ? 'SELL' : 'NONE'}`);
 
         let signalReason = '';
@@ -437,19 +446,22 @@ async function checkSignals() {
               bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
               atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
 
-              // Новое: сохраняем EMA на момент входа
-              // для оценки качества сделки после её закрытия.
               ema20: indicators?.regimeIndicators?.ema20 ?? 0,
               ema50: indicators?.regimeIndicators?.ema50 ?? 0,
               ema200: indicators?.regimeIndicators?.ema200 ?? 0,
 
-              // Новое: сохраняем оценку extension,
-              // рассчитанную strategy.ts.
               entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
               maxEntryExtensionAtr:
                 indicators?.maxEntryExtensionAtr ?? 0,
               entryTooExtended:
-                indicators?.entryTooExtended ?? false
+                indicators?.entryTooExtended ?? false,
+
+              // Exit management
+              partialCloseInfo: indicators?.partialCloseInfo ?? null,
+              trailingInfo: indicators?.trailingInfo ?? null,
+              beTriggerAtr: indicators?.beTriggerAtr ?? BE_TRIGGER_ATR,
+              partialCloseAtr: indicators?.partialCloseAtr ?? PARTIAL_CLOSE_ATR,
+              trailingStopAtr: indicators?.trailingStopAtr ?? TRAILING_DISTANCE_ATR
             } as any,
             riskCapital,
             maxNotionalByPercent,
@@ -715,13 +727,18 @@ async function checkPositions() {
 
         const partialClosed = position.metadata?.partialClosed ?? false;
         const trailingActive = position.metadata?.trailingActive ?? false;
+        const beTriggered = position.metadata?.beTriggered ?? false;
 
-        // ========== TIME-STOP: выход из сделок без импульса за 15 минут ==========
+        // ========== TIME-STOP: 30 минут, MFE >= 0.5 ATR ==========
+        const atr = position.metadata?.lastAtr ?? 0;
+        const mfeAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
+        const lossAtr = atr > 0 ? unrealizedPnL / (atr * position.quantity) : 0;
+
         if (
           !partialClosed &&
           positionAgeSeconds >= TIME_STOP_SECONDS &&
-          maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
-          unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
+          mfeAtr < TIME_STOP_MFE_ATR &&
+          lossAtr > TIME_STOP_MAX_LOSS_ATR
         ) {
           const result = closePosition(
             position.id,
@@ -737,21 +754,30 @@ async function checkPositions() {
 
           console.log(
             `[${new Date().toISOString()}] ⏱ ${position.symbol}: TIME STOP | ` +
-              `MFE ${maxUnrealizedPnLPercent.toFixed(2)}% after ${positionAgeSeconds}s | ` +
+              `MFE ${mfeAtr.toFixed(2)} ATR (${maxUnrealizedPnLPercent.toFixed(2)}%) ` +
+              `after ${positionAgeSeconds}s | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
 
-          continue; // не идём дальше по блоку для этой позиции
+          continue;
         }
         // ========== КОНЕЦ TIME-STOP ==========
 
+        // ========== EXIT MANAGEMENT по ATR ==========
+        const beTriggerAtr = position.metadata?.beTriggerAtr ?? BE_TRIGGER_ATR;
+        const partialCloseAtr = position.metadata?.partialCloseAtr ?? PARTIAL_CLOSE_ATR;
+        const trailingStopAtr = position.metadata?.trailingStopAtr ?? TRAILING_DISTANCE_ATR;
+
+        const mfeInAtr = atr > 0 ? maxUnrealizedPnL / (atr * position.quantity) : 0;
+
+        // BE после +0.8 ATR (вместо процента)
         if (
-          !partialClosed &&
-          maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT
+          !beTriggered &&
+          mfeInAtr >= beTriggerAtr
         ) {
           const lockedPercent =
             MIN_LOCKED_PERCENT +
-            (maxUnrealizedPnLPercent - BE_THRESHOLD_PERCENT) * LOCK_RATIO;
+            (mfeInAtr - beTriggerAtr) * LOCK_RATIO;
 
           const ratchetStop =
             position.side === 'long'
@@ -781,15 +807,16 @@ async function checkPositions() {
 
             console.log(
               `[${new Date().toISOString()}] 🛡 ${position.symbol}: RATCHET SL @ ` +
-                `${formatPrice(nextStop)} | MFE ${maxUnrealizedPnLPercent.toFixed(2)}% | ` +
+                `${formatPrice(nextStop)} | MFE ${mfeInAtr.toFixed(2)} ATR (${maxUnrealizedPnLPercent.toFixed(2)}%) | ` +
                 `lock ${lockedPercent.toFixed(2)}%`
             );
           }
         }
 
+        // Partial 50% на +1.0 ATR
         if (
           !partialClosed &&
-          maxUnrealizedPnLPercent >= PARTIAL_THRESHOLD_PERCENT
+          mfeInAtr >= partialCloseAtr
         ) {
           const quantityBeforePartial = position.quantity;
           const closeQuantity = quantityBeforePartial * 0.5;
@@ -816,8 +843,7 @@ async function checkPositions() {
             );
           }
 
-          const trailDistance =
-            currentPrice * (TRAILING_DISTANCE_PERCENT / 100);
+          const trailDistance = atr * trailingStopAtr;
 
           const proposedInitialTrail =
             remainingPosition.side === 'long'
@@ -859,14 +885,16 @@ async function checkPositions() {
 
           console.log(
             `[${new Date().toISOString()}] 📉 ${position.symbol}: PARTIAL CLOSE 50% ` +
-              `(${closeQuantity.toFixed(8)}) @ ${formatPrice(currentPrice)}`
+              `(${closeQuantity.toFixed(8)}) @ ${formatPrice(currentPrice)} | ` +
+              `MFE ${mfeInAtr.toFixed(2)} ATR`
           );
           console.log(
             `[${new Date().toISOString()}] 🪢 ${position.symbol}: TRAILING ON @ ` +
-              `${formatPrice(initialTrailingStop)}`
+              `${formatPrice(initialTrailingStop)} (${trailingStopAtr.toFixed(2)} ATR)`
           );
         }
 
+        // Трейлинг после partial
         if (trailingActive || partialClosed) {
           const statePosition = getPositions().find(
             item => item.id === position.id
@@ -880,8 +908,7 @@ async function checkPositions() {
             statePosition.metadata?.trailingStopPrice ??
             statePosition.stopLossPrice;
 
-          const trailDistance =
-            currentPrice * (TRAILING_DISTANCE_PERCENT / 100);
+          const trailDistance = atr * trailingStopAtr;
 
           const candidateTrailingStop =
             statePosition.side === 'long'
@@ -922,10 +949,11 @@ async function checkPositions() {
 
             console.log(
               `[${new Date().toISOString()}] 🔁 ${position.symbol}: TRAILING SL @ ` +
-                `${formatPrice(nextTrailingStop)}`
+                `${formatPrice(nextTrailingStop)} (${trailingStopAtr.toFixed(2)} ATR)`
             );
           }
         }
+        // ========== КОНЕЦ EXIT MANAGEMENT ==========
 
         const activePosition = getPositions().find(
           item => item.id === position.id
@@ -977,7 +1005,7 @@ async function checkPositions() {
         );
         console.log(
           `   Unrealized: $${unrealizedPnL.toFixed(2)} (${unrealizedPnLPercent.toFixed(2)}%) | ` +
-            `MFE: ${maxUnrealizedPnLPercent.toFixed(2)}%`
+            `MFE: ${maxUnrealizedPnLPercent.toFixed(2)}% (${mfeInAtr.toFixed(2)} ATR)`
         );
 
         if (hitTakeProfit) {
@@ -998,10 +1026,12 @@ async function checkPositions() {
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else if (hitStopLoss) {
+          const closeReason = beTriggered ? 'breakeven_stop' : 'stop_loss';
+
           const result = closePosition(
             position.id,
             currentPrice,
-            'stop_loss'
+            closeReason
           );
 
           if (!result.ok) {
@@ -1011,7 +1041,7 @@ async function checkPositions() {
           }
 
           console.log(
-            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT STOP | ` +
+            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT ${closeReason.toUpperCase()} | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else {
@@ -1040,7 +1070,7 @@ async function checkPositions() {
           action: hitTakeProfit
             ? 'close_tp'
             : hitStopLoss
-              ? 'close_sl'
+              ? closeReason === 'breakeven_stop' ? 'close_be' : 'close_sl'
               : 'hold',
           positionAgeSeconds
         });
@@ -1095,11 +1125,11 @@ export function startScheduler() {
     `[${new Date().toISOString()}] Max positions: ${MAX_PARALLEL_POSITIONS}`
   );
   console.log(
-    `[${new Date().toISOString()}] BE: +${BE_THRESHOLD_PERCENT}% | ` +
-      `Ratchet lock: ${LOCK_RATIO * 100}% | ` +
-      `Partial: +${PARTIAL_THRESHOLD_PERCENT}% | ` +
-      `Trailing: ${TRAILING_DISTANCE_PERCENT}% | ` +
-      `Time-stop: ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}%`
+    `[${new Date().toISOString()}] Exit management: ` +
+      `BE @ +${BE_TRIGGER_ATR} ATR | ` +
+      `Partial @ +${PARTIAL_CLOSE_ATR} ATR | ` +
+      `Trailing @ ${TRAILING_DISTANCE_ATR} ATR | ` +
+      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_ATR} ATR`
   );
 
   const positionPercent =
