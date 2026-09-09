@@ -345,7 +345,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    (macdCrossUp || (rsiBull && rsiRising && lastRsi > 60)) &&  // <<< ДОБАВИЛ RSI фильтр БЫЛО 55
+    (macdCrossUp || (rsiBull && rsiRising && lastRsi > 55)) &&  // <<< ДОБАВИЛ RSI фильтр БЫЛО 55
     price > regimeIndicators.ema200
   ) {
     side = 'long';
@@ -356,7 +356,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
   if (
     regime === 'trend_down' &&
-    (macdCrossDown || (rsiBear && rsiRising && lastRsi < 40)) &&  // <<< ДОБАВИЛ RSI фильтр для downtrend БЫЛО 45
+    (macdCrossDown || (rsiBear && rsiRising && lastRsi < 45)) &&  // <<< ДОБАВИЛ RSI фильтр для downtrend БЫЛО 45
     rsiBear &&
     price < regimeIndicators.ema200
   ) {
