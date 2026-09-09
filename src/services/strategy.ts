@@ -340,7 +340,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    macdCrossUp &&
+    //macdCrossUp && // <<< Закомментировал MACD cross up для трендов
     rsiBull &&
     price > regimeIndicators.ema200
   ) {
@@ -352,7 +352,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
   if (
     regime === 'trend_down' &&
-    macdCrossDown &&
+    //macdCrossDown && // <<< Закомментировал MACD cross up для трендов
     rsiBear &&
     price < regimeIndicators.ema200
   ) {
