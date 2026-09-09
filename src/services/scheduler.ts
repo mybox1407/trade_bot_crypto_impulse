@@ -847,32 +847,33 @@ async function checkPositions() {
         if (
           DEAD_TRADE_ENABLED &&
           !partialClosed &&
+          !beTriggered &&  // <<< ДОБАВИТЬ: не закрывать, если BE сработал
           positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
         ) {
           const entryAtr = position.metadata?.lastAtr ?? 0;
           const mfeAtr = entryAtr > 0
             ? maxUnrealizedPnL / (entryAtr * position.quantity)
             : 0;
-
+        
           if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
             const result = closePosition(
               position.id,
               currentPrice,
               'dead_trade_mfe'
             );
-
+        
             if (!result.ok) {
               throw new Error(
                 `Failed to dead-trade-close ${position.symbol}: ${result.message}`
               );
             }
-
+        
             console.log(
               `[${new Date().toISOString()}] ✂️ ${position.symbol}: DEAD TRADE | ` +
                 `MFE ${mfeAtr.toFixed(2)} ATR after ${positionAgeSeconds}s | ` +
                 `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
             );
-
+        
             continue;
           }
         }
