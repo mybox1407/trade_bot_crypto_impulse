@@ -381,9 +381,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     buy = false;
     sell = false;
     side = 'none';
-    takeProfitPrice: null;
-    stopLossPrice: null;
-    positionSize: null;
+    takeProfitPrice = null;
+    stopLossPrice = null;
+    positionSize = null;
   }
 
   // Existing protection: skip a signal if price has moved away
