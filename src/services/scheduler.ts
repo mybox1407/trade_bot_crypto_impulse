@@ -43,22 +43,24 @@ type SignalResult = {
 };
 
 // ========== EXIT MANAGEMENT: исправленные параметры ==========
-// BE trigger: снижен с 0.35% до 0.25% — сработает раньше
-const BE_THRESHOLD_PERCENT = 0.25;  // было 0.35
-const LOCK_RATIO = 0.3;  // было 0.5 — менее агрессивный ratchet
+const BE_THRESHOLD_PERCENT = 0.25;
+const LOCK_RATIO = 0.3;
 
-// Partial close: снижен с 0.8% до 0.5% — сработает на 0.3-0.5 ATR
-const PARTIAL_THRESHOLD_PERCENT = 0.5;  // было 0.8
-const TRAILING_DISTANCE_PERCENT = 0.35;  // оставлено 0.35% (0.2-0.3 ATR)
+const PARTIAL_THRESHOLD_PERCENT = 0.5;
+const TRAILING_DISTANCE_PERCENT = 0.35;
 
-// Time-stop: увеличен с 15 до 30 минут, MFE с 0.25% до 0.5%
-const TIME_STOP_SECONDS = 1800;  // было 900 (30 мин вместо 15)
-const TIME_STOP_MFE_PERCENT = 0.5;  // было 0.25
+const TIME_STOP_SECONDS = 1800;
+const TIME_STOP_MFE_PERCENT = 0.5;
 const TIME_STOP_MAX_LOSS_PERCENT = -0.6;
+
+// <<< DEAD TRADE: раннее закрытие мёртвых позиций
+const DEAD_TRADE_ENABLED = true;
+const DEAD_TRADE_CHECK_AFTER_SEC = 150;      // 2.5 минуты
+const DEAD_TRADE_MIN_MFE_ATR = 0.25;         // минимальный MFE в ATR
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
-const MIN_LOCKED_PERCENT = 0.25;  // было 0.13 — больше комиссии
+const MIN_LOCKED_PERCENT = 0.25;
 
 let signalCheckInterval: NodeJS.Timeout | null = null;
 let positionCheckInterval: NodeJS.Timeout | null = null;
@@ -716,7 +718,6 @@ async function checkPositions() {
         const beTriggered = position.metadata?.beTriggered ?? false;
 
         // ========== RATCHET: ПРОВЕРЯЕМ ДО TIME-STOP ==========
-        // Перемещено выше, чтобы сработал до закрытия по time stop
         if (
           !beTriggered &&
           maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT
@@ -761,7 +762,6 @@ async function checkPositions() {
         // ========== КОНЕЦ RATCHET ==========
 
         // ========== PARTIAL CLOSE: ПРОВЕРЯЕМ ДО TIME-STOP ==========
-        // Перемещено выше, чтобы сработал до закрытия по time stop
         if (
           !partialClosed &&
           maxUnrealizedPnLPercent >= PARTIAL_THRESHOLD_PERCENT
@@ -843,8 +843,42 @@ async function checkPositions() {
         }
         // ========== КОНЕЦ PARTIAL CLOSE ==========
 
-        // ========== TIME-STOP: ПРОВЕРЯЕМ ПОСЛЕ RATCHET/PARTIAL ==========
-        // Перемещено ниже, чтобы не отменял ratchet/partial
+        // <<< DEAD TRADE: ПРОВЕРЯЕМ ДО TIME-STOP
+        if (
+          DEAD_TRADE_ENABLED &&
+          !partialClosed &&
+          positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
+        ) {
+          const entryAtr = position.metadata?.lastAtr ?? 0;
+          const mfeAtr = entryAtr > 0
+            ? maxUnrealizedPnL / (entryAtr * position.quantity)
+            : 0;
+
+          if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
+            const result = closePosition(
+              position.id,
+              currentPrice,
+              'dead_trade_mfe'
+            );
+
+            if (!result.ok) {
+              throw new Error(
+                `Failed to dead-trade-close ${position.symbol}: ${result.message}`
+              );
+            }
+
+            console.log(
+              `[${new Date().toISOString()}] ✂️ ${position.symbol}: DEAD TRADE | ` +
+                `MFE ${mfeAtr.toFixed(2)} ATR after ${positionAgeSeconds}s | ` +
+                `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
+            );
+
+            continue;
+          }
+        }
+        // ========== КОНЕЦ DEAD TRADE ==========
+
+        // ========== TIME-STOP: ПРОВЕРЯЕМ ПОСЛЕ DEAD TRADE ==========
         if (
           !partialClosed &&
           positionAgeSeconds >= TIME_STOP_SECONDS &&
@@ -869,7 +903,7 @@ async function checkPositions() {
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
 
-          continue; // не идём дальше по блоку для этой позиции
+          continue;
         }
         // ========== КОНЕЦ TIME-STOP ==========
 
@@ -1107,7 +1141,8 @@ export function startScheduler() {
       `BE @ +${BE_THRESHOLD_PERCENT}% (lock ${LOCK_RATIO * 100}%) | ` +
       `Partial @ +${PARTIAL_THRESHOLD_PERCENT}% | ` +
       `Trailing @ ${TRAILING_DISTANCE_PERCENT}% | ` +
-      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}%`
+      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}% | ` +
+      `Dead-trade ${DEAD_TRADE_CHECK_AFTER_SEC/60}min @ MFE<${DEAD_TRADE_MIN_MFE_ATR} ATR`
   );
 
   const positionPercent =
