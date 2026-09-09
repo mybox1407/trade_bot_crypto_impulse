@@ -55,7 +55,7 @@ const TIME_STOP_MAX_LOSS_PERCENT = -0.5;  // <<< СНИЗИЛИ с -0.6 до -0.
 
 // DEAD TRADE
 const DEAD_TRADE_ENABLED = true;
-const DEAD_TRADE_CHECK_AFTER_SEC = 240;      //ВАЖНО было 150 потом было 200
+const DEAD_TRADE_CHECK_AFTER_SEC = 300;      //ВАЖНО было 150 потом было 200
 const DEAD_TRADE_MIN_MFE_ATR = 0.3; //ВАЖНО было 0.25
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
