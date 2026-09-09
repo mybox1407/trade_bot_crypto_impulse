@@ -43,7 +43,7 @@ type SignalResult = {
 };
 
 // ========== EXIT MANAGEMENT: исправленные параметры ==========
-const BE_THRESHOLD_PERCENT = 0.25;
+const BE_THRESHOLD_PERCENT = 0.2;
 const LOCK_RATIO = 0.3;
 
 const PARTIAL_THRESHOLD_PERCENT = 0.5;
