@@ -42,21 +42,21 @@ type SignalResult = {
   reason: string;
 };
 
-// ========== EXIT MANAGEMENT: исправленные параметры ==========
-const BE_THRESHOLD_PERCENT = 0.2;
+// ========== EXIT MANAGEMENT ==========
+const BE_THRESHOLD_PERCENT = 0.2;  // <<< СНИЗИЛИ с 0.25 до 0.2
 const LOCK_RATIO = 0.3;
 
 const PARTIAL_THRESHOLD_PERCENT = 0.5;
 const TRAILING_DISTANCE_PERCENT = 0.35;
 
 const TIME_STOP_SECONDS = 1800;
-const TIME_STOP_MFE_PERCENT = 0.3;
-const TIME_STOP_MAX_LOSS_PERCENT = -0.5;
+const TIME_STOP_MFE_PERCENT = 0.3;  // <<< СНИЗИЛИ с 0.5 до 0.3
+const TIME_STOP_MAX_LOSS_PERCENT = -0.5;  // <<< СНИЗИЛИ с -0.6 до -0.5
 
-// <<< DEAD TRADE: раннее закрытие мёртвых позиций
+// DEAD TRADE
 const DEAD_TRADE_ENABLED = true;
 const DEAD_TRADE_CHECK_AFTER_SEC = 150;      // 2.5 минуты
-const DEAD_TRADE_MIN_MFE_ATR = 0.25;         // минимальный MFE в ATR
+const DEAD_TRADE_MIN_MFE_ATR = 0.25;
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
@@ -717,7 +717,7 @@ async function checkPositions() {
         const trailingActive = position.metadata?.trailingActive ?? false;
         const beTriggered = position.metadata?.beTriggered ?? false;
 
-        // ========== RATCHET: ПРОВЕРЯЕМ ДО TIME-STOP ==========
+        // ========== RATCHET ==========
         if (
           !beTriggered &&
           maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT
@@ -761,7 +761,7 @@ async function checkPositions() {
         }
         // ========== КОНЕЦ RATCHET ==========
 
-        // ========== PARTIAL CLOSE: ПРОВЕРЯЕМ ДО TIME-STOP ==========
+        // ========== PARTIAL CLOSE ==========
         if (
           !partialClosed &&
           maxUnrealizedPnLPercent >= PARTIAL_THRESHOLD_PERCENT
@@ -843,7 +843,7 @@ async function checkPositions() {
         }
         // ========== КОНЕЦ PARTIAL CLOSE ==========
 
-        // <<< DEAD TRADE: ПРОВЕРЯЕМ ДО TIME-STOP
+        // ========== DEAD TRADE ==========
         if (
           DEAD_TRADE_ENABLED &&
           !partialClosed &&
@@ -878,9 +878,10 @@ async function checkPositions() {
         }
         // ========== КОНЕЦ DEAD TRADE ==========
 
-        // ========== TIME-STOP: ПРОВЕРЯЕМ ПОСЛЕ DEAD TRADE ==========
+        // ========== TIME-STOP: только если BE не сработал ==========
         if (
           !partialClosed &&
+          !beTriggered &&  // <<< МЯГКИЙ TIME-STOP
           positionAgeSeconds >= TIME_STOP_SECONDS &&
           maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
           unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
@@ -1141,7 +1142,7 @@ export function startScheduler() {
       `BE @ +${BE_THRESHOLD_PERCENT}% (lock ${LOCK_RATIO * 100}%) | ` +
       `Partial @ +${PARTIAL_THRESHOLD_PERCENT}% | ` +
       `Trailing @ ${TRAILING_DISTANCE_PERCENT}% | ` +
-      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}% | ` +
+      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}% (только если !beTriggered) | ` +
       `Dead-trade ${DEAD_TRADE_CHECK_AFTER_SEC/60}min @ MFE<${DEAD_TRADE_MIN_MFE_ATR} ATR`
   );
 
