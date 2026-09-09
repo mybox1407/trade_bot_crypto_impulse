@@ -1,3 +1,5 @@
+//ВАЖНО! В этом версии было давблено - MACD + RSI фильтром для трендов
+
 import {
   MACD,
   RSI,
@@ -10,9 +12,9 @@ import {
 export const STARTING_BALANCE = 500;
 export const MAX_RISK_PER_TRADE = 0.01;
 
-// Paper-trading комиссия MEXC: 0.04% за исполнение.
+// Paper-trading комиссия MEXC: 0% (USDC/USDT пары с 0% комиссией).
 // Применяется отдельно при входе и при выходе позиции.
-export const TRADE_FEE_RATE = 0.0004;
+export const TRADE_FEE_RATE = 0.0;  // <<< БЫЛО 0.0004
 
 export const ENABLE_TREND_UP_TRADES = true;
 
@@ -314,7 +316,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     previousMacd.MACD! > previousMacd.signal! &&
     lastMacd.MACD! < lastMacd.signal!;
 
-  // Изменение 1: расширено RSI-окно для пробоев
+  // MACD + RSI фильтр для трендов
+  const rsiRising = lastRsi > (rsi[rsi.length - 2] ?? lastRsi);
+  
   const rsiBull = regime === 'trend_up'
     ? (lastRsi > 45 && lastRsi < 75)
     : (lastRsi > 45 && lastRsi < 75);
@@ -337,11 +341,11 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
 
+  // <<< ИЗМЕНЕНИЕ: MACD cross up ИЛИ (RSI > 55 и растёт)
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    //macdCrossUp && // <<< Закомментировал MACD cross up для трендов
-    rsiBull &&
+    (macdCrossUp || (rsiBull && rsiRising && lastRsi > 55)) &&  // <<< ДОБАВИЛ RSI фильтр
     price > regimeIndicators.ema200
   ) {
     side = 'long';
@@ -352,7 +356,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
   if (
     regime === 'trend_down' &&
-    //macdCrossDown && // <<< Закомментировал MACD cross up для трендов
+    (macdCrossDown || (rsiBear && rsiRising && lastRsi < 45)) &&  // <<< ДОБАВИЛ RSI фильтр для downtrend
     rsiBear &&
     price < regimeIndicators.ema200
   ) {
