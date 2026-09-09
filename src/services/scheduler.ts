@@ -42,21 +42,23 @@ type SignalResult = {
   reason: string;
 };
 
-const BE_THRESHOLD_PERCENT = 0.35;
-const LOCK_RATIO = 0.5; 
+// ========== EXIT MANAGEMENT: исправленные параметры ==========
+// BE trigger: снижен с 0.35% до 0.25% — сработает раньше
+const BE_THRESHOLD_PERCENT = 0.25;  // было 0.35
+const LOCK_RATIO = 0.3;  // было 0.5 — менее агрессивный ratchet
 
-const PARTIAL_THRESHOLD_PERCENT = 0.8;
-const TRAILING_DISTANCE_PERCENT = 0.35;
+// Partial close: снижен с 0.8% до 0.5% — сработает на 0.3-0.5 ATR
+const PARTIAL_THRESHOLD_PERCENT = 0.5;  // было 0.8
+const TRAILING_DISTANCE_PERCENT = 0.35;  // оставлено 0.35% (0.2-0.3 ATR)
 
-// Time-stop: выход из сделок без импульса за 15 минут
-const TIME_STOP_SECONDS = 900;           // 15 минут = 1 бар 15m
-const TIME_STOP_MFE_PERCENT = 0.25;      // "импульс был"
-const TIME_STOP_MAX_LOSS_PERCENT = -0.6; // не трогаем уже глубоко минусовые
+// Time-stop: увеличен с 15 до 30 минут, MFE с 0.25% до 0.5%
+const TIME_STOP_SECONDS = 1800;  // было 900 (30 мин вместо 15)
+const TIME_STOP_MFE_PERCENT = 0.5;  // было 0.25
+const TIME_STOP_MAX_LOSS_PERCENT = -0.6;
 
 const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
 const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
-const MIN_LOCKED_PERCENT =
-  ROUND_TRIP_FEE_PERCENT + BE_SLIPPAGE_BUFFER_PERCENT;
+const MIN_LOCKED_PERCENT = 0.25;  // было 0.13 — больше комиссии
 
 let signalCheckInterval: NodeJS.Timeout | null = null;
 let positionCheckInterval: NodeJS.Timeout | null = null;
@@ -437,14 +439,10 @@ async function checkSignals() {
               bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
               atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
 
-              // Новое: сохраняем EMA на момент входа
-              // для оценки качества сделки после её закрытия.
               ema20: indicators?.regimeIndicators?.ema20 ?? 0,
               ema50: indicators?.regimeIndicators?.ema50 ?? 0,
               ema200: indicators?.regimeIndicators?.ema200 ?? 0,
 
-              // Новое: сохраняем оценку extension,
-              // рассчитанную strategy.ts.
               entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
               maxEntryExtensionAtr:
                 indicators?.maxEntryExtensionAtr ?? 0,
@@ -715,38 +713,12 @@ async function checkPositions() {
 
         const partialClosed = position.metadata?.partialClosed ?? false;
         const trailingActive = position.metadata?.trailingActive ?? false;
+        const beTriggered = position.metadata?.beTriggered ?? false;
 
-        // ========== TIME-STOP: выход из сделок без импульса за 15 минут ==========
+        // ========== RATCHET: ПРОВЕРЯЕМ ДО TIME-STOP ==========
+        // Перемещено выше, чтобы сработал до закрытия по time stop
         if (
-          !partialClosed &&
-          positionAgeSeconds >= TIME_STOP_SECONDS &&
-          maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
-          unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
-        ) {
-          const result = closePosition(
-            position.id,
-            currentPrice,
-            'time_stop'
-          );
-
-          if (!result.ok) {
-            throw new Error(
-              `Failed to time-stop ${position.symbol}: ${result.message}`
-            );
-          }
-
-          console.log(
-            `[${new Date().toISOString()}] ⏱ ${position.symbol}: TIME STOP | ` +
-              `MFE ${maxUnrealizedPnLPercent.toFixed(2)}% after ${positionAgeSeconds}s | ` +
-              `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
-          );
-
-          continue; // не идём дальше по блоку для этой позиции
-        }
-        // ========== КОНЕЦ TIME-STOP ==========
-
-        if (
-          !partialClosed &&
+          !beTriggered &&
           maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT
         ) {
           const lockedPercent =
@@ -786,7 +758,10 @@ async function checkPositions() {
             );
           }
         }
+        // ========== КОНЕЦ RATCHET ==========
 
+        // ========== PARTIAL CLOSE: ПРОВЕРЯЕМ ДО TIME-STOP ==========
+        // Перемещено выше, чтобы сработал до закрытия по time stop
         if (
           !partialClosed &&
           maxUnrealizedPnLPercent >= PARTIAL_THRESHOLD_PERCENT
@@ -866,7 +841,39 @@ async function checkPositions() {
               `${formatPrice(initialTrailingStop)}`
           );
         }
+        // ========== КОНЕЦ PARTIAL CLOSE ==========
 
+        // ========== TIME-STOP: ПРОВЕРЯЕМ ПОСЛЕ RATCHET/PARTIAL ==========
+        // Перемещено ниже, чтобы не отменял ratchet/partial
+        if (
+          !partialClosed &&
+          positionAgeSeconds >= TIME_STOP_SECONDS &&
+          maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
+          unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
+        ) {
+          const result = closePosition(
+            position.id,
+            currentPrice,
+            'time_stop'
+          );
+
+          if (!result.ok) {
+            throw new Error(
+              `Failed to time-stop ${position.symbol}: ${result.message}`
+            );
+          }
+
+          console.log(
+            `[${new Date().toISOString()}] ⏱ ${position.symbol}: TIME STOP | ` +
+              `MFE ${maxUnrealizedPnLPercent.toFixed(2)}% after ${positionAgeSeconds}s | ` +
+              `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
+          );
+
+          continue; // не идём дальше по блоку для этой позиции
+        }
+        // ========== КОНЕЦ TIME-STOP ==========
+
+        // ========== TRAILING STOP ==========
         if (trailingActive || partialClosed) {
           const statePosition = getPositions().find(
             item => item.id === position.id
@@ -926,6 +933,7 @@ async function checkPositions() {
             );
           }
         }
+        // ========== КОНЕЦ TRAILING STOP ==========
 
         const activePosition = getPositions().find(
           item => item.id === position.id
@@ -1001,7 +1009,7 @@ async function checkPositions() {
           const result = closePosition(
             position.id,
             currentPrice,
-            'stop_loss'
+            beTriggered ? 'breakeven_stop' : 'stop_loss'
           );
 
           if (!result.ok) {
@@ -1011,7 +1019,7 @@ async function checkPositions() {
           }
 
           console.log(
-            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT STOP | ` +
+            `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT ${beTriggered ? 'BE' : 'STOP'} | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else {
@@ -1040,7 +1048,7 @@ async function checkPositions() {
           action: hitTakeProfit
             ? 'close_tp'
             : hitStopLoss
-              ? 'close_sl'
+              ? beTriggered ? 'close_be' : 'close_sl'
               : 'hold',
           positionAgeSeconds
         });
@@ -1095,11 +1103,11 @@ export function startScheduler() {
     `[${new Date().toISOString()}] Max positions: ${MAX_PARALLEL_POSITIONS}`
   );
   console.log(
-    `[${new Date().toISOString()}] BE: +${BE_THRESHOLD_PERCENT}% | ` +
-      `Ratchet lock: ${LOCK_RATIO * 100}% | ` +
-      `Partial: +${PARTIAL_THRESHOLD_PERCENT}% | ` +
-      `Trailing: ${TRAILING_DISTANCE_PERCENT}% | ` +
-      `Time-stop: ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}%`
+    `[${new Date().toISOString()}] Exit management: ` +
+      `BE @ +${BE_THRESHOLD_PERCENT}% (lock ${LOCK_RATIO * 100}%) | ` +
+      `Partial @ +${PARTIAL_THRESHOLD_PERCENT}% | ` +
+      `Trailing @ ${TRAILING_DISTANCE_PERCENT}% | ` +
+      `Time-stop ${TIME_STOP_SECONDS/60}min @ MFE<${TIME_STOP_MFE_PERCENT}%`
   );
 
   const positionPercent =
