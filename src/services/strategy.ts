@@ -22,17 +22,24 @@ const BB_SQUEEZE_THRESHOLD = 0.05;
 
 // breakout_watch filters
 const BREAKOUT_ATR_BUFFER_K = 0.2;
-const BREAKOUT_BODY_ATR_MIN = 0.6;  // было 0.5, теперь 0.7 ATR
+const BREAKOUT_BODY_ATR_MIN = 0.6;
 
 // Skip entry if price moved too far from the original signal level.
-// Поднят с 0.5 до 1.0 — режет ~7% сигналов вместо 38%
 const ENTRY_SLIPPAGE_ATR_MAX = 1.0;
 
 // Entry quality filter.
-// Trend entries should be relatively near EMA20.
-// Breakout entries are allowed to be farther because the setup is momentum-based.
 const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
-const MAX_ENTRY_EXTENSION_BREAKOUT_ATR = 1.5;  // было 3.0, теперь мерим от границы BB
+const MAX_ENTRY_EXTENSION_BREAKOUT_ATR = 1.5;
+
+// Изменение 4: фильтр по расстоянию до локального экстремума
+const MAX_EXTREMUM_DISTANCE_ATR = 2.5;
+const EXTREMUM_LOOKBACK = 30;
+
+// Изменение 3: диапазон волатильности для пробоев
+const BREAKOUT_MIN_ATR_PCT = 0.015;
+const BREAKOUT_MAX_ATR_PCT = 0.035;
+const BREAKOUT_MIN_BB_WIDTH = 0.03;
+const BREAKOUT_MAX_BB_WIDTH = 0.08;
 
 export interface Candle {
   time: number;
@@ -74,7 +81,22 @@ function mean(values: number[]) {
 
 function getVolumeSpike(volumes: number[], avgVol20: number) {
   const latestVolume = volumes[volumes.length - 1] ?? 0;
-  return latestVolume >= avgVol20 * 1.3;  // было 1.1, теперь 1.3
+  return latestVolume >= avgVol20 * 1.3;
+}
+
+// Изменение 4: поиск локального экстремума за lookback свечей
+function findLocalExtremum(candles: Candle[], side: 'long' | 'short', lookback: number) {
+  const slice = candles.slice(-lookback);
+  if (slice.length === 0) {
+    return { extremePrice: 0, distanceAtr: 0 };
+  }
+
+  const extremePrice =
+    side === 'long'
+      ? Math.min(...slice.map(c => c.low))
+      : Math.max(...slice.map(c => c.high));
+
+  return { extremePrice };
 }
 
 export function detectMarketRegime(candles: Candle[]) {
@@ -154,18 +176,15 @@ export function detectMarketRegime(candles: Candle[]) {
   const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
   const compression = bbWidth <= BB_SQUEEZE_THRESHOLD;
 
-  // ИЗМЕНЕНИЕ 1: убран adxRising и ema50 > ema200 из условия тренда
   const strongTrendUp =
     lastClose > lastEma200 &&
     lastEma20 > lastEma50 &&
     lastAdx.adx >= MIN_ADX_TREND;
-    // было: && lastEma50 > lastEma200 && adxRising;
 
   const strongTrendDown =
     lastClose < lastEma200 &&
     lastEma20 < lastEma50 &&
     lastAdx.adx >= MIN_ADX_TREND;
-    // было: && lastEma50 < lastEma200 && adxRising;
 
   const range =
     lastAdx.adx < MIN_ADX_RANGE &&
@@ -282,6 +301,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   const lastAtr = last(atr);
   const lastBb = last(bb);
   const lastCandle = last(candles);
+  const lastClose = last(closes);
 
   const regime = regimeInfo.regime;
   const regimeIndicators = regimeInfo.indicators;
@@ -294,10 +314,10 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     previousMacd.MACD! > previousMacd.signal! &&
     lastMacd.MACD! < lastMacd.signal!;
 
-  // ИЗМЕНЕНИЕ 3: RSI-окно расширено — тренд 45-75, пробой 50-70
+  // Изменение 1: расширено RSI-окно для пробоев
   const rsiBull = regime === 'trend_up'
     ? (lastRsi > 45 && lastRsi < 75)
-    : (lastRsi > 50 && lastRsi < 70);  // было 45-65, теперь 50-70 для пробоя
+    : (lastRsi > 45 && lastRsi < 75);
 
   const rsiBear = lastRsi < 60 && lastRsi > 35;
 
@@ -345,35 +365,68 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   if (regime === 'breakout_watch') {
     const candleBody = Math.abs(lastCandle.close - lastCandle.open);
     const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
-    const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;  // теперь 0.7 ATR
+    const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
 
-    // ИЗМЕНЕНИЕ 4: RSI для пробоя — 50-70 вместо 55+
+    // Изменение 2: пробой проверяется по закрытию свечи
+    // Изменение 1: расширено RSI-окно для пробоев
     const breakoutUp =
-      price > lastBb.upper + atrBuffer &&
+      lastCandle.close > lastBb.upper + atrBuffer &&
       candleBody >= minBody &&
-      lastRsi > 50 &&
-      lastRsi < 70;
+      lastRsi > 45 &&
+      lastRsi < 75;
 
     const breakoutDown =
-      price < lastBb.lower - atrBuffer &&
+      lastCandle.close < lastBb.lower - atrBuffer &&
       candleBody >= minBody &&
-      lastRsi < 50 &&
-      lastRsi > 30;
+      lastRsi < 55 &&
+      lastRsi > 25;
 
-    if (breakoutUp) {
-      side = 'long';
-      buy = true;
-      sell = false;
-      // ИЗМЕНЕНИЕ 6: стоп-лосс шире — 1.5 ATR вместо 1.3
-      stopLossPrice = price - lastAtr * 1.5;
-      takeProfitPrice = price + lastAtr * 3.0;
-    } else if (breakoutDown) {
-      side = 'short';
-      sell = true;
-      buy = false;
-      // ИЗМЕНЕНИЕ 6: стоп-лосс шире — 1.5 ATR вместо 1.3
-      stopLossPrice = price + lastAtr * 1.5;
-      takeProfitPrice = price - lastAtr * 3.0;
+    // Изменение 3: фильтр по волатильности для пробоев
+    const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
+    const bbWidth =
+      lastBb.middle !== 0
+        ? (lastBb.upper - lastBb.lower) / lastBb.middle
+        : 0;
+
+    const volatilityOkForBreakout =
+      atrPct >= BREAKOUT_MIN_ATR_PCT &&
+      atrPct <= BREAKOUT_MAX_ATR_PCT &&
+      bbWidth >= BREAKOUT_MIN_BB_WIDTH &&
+      bbWidth <= BREAKOUT_MAX_BB_WIDTH;
+
+    // Изменение 4: проверка расстояния до локального экстремума
+    let extremumOk = true;
+    if (breakoutUp || breakoutDown) {
+      const sideForExtremum = breakoutUp ? 'long' : 'short';
+      const { extremePrice } = findLocalExtremum(candles, sideForExtremum, EXTREMUM_LOOKBACK);
+      if (extremePrice !== 0 && lastAtr > 0) {
+        const distanceFromExtremum =
+          sideForExtremum === 'long'
+            ? lastClose - extremePrice
+            : extremePrice - lastClose;
+        const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
+        if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
+          extremumOk = false;
+        }
+      }
+    }
+
+    if (volatilityOkForBreakout && extremumOk) {
+      if (breakoutUp) {
+        side = 'long';
+        buy = true;
+        sell = false;
+        // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
+        stopLossPrice = price - lastAtr * 1.5;
+        takeProfitPrice = price + lastAtr * 2.2;
+      } else if (breakoutDown) {
+        side = 'short';
+        sell = true;
+        buy = false;
+        // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
+        stopLossPrice = price + lastAtr * 1.5;
+        takeProfitPrice = price - lastAtr * 2.2;
+      }
     }
   }
 
@@ -386,8 +439,6 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     positionSize = null;
   }
 
-  // Existing protection: skip a signal if price has moved away
-  // too far from the original signal level before execution.
   if ((buy || sell) && signalPrice != null && lastAtr > 0) {
     const distanceFromSignal = Math.abs(price - signalPrice);
     const signalDistanceAtr = distanceFromSignal / lastAtr;
@@ -406,9 +457,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     }
   }
 
-  // ИЗМЕНЕНИЕ 2: Entry-quality filter — мерим extension от границы BB в пробоях
   if (side !== 'none' && lastAtr > 0) {
-    // Для пробоев reference = граница BB, для трендов = EMA20
     const referencePrice =
       regime === 'breakout_watch'
         ? (side === 'long' ? lastBb.upper : lastBb.lower)
@@ -421,11 +470,10 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
     entryExtensionAtr = distanceFromRef / lastAtr;
 
-    // Для пробоев лимит 1.5 ATR от границы BB (было 3.0 от EMA20)
     maxEntryExtensionAtr =
       regime === 'breakout_watch'
-        ? MAX_ENTRY_EXTENSION_BREAKOUT_ATR  // 1.5
-        : MAX_ENTRY_EXTENSION_TREND_ATR;    // 1.5
+        ? MAX_ENTRY_EXTENSION_BREAKOUT_ATR
+        : MAX_ENTRY_EXTENSION_TREND_ATR;
 
     entryTooExtended =
       entryExtensionAtr > maxEntryExtensionAtr;
