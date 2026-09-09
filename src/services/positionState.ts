@@ -68,7 +68,7 @@ export interface ClosedTrade {
   netPnL: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop';
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe';
 }
 
 let balance = STARTING_BALANCE;
@@ -456,7 +456,7 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop'
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe'
 ) {
   const index = currentPositions.findIndex(
     position => position.id === positionId
