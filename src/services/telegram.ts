@@ -81,7 +81,7 @@ export function notifyPositionClose(data: {
   realizedPnL: number;
   netPnL: number;
   netPnLPercent: number;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop';
+  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe';
   positionAgeSeconds: number;
   balance: number;
   positionId: string;
@@ -92,7 +92,8 @@ export function notifyPositionClose(data: {
     data.reason === 'take_profit' ? '🎯' : 
     data.reason === 'stop_loss' ? '🛑' : 
     data.reason === 'time_stop' ? '⏱' : 
-    data.reason === 'breakeven_stop' ? '🛡' : '✋';
+    data.reason === 'breakeven_stop' ? '🛡' : 
+    data.reason === 'dead_trade_mfe' ? '✂️' : '✋';
   
   const sideText = data.side === 'long' ? 'LONG' : 'SHORT';
   const pnlSign = data.netPnL >= 0 ? '+' : '';
