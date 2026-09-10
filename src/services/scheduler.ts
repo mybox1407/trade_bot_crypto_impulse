@@ -22,7 +22,8 @@ import {
   getPositionNotional,
   updatePositionMetadata,
   partialClosePosition,
-  updatePositionStopLoss
+  updatePositionStopLoss,
+  setBalance
 } from './positionState';
 import { TRADE_FEE_RATE } from './strategy';
 import { logSignalCheck, logPositionCheck, logError } from './logger';
@@ -1280,6 +1281,9 @@ export async function startScheduler() {
   let mexcBalance: { total: number; available: number } | undefined;
   try {
     mexcBalance = await fetchMexcBalance();
+    if (mexcBalance && mexcBalance.total > 0) {
+      setBalance(mexcBalance.total);
+    }
   } catch (error) {
     console.warn(
       `[${new Date().toISOString()}] ⚠️ Failed to fetch MEXC balance: ${error instanceof Error ? error.message : 'Unknown'}`
