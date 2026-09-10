@@ -28,13 +28,6 @@ type CloseReason =
   | 'breakeven_stop'
   | 'dead_trade_mfe';
 
-type TickerResponse = {
-  symbol?: string;
-  fairPrice?: number | string;
-  lastPrice?: number | string;
-  indexPrice?: number | string;
-};
-
 function normalizeSymbol(
   symbol?: string
 ): string | undefined {
@@ -82,66 +75,22 @@ async function getFuturesCurrentPrice(
   const futuresSymbol =
     normalizeFuturesSymbol(symbol);
 
-  const response = await fetch(
-    'https://contract.mexc.com/api/v1/contract/ticker' +
-    `?symbol=${encodeURIComponent(futuresSymbol)}`
-  );
-
-  if (!response.ok) {
-    const text = await response.text();
-
-    throw new Error(
-      `MEXC ticker HTTP ${response.status}: ${text}`
-    );
-  }
-
-  const payload = await response.json() as {
-    success?: boolean;
-    code?: number | string;
-    msg?: string;
-    data?: TickerResponse | TickerResponse[];
-  };
-
-  if (payload.success === false) {
-    throw new Error(
-      `MEXC ticker error ` +
-      `${payload.code ?? 'unknown'}: ` +
-      `${payload.msg ?? 'Unknown error'}`
-    );
-  }
-
-  const rows = Array.isArray(payload.data)
-    ? payload.data
-    : payload.data
-      ? [payload.data]
-      : [];
-
   const ticker =
-    rows.find(
-      row =>
-        String(row.symbol ?? '')
-          .toUpperCase() === futuresSymbol
-    ) ?? rows[0];
+    await mexcClient.getFuturesMarkPrice(
+      futuresSymbol
+    );
 
-  if (!ticker) {
+  if (
+    !Number.isFinite(ticker.markPrice) ||
+    ticker.markPrice <= 0
+  ) {
     throw new Error(
-      `No ticker returned for ${futuresSymbol}`
+      `Invalid Futures price for ${futuresSymbol}: ` +
+      `${ticker.markPrice}`
     );
   }
 
-  const price = Number(
-    ticker.fairPrice ??
-    ticker.lastPrice
-  );
-
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error(
-      `Invalid Futures price for ` +
-      `${futuresSymbol}: ${price}`
-    );
-  }
-
-  return price;
+  return ticker.markPrice;
 }
 
 function isValidSide(
@@ -192,13 +141,12 @@ router.post('/open', async (req, res) => {
       stopLossPrice?: unknown;
     };
 
-    const rawSymbol =
-      typeof rawBody.symbol === 'string'
-        ? rawBody.symbol
-        : '';
-
     const symbol =
-      normalizeFuturesSymbol(rawSymbol);
+      normalizeFuturesSymbol(
+        typeof rawBody.symbol === 'string'
+          ? rawBody.symbol
+          : ''
+      );
 
     const side = rawBody.side;
 
@@ -272,13 +220,12 @@ router.post('/open', async (req, res) => {
 
 router.post('/check-close', async (req, res) => {
   try {
-    const rawSymbol =
-      typeof req.body?.symbol === 'string'
-        ? req.body.symbol
-        : '';
-
     const symbol =
-      normalizeFuturesSymbol(rawSymbol);
+      normalizeFuturesSymbol(
+        typeof req.body?.symbol === 'string'
+          ? req.body.symbol
+          : ''
+      );
 
     const position = getPosition(symbol);
 
