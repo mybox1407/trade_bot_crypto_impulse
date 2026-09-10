@@ -1171,7 +1171,16 @@ export class MexcAuthenticatedClient {
     return {
       symbol: futuresSymbol,
       makerFeeRate: realMakerFee,
-      takerFeeRate: realTakerFee
+      takerFeeRate: realTakerFee,
+      source: 'account_real',
+      originalMakerFee:
+        Number.isFinite(originalMakerFee)
+          ? originalMakerFee
+          : undefined,
+      originalTakerFee:
+        Number.isFinite(originalTakerFee)
+          ? originalTakerFee
+          : undefined
     };
   }
 
