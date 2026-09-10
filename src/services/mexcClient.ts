@@ -31,42 +31,6 @@ export interface FuturesOrder {
   createdAt: number;
 }
 
-interface FuturesOrderDetails {
-  orderId: string;
-  positionId?: number;
-  symbol: string;
-  price: number;
-  quantity: number;
-  leverage: number;
-  side: FuturesOrderSide;
-  dealAvgPrice: number;
-  dealQty: number;
-  orderMargin: number;
-  takerFee: number;
-  makerFee: number;
-  profit: number;
-  feeCurrency?: string;
-  openType: 1 | 2;
-  state: number;
-  createTime: number;
-  updateTime: number;
-  positionMode?: 1 | 2;
-}
-
-interface FuturesDeal {
-  id: string;
-  symbol: string;
-  side: FuturesOrderSide;
-  quantity: number;
-  price: number;
-  fee: number;
-  feeCurrency?: string;
-  profit: number;
-  orderId: string;
-  timestamp: number;
-  isTaker?: boolean;
-}
-
 export interface FuturesPosition {
   positionId?: string;
   symbol: string;
@@ -80,6 +44,37 @@ export interface FuturesPosition {
   margin: number;
 }
 
+interface FuturesOrderDetails {
+  orderId: string;
+  positionId?: number;
+  symbol: string;
+  side: FuturesOrderSide;
+  quantity: number;
+  price: number;
+  dealQty: number;
+  dealAvgPrice: number;
+  takerFee: number;
+  makerFee: number;
+  profit: number;
+  feeCurrency?: string;
+  state: number;
+  createTime: number;
+  updateTime: number;
+}
+
+interface FuturesDeal {
+  id: string;
+  orderId: string;
+  symbol: string;
+  side: FuturesOrderSide;
+  quantity: number;
+  price: number;
+  fee: number;
+  feeCurrency?: string;
+  profit: number;
+  timestamp: number;
+}
+
 const FUTURES_SIDE = {
   OPEN_LONG: 1,
   CLOSE_SHORT: 2,
@@ -91,7 +86,9 @@ const FUTURES_MARKET_ORDER_TYPE = 5;
 const ISOLATED_MARGIN = 1;
 const CROSS_MARGIN = 2;
 
-const FILLED_STATE = 3;
+const ORDER_STATE_FILLED = 3;
+const ORDER_STATE_CANCELED = 4;
+const ORDER_STATE_INVALID = 5;
 
 export class MexcAuthenticatedClient {
   private readonly apiKey: string;
@@ -214,9 +211,9 @@ export class MexcAuthenticatedClient {
   }
 
   private parseOrderDetails(
-    raw: any
+    response: any
   ): FuturesOrderDetails {
-    const data = raw?.data ?? raw;
+    const data = response?.data ?? response;
 
     return {
       orderId: String(data.orderId),
@@ -224,17 +221,15 @@ export class MexcAuthenticatedClient {
         data.positionId != null
           ? Number(data.positionId)
           : undefined,
-      symbol: String(data.symbol),
-      price: Number(data.price ?? 0),
-      quantity: Number(data.vol ?? 0),
-      leverage: Number(data.leverage ?? 1),
+      symbol: String(data.symbol ?? ''),
       side: Number(data.side) as FuturesOrderSide,
-      dealAvgPrice: Number(data.dealAvgPrice ?? 0),
+      quantity: Number(data.vol ?? 0),
+      price: Number(data.price ?? 0),
       dealQty: Number(
         data.dealVol ?? data.dealQty ?? 0
       ),
-      orderMargin: Number(
-        data.orderMargin ?? data.usedMargin ?? 0
+      dealAvgPrice: Number(
+        data.dealAvgPrice ?? 0
       ),
       takerFee: Number(data.takerFee ?? 0),
       makerFee: Number(data.makerFee ?? 0),
@@ -242,33 +237,25 @@ export class MexcAuthenticatedClient {
       feeCurrency: data.feeCurrency
         ? String(data.feeCurrency)
         : undefined,
-      openType: Number(data.openType) === 2
-        ? CROSS_MARGIN
-        : ISOLATED_MARGIN,
       state: Number(data.state ?? 0),
       createTime: Number(
         data.createTime ?? Date.now()
       ),
       updateTime: Number(
         data.updateTime ?? Date.now()
-      ),
-      positionMode:
-        Number(data.positionMode) === 2
-          ? 2
-          : 1
+      )
     };
   }
 
-  private parseDeals(
-    raw: any
-  ): FuturesDeal[] {
-    const rows = Array.isArray(raw?.data)
-      ? raw.data
+  private parseDeals(response: any): FuturesDeal[] {
+    const rows = Array.isArray(response?.data)
+      ? response.data
       : [];
 
     return rows.map((data: any) => ({
-      id: String(data.id),
-      symbol: String(data.symbol),
+      id: String(data.id ?? ''),
+      orderId: String(data.orderId ?? ''),
+      symbol: String(data.symbol ?? ''),
       side: Number(data.side) as FuturesOrderSide,
       quantity: Number(data.vol ?? 0),
       price: Number(data.price ?? 0),
@@ -277,13 +264,9 @@ export class MexcAuthenticatedClient {
         ? String(data.feeCurrency)
         : undefined,
       profit: Number(data.profit ?? 0),
-      orderId: String(data.orderId),
       timestamp: Number(
         data.timestamp ?? Date.now()
-      ),
-      isTaker:
-        data.isTaker === true ||
-        data.taker === true
+      )
     }));
   }
 
@@ -318,15 +301,15 @@ export class MexcAuthenticatedClient {
     deals: FuturesDeal[];
   }> {
     const startedAt = Date.now();
-    let lastDetails: FuturesOrderDetails | null = null;
+    let lastState: number | undefined;
 
     while (Date.now() - startedAt < timeoutMs) {
       const details =
         await this.getFuturesOrderDetails(orderId);
 
-      lastDetails = details;
+      lastState = details.state;
 
-      if (details.state === FILLED_STATE) {
+      if (details.state === ORDER_STATE_FILLED) {
         const deals =
           await this.getFuturesDealDetails(orderId);
 
@@ -337,8 +320,8 @@ export class MexcAuthenticatedClient {
       }
 
       if (
-        details.state === 4 ||
-        details.state === 5
+        details.state === ORDER_STATE_CANCELED ||
+        details.state === ORDER_STATE_INVALID
       ) {
         throw new Error(
           `Futures order ${orderId} was not filled. ` +
@@ -353,7 +336,7 @@ export class MexcAuthenticatedClient {
 
     throw new Error(
       `Futures order ${orderId} was not filled within ` +
-        `${timeoutMs}ms. Last state=${lastDetails?.state ?? 'unknown'}`
+        `${timeoutMs}ms. Last state=${lastState ?? 'unknown'}`
     );
   }
 
@@ -362,59 +345,70 @@ export class MexcAuthenticatedClient {
     deals: FuturesDeal[],
     requestedQuantity: number
   ): FuturesOrder {
-    const dealQuantity =
+    const dealsQuantity = deals.reduce(
+      (sum, deal) => sum + deal.quantity,
+      0
+    );
+
+    const weightedQuote = deals.reduce(
+      (sum, deal) =>
+        sum + deal.quantity * deal.price,
+      0
+    );
+
+    const executedQty =
       details.dealQty > 0
         ? details.dealQty
-        : deals.reduce(
-            (sum, deal) => sum + deal.quantity,
-            0
-          );
+        : dealsQuantity;
 
-    const weightedQuote =
-      deals.reduce(
-        (sum, deal) =>
-          sum + deal.quantity * deal.price,
-        0
-      );
-
-    const dealAvgPrice =
+    const avgPrice =
       details.dealAvgPrice > 0
         ? details.dealAvgPrice
-        : dealQuantity > 0 && weightedQuote > 0
-          ? weightedQuote / dealQuantity
+        : executedQty > 0 && weightedQuote > 0
+          ? weightedQuote / executedQty
           : 0;
 
-    const dealFees =
-      deals.reduce(
-        (sum, deal) => sum + Math.max(0, deal.fee),
-        0
-      );
+    const executedQuoteQty =
+      executedQty > 0 && avgPrice > 0
+        ? executedQty * avgPrice
+        : 0;
 
-    const fallbackFee =
+    const dealsFee = deals.reduce(
+      (sum, deal) => sum + Math.max(0, deal.fee),
+      0
+    );
+
+    const orderFee =
       Math.max(0, details.takerFee) +
       Math.max(0, details.makerFee);
 
     const totalFee =
-      dealFees > 0
-        ? dealFees
-        : fallbackFee;
+      dealsFee > 0
+        ? dealsFee
+        : orderFee;
+
+    const dealsProfit = deals.reduce(
+      (sum, deal) => sum + deal.profit,
+      0
+    );
 
     const realizedPnL =
-      details.profit ||
-      deals.reduce(
-        (sum, deal) => sum + deal.profit,
-        0
-      );
+      details.profit !== 0
+        ? details.profit
+        : dealsProfit;
 
-    const executedQty =
-      dealQuantity > 0
-        ? dealQuantity
+    const finalExecutedQty =
+      executedQty > 0
+        ? executedQty
         : requestedQuantity;
 
-    const executedQuoteQty =
-      executedQty > 0 && dealAvgPrice > 0
-        ? executedQty * dealAvgPrice
-        : 0;
+    const isEntry =
+      details.side === FUTURES_SIDE.OPEN_LONG ||
+      details.side === FUTURES_SIDE.OPEN_SHORT;
+
+    const isExit =
+      details.side === FUTURES_SIDE.CLOSE_LONG ||
+      details.side === FUTURES_SIDE.CLOSE_SHORT;
 
     return {
       orderId: details.orderId,
@@ -424,17 +418,11 @@ export class MexcAuthenticatedClient {
       type: FUTURES_MARKET_ORDER_TYPE,
       quantity: details.quantity || requestedQuantity,
       price: details.price,
-      executedQty,
+      executedQty: finalExecutedQty,
       executedQuoteQty,
-      avgPrice: dealAvgPrice,
-      entryFee: details.side === 1 ||
-        details.side === 3
-        ? totalFee
-        : 0,
-      exitFee: details.side === 2 ||
-        details.side === 4
-        ? totalFee
-        : 0,
+      avgPrice,
+      entryFee: isEntry ? totalFee : 0,
+      exitFee: isExit ? totalFee : 0,
       totalFee,
       realizedPnL,
       feeCurrency:
@@ -609,15 +597,9 @@ export class MexcAuthenticatedClient {
       this.normalizeFuturesSymbol(symbol);
 
     console.warn(
-      `[MEXC Futures] Leverage must be configured ` +
-        `according to the current account endpoint schema: ` +
+      `[MEXC Futures] Leverage is not changed automatically: ` +
         `${futuresSymbol} ${leverage}x ${marginMode}`
     );
-
-    // Здесь намеренно нет неподтверждённого POST.
-    // Настройте плечо заранее в MEXC либо добавьте
-    // актуальный endpoint после проверки документации
-    // именно для вашего API-доступа.
   }
 
   async getFuturesAccount(): Promise<{
@@ -627,8 +609,7 @@ export class MexcAuthenticatedClient {
   }> {
     const response = await this.futuresRequest(
       'GET',
-      '/api/v1/private/account/assets',
-      {}
+      '/api/v1/private/account/assets'
     );
 
     const rows = Array.isArray(response.data)
@@ -661,11 +642,60 @@ export class MexcAuthenticatedClient {
     };
   }
 
+  async getFuturesMarkPrice(
+    symbol: string
+  ): Promise<{
+    symbol: string;
+    markPrice: number;
+    indexPrice: number;
+    fundingRate: number;
+  }> {
+    const futuresSymbol =
+      this.normalizeFuturesSymbol(symbol);
+
+    const response = await fetch(
+      `${this.futuresUrl}/api/v1/contract/ticker?symbol=${encodeURIComponent(futuresSymbol)}`
+    );
+
+    const data = await this.readResponse(response);
+
+    const rows = Array.isArray(data.data)
+      ? data.data
+      : [data.data ?? data];
+
+    const ticker =
+      rows.find(
+        (row: any) =>
+          String(row.symbol) === futuresSymbol
+      ) ?? rows[0];
+
+    if (!ticker) {
+      throw new Error(
+        `No Futures ticker returned for ${futuresSymbol}`
+      );
+    }
+
+    return {
+      symbol: futuresSymbol,
+      markPrice: Number(
+        ticker.fairPrice ??
+        ticker.markPrice ??
+        ticker.lastPrice ??
+        0
+      ),
+      indexPrice: Number(
+        ticker.indexPrice ?? 0
+      ),
+      fundingRate: Number(
+        ticker.fundingRate ?? 0
+      )
+    };
+  }
+
   async getFuturesPositions(): Promise<FuturesPosition[]> {
     const response = await this.futuresRequest(
       'GET',
-      '/api/v1/private/position/open_positions',
-      {}
+      '/api/v1/private/position/open_positions'
     );
 
     const rows = Array.isArray(response.data)
@@ -718,42 +748,5 @@ export class MexcAuthenticatedClient {
         0
       )
     }));
-  }
-
-  async getFuturesMarkPrice(
-    symbol: string
-  ): Promise<{
-    symbol: string;
-    markPrice: number;
-    indexPrice: number;
-    fundingRate: number;
-  }> {
-    const futuresSymbol =
-      this.normalizeFuturesSymbol(symbol);
-
-    const response =
-      await this.futuresRequest(
-        'GET',
-        `/api/v1/contract/index_price/${encodeURIComponent(futuresSymbol)}`,
-        {}
-      );
-
-    const data = response.data ?? {};
-
-    return {
-      symbol: futuresSymbol,
-      markPrice: Number(
-        data.fairPrice ??
-        data.markPrice ??
-        data.indexPrice ??
-        0
-      ),
-      indexPrice: Number(
-        data.indexPrice ?? 0
-      ),
-      fundingRate: Number(
-        data.fundingRate ?? 0
-      )
-    };
   }
 }
