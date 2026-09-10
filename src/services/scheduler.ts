@@ -43,13 +43,16 @@ async function fetchMexcBalance(): Promise<{ total: number; available: number }>
   await mexcExchange.loadMarkets();
   const balance = await mexcExchange.fetchBalance();
 
-  // ← ИСПРАВЛЕНИЕ: используем Object access
-  const usdt = balance.total?.['USDT'] ?? 0;
-  const usdc = balance.total?.['USDC'] ?? 0;
+  // ← ИСПРАВЛЕНИЕ: правильное приведение типов
+  const totalBalance = balance.total as Record<string, number>;
+  const freeBalance = balance.free as Record<string, number>;
+
+  const usdt = totalBalance['USDT'] ?? 0;
+  const usdc = totalBalance['USDC'] ?? 0;
   const total = usdt + usdc;
 
-  const availableUsdt = balance.free?.['USDT'] ?? 0;
-  const availableUsdc = balance.free?.['USDC'] ?? 0;
+  const availableUsdt = freeBalance['USDT'] ?? 0;
+  const availableUsdc = freeBalance['USDC'] ?? 0;
   const available = availableUsdt + availableUsdc;
 
   console.log(
