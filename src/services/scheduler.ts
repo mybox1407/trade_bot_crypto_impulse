@@ -1016,18 +1016,6 @@ async function checkSignals(): Promise<void> {
             continue;
           }
 
-          await mexcClient.setFuturesLeverage(
-            symbol,
-            Number(
-              process.env.MEXC_FUTURES_LEVERAGE ?? 1
-            ),
-            process.env.MEXC_FUTURES_MARGIN_MODE ===
-              'cross'
-              ? 'cross'
-              : 'isolated',
-            side
-          );
-
           const openResult =
             await openPosition({
               symbol,
