@@ -57,31 +57,39 @@ export function filterZeroFeePairs(fees: FeeInfo[]): string[] {
 
   const selectedSymbols = new Set<string>();
 
-  for (const usdtPair of usdtPairs) {
-    const baseAsset = usdtPair.split('/')[0];
-    const correspondingUsdc = `${baseAsset}/USDC`;
-
-    if (usdcPairs.includes(correspondingUsdc)) {
-      selectedSymbols.add(usdtPair);
-      console.log(
-        `[${new Date().toISOString()}] 🎯 ${baseAsset}: Both ${usdtPair} and ${correspondingUsdc} have 0% fees → selected ${usdtPair}`
-      );
-    } else {
-      selectedSymbols.add(usdtPair);
-      console.log(
-        `[${new Date().toISOString()}] 🎯 ${baseAsset}: Only ${usdtPair} has 0% fees → selected ${usdtPair}`
-      );
-    }
-  }
-
+  // Сначала обрабатываем USDC пары — они в приоритете
   for (const usdcPair of usdcPairs) {
     const baseAsset = usdcPair.split('/')[0];
     const correspondingUsdt = `${baseAsset}/USDT`;
 
-    if (!usdtPairs.includes(correspondingUsdt)) {
-      selectedSymbols.add(usdcPair);
+    // Всегда добавляем USDC пару
+    selectedSymbols.add(usdcPair);
+    
+    if (usdtPairs.includes(correspondingUsdt)) {
+      console.log(
+        `[${new Date().toISOString()}] 🎯 ${baseAsset}: Both ${usdcPair} and ${correspondingUsdt} have 0% fees → selected ${usdcPair} (USDC priority)`
+      );
+    } else {
       console.log(
         `[${new Date().toISOString()}] 🎯 ${baseAsset}: Only ${usdcPair} has 0% fees → selected ${usdcPair}`
+      );
+    }
+  }
+
+  // Затем добавляем USDT пары, только если нет соответствующей USDC пары
+  for (const usdtPair of usdtPairs) {
+    const baseAsset = usdtPair.split('/')[0];
+    const correspondingUsdc = `${baseAsset}/USDC`;
+
+    // Добавляем USDT пару только если нет USDC пары
+    if (!usdcPairs.includes(correspondingUsdc)) {
+      selectedSymbols.add(usdtPair);
+      console.log(
+        `[${new Date().toISOString()}] 🎯 ${baseAsset}: Only ${usdtPair} has 0% fees → selected ${usdtPair}`
+      );
+    } else {
+      console.log(
+        `[${new Date().toISOString()}] ⏭️ ${baseAsset}: Skipping ${usdtPair} — ${correspondingUsdc} selected (USDC priority)`
       );
     }
   }
