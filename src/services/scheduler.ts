@@ -1,5 +1,8 @@
+// src/services/scheduler.ts
 import {
+  ALL_TRADING_PAIRS,
   TRADING_PAIRS,
+  setTradingPairs,
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
 } from '../config/constants';
@@ -25,7 +28,36 @@ import { TRADE_FEE_RATE } from './strategy';
 import { logSignalCheck, logPositionCheck, logError } from './logger';
 import { notifyStartup, notifyError } from './telegram';
 import axios from 'axios';
+import { getTradingFees, filterZeroFeePairs } from './fees';
+import ccxt from 'ccxt';
 
+// ========== MEXC BALANCE ==========
+const mexcExchange = new ccxt.mexc({
+  apiKey: process.env.MEXC_API_KEY,
+  secret: process.env.MEXC_SECRET_KEY,
+  enableRateLimit: true,
+});
+
+async function fetchMexcBalance(): Promise<{ total: number; available: number }> {
+  await mexcExchange.loadMarkets();
+  const balance = await mexcExchange.fetchBalance();
+
+  const usdt = balance.total['USDT'] ?? 0;
+  const usdc = balance.total['USDC'] ?? 0;
+  const total = usdt + usdc;
+
+  const availableUsdt = balance.free['USDT'] ?? 0;
+  const availableUsdc = balance.free['USDC'] ?? 0;
+  const available = availableUsdt + availableUsdc;
+
+  console.log(
+    `[${new Date().toISOString()}] 💼 MEXC Balance: Total $${total.toFixed(2)} (USDT $${usdt.toFixed(2)}, USDC $${usdc.toFixed(2)}), Available $${available.toFixed(2)}`
+  );
+
+  return { total, available };
+}
+
+// ========== SCHEDULER STATE ==========
 type SignalResult = {
   symbol: string;
   status:
@@ -42,31 +74,28 @@ type SignalResult = {
   reason: string;
 };
 
-// ========== EXIT MANAGEMENT ==========
-const BE_THRESHOLD_PERCENT = 0.2;  // <<< СНИЗИЛИ с 0.25 до 0.2
-const LOCK_RATIO = 0.3;
-
-const PARTIAL_THRESHOLD_PERCENT = 0.5;
-const TRAILING_DISTANCE_PERCENT = 0.35;
-
-const TIME_STOP_SECONDS = 1800;
-const TIME_STOP_MFE_PERCENT = 0.3;  // <<< СНИЗИЛИ с 0.5 до 0.3
-const TIME_STOP_MAX_LOSS_PERCENT = -0.5;  // <<< СНИЗИЛИ с -0.6 до -0.5
-
-// DEAD TRADE
-const DEAD_TRADE_ENABLED = true;
-const DEAD_TRADE_CHECK_AFTER_SEC = 240;      //ВАЖНО было 150 потом было 200/240
-const DEAD_TRADE_MIN_MFE_ATR = 0.3; //ВАЖНО было 0.25
-
-const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
-const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
-const MIN_LOCKED_PERCENT = 0.25;
-
 let signalCheckInterval: NodeJS.Timeout | null = null;
 let positionCheckInterval: NodeJS.Timeout | null = null;
+let feeRefreshInterval: NodeJS.Timeout | null = null;
 
 let signalCheckRunning = false;
 let positionCheckRunning = false;
+let isRunning = false;
+
+// ========== EXIT MANAGEMENT ==========
+const BE_THRESHOLD_PERCENT = 0.2;
+const LOCK_RATIO = 0.3;
+const PARTIAL_THRESHOLD_PERCENT = 0.5;
+const TRAILING_DISTANCE_PERCENT = 0.35;
+const TIME_STOP_SECONDS = 1800;
+const TIME_STOP_MFE_PERCENT = 0.3;
+const TIME_STOP_MAX_LOSS_PERCENT = -0.5;
+const DEAD_TRADE_ENABLED = true;
+const DEAD_TRADE_CHECK_AFTER_SEC = 240;
+const DEAD_TRADE_MIN_MFE_ATR = 0.3;
+const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
+const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
+const MIN_LOCKED_PERCENT = 0.25;
 
 function formatPrice(price: number) {
   return Number.isFinite(price) ? price.toFixed(4) : 'n/a';
@@ -114,7 +143,6 @@ async function sendTelegramSummary(signalResults: SignalResult[]) {
   ).length;
 
   const openPositionsCount = getOpenPositionsCount();
-
   const errorCount = signalResults.filter(
     result => result.status === 'error'
   ).length;
@@ -202,7 +230,116 @@ ${new Date().toISOString()}`;
   }
 }
 
+// ========== INITIALIZATION ==========
+async function initializeTradingPairs(): Promise<boolean> {
+  console.log(
+    `\n[${new Date().toISOString()}] ========== FEE CHECK START ==========`
+  );
+  console.log(
+    `[${new Date().toISOString()}] Checking fees for ${ALL_TRADING_PAIRS.length} pairs...`
+  );
+
+  try {
+    const allFees = await getTradingFees(ALL_TRADING_PAIRS);
+    const zeroFeePairs = filterZeroFeePairs(allFees);
+
+    if (zeroFeePairs.length === 0) {
+      console.error(
+        `[${new Date().toISOString()}] ❌ NO ZERO-FEE PAIRS FOUND — stopping bot`
+      );
+
+      await notifyError({
+        context: 'initialization',
+        symbol: 'ALL',
+        error: 'No zero-fee trading pairs available'
+      });
+
+      return false;
+    }
+
+    setTradingPairs(zeroFeePairs);
+    console.log(
+      `[${new Date().toISOString()}] ✅ Initialized with ${zeroFeePairs.length} zero-fee pairs`
+    );
+
+    return true;
+  } catch (error) {
+    console.error(
+      `[${new Date().toISOString()}] 💥 Failed to initialize trading pairs: ${error instanceof Error ? error.message : 'Unknown'}`
+    );
+    return false;
+  } finally {
+    console.log(
+      `[${new Date().toISOString()}] ========== FEE CHECK END ==========\n`
+    );
+  }
+}
+
+async function refreshTradingPairs(): Promise<void> {
+  console.log(
+    `\n[${new Date().toISOString()}] ========== FEE REFRESH START ==========`
+  );
+
+  try {
+    const allFees = await getTradingFees(ALL_TRADING_PAIRS);
+    const newZeroFeePairs = filterZeroFeePairs(allFees);
+
+    if (newZeroFeePairs.length === 0) {
+      console.error(
+        `[${new Date().toISOString()}] ❌ NO ZERO-FEE PAIRS AFTER REFRESH — stopping bot`
+      );
+
+      await notifyError({
+        context: 'fee_refresh',
+        symbol: 'ALL',
+        error: 'No zero-fee trading pairs after refresh'
+      });
+
+      stopScheduler();
+      return;
+    }
+
+    const pairsChanged =
+      newZeroFeePairs.length !== TRADING_PAIRS.length ||
+      newZeroFeePairs.some((pair, i) => pair !== TRADING_PAIRS[i]);
+
+    if (pairsChanged) {
+      console.log(
+        `[${new Date().toISOString()}] 🔄 Trading pairs changed: ${TRADING_PAIRS.length} → ${newZeroFeePairs.length}`
+      );
+      setTradingPairs(newZeroFeePairs);
+
+      const mexcBalance = await fetchMexcBalance();
+
+      await notifyStartup({
+        port: Number(process.env.PORT) || 3002,
+        tradingPairs: newZeroFeePairs,
+        signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
+        positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
+        balance: mexcBalance
+      });
+    } else {
+      console.log(
+        `[${new Date().toISOString()}] ✅ Trading pairs unchanged (${newZeroFeePairs.length} pairs)`
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[${new Date().toISOString()}] 💥 Failed to refresh trading pairs: ${error instanceof Error ? error.message : 'Unknown'}`
+    );
+  } finally {
+    console.log(
+      `[${new Date().toISOString()}] ========== FEE REFRESH END ==========\n`
+    );
+  }
+}
+
+// ========== SIGNAL CHECK ==========
 async function checkSignals() {
+  if (!isRunning) {
+    return;
+  }
+
   if (signalCheckRunning) {
     console.warn(
       `[${new Date().toISOString()}] ⏭ SIGNAL CHECK SKIPPED — previous check is still running`
@@ -636,7 +773,12 @@ async function checkSignals() {
   }
 }
 
+// ========== POSITION CHECK ==========
 async function checkPositions() {
+  if (!isRunning) {
+    return;
+  }
+
   if (positionCheckRunning) {
     console.warn(
       `[${new Date().toISOString()}] ⏭ POSITION CHECK SKIPPED — previous check is still running`
@@ -847,7 +989,7 @@ async function checkPositions() {
         if (
           DEAD_TRADE_ENABLED &&
           !partialClosed &&
-          !beTriggered &&  // <<< ДОБАВИТЬ: не закрывать, если BE сработал
+          !beTriggered &&
           positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
         ) {
           const entryAtr = position.metadata?.lastAtr ?? 0;
@@ -879,10 +1021,10 @@ async function checkPositions() {
         }
         // ========== КОНЕЦ DEAD TRADE ==========
 
-        // ========== TIME-STOP: только если BE не сработал ==========
+        // ========== TIME-STOP ==========
         if (
           !partialClosed &&
-          !beTriggered &&  // <<< МЯГКИЙ TIME-STOP
+          !beTriggered &&
           positionAgeSeconds >= TIME_STOP_SECONDS &&
           maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
           unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
@@ -1121,8 +1263,31 @@ async function checkPositions() {
   }
 }
 
-export function startScheduler() {
+// ========== SCHEDULER LIFECYCLE ==========
+export async function startScheduler() {
   console.log(`\n[${new Date().toISOString()}] 🚀 TRADING BOT STARTING...`);
+
+  // 1. Инициализация пар
+  const initialized = await initializeTradingPairs();
+  if (!initialized) {
+    console.error(
+      `[${new Date().toISOString()}] ❌ Initialization failed — bot will not start`
+    );
+    return;
+  }
+
+  // 2. Получение баланса
+  let mexcBalance: { total: number; available: number } | undefined;
+  try {
+    mexcBalance = await fetchMexcBalance();
+  } catch (error) {
+    console.warn(
+      `[${new Date().toISOString()}] ⚠️ Failed to fetch MEXC balance: ${error instanceof Error ? error.message : 'Unknown'}`
+    );
+  }
+
+  isRunning = true;
+
   console.log(
     `[${new Date().toISOString()}] Port: ${Number(process.env.PORT) || 3002}`
   );
@@ -1156,31 +1321,49 @@ export function startScheduler() {
     `[${new Date().toISOString()}] Position size: ${positionPercent.toFixed(0)}% of equity`
   );
   console.log(
-    `[${new Date().toISOString()}] Starting equity: $${getBalance().toFixed(2)}\n`
+    `[${new Date().toISOString()}] Starting equity: $${getBalance().toFixed(2)}`
   );
 
-  notifyStartup({
+  if (mexcBalance) {
+    console.log(
+      `[${new Date().toISOString()}] MEXC Balance: $${mexcBalance.total.toFixed(2)} (Available: $${mexcBalance.available.toFixed(2)})`
+    );
+  }
+
+  // 3. Уведомление о запуске
+  await notifyStartup({
     port: Number(process.env.PORT) || 3002,
     tradingPairs: [...TRADING_PAIRS],
     signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
-    positionInterval: POSITION_CHECK_INTERVAL_MS / 1000
+    positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
+    balance: mexcBalance
   });
 
+  // 4. Запуск циклов
   void checkSignals();
-
   signalCheckInterval = setInterval(() => {
     void checkSignals();
   }, SIGNAL_CHECK_INTERVAL_MS);
 
   void checkPositions();
-
   positionCheckInterval = setInterval(() => {
     void checkPositions();
   }, POSITION_CHECK_INTERVAL_MS);
+
+  // 5. Обновление комиссий раз в 24 часа
+  feeRefreshInterval = setInterval(() => {
+    void refreshTradingPairs();
+  }, 24 * 60 * 60 * 1000);
+
+  console.log(
+    `[${new Date().toISOString()}] ✅ Bot started successfully\n`
+  );
 }
 
 export function stopScheduler() {
   console.log(`\n[${new Date().toISOString()}] 🛑 Stopping scheduler...`);
+
+  isRunning = false;
 
   if (signalCheckInterval) {
     clearInterval(signalCheckInterval);
@@ -1190,6 +1373,11 @@ export function stopScheduler() {
   if (positionCheckInterval) {
     clearInterval(positionCheckInterval);
     positionCheckInterval = null;
+  }
+
+  if (feeRefreshInterval) {
+    clearInterval(feeRefreshInterval);
+    feeRefreshInterval = null;
   }
 
   console.log(`[${new Date().toISOString()}] Scheduler stopped\n`);
