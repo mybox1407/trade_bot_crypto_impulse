@@ -2,7 +2,7 @@ cd trade_bot_crypto_impulse
 docker compose down
 cd ~
 rm -rf trade_bot_crypto_impulse
-git clone -b etalon_work_07_09_2026 https://github.com/mybox1407/trade_bot_crypto_impulse.git
+git clone -b etalon_profit_10_09_2026 https://github.com/mybox1407/trade_bot_crypto_impulse.git
 npm install protobufjs
 npm install -D @types/protobufjs
 cd trade_bot_crypto_impulse
