@@ -1,3 +1,5 @@
+// src/services/mexcClient.ts
+
 import crypto from 'crypto';
 
 type RequestValue = string | number | boolean;
@@ -115,6 +117,7 @@ const ORDER_STATE_CANCELED = 4;
 const ORDER_STATE_INVALID = 5;
 
 const DEFAULT_RECV_WINDOW = 10_000;
+const DEFAULT_REQUEST_TIMEOUT = 15_000;
 const DEFAULT_ORDER_TIMEOUT = 10_000;
 const DEFAULT_POLL_INTERVAL = 250;
 
@@ -328,10 +331,22 @@ export class MexcAuthenticatedClient {
     options: FuturesRequestOptions = {}
   ): Promise<any> {
     const requestTime = Date.now().toString();
+
     const recvWindow =
       options.recvWindow ?? DEFAULT_RECV_WINDOW;
 
-    let url = `${this.futuresUrl}${endpoint}`;
+    if (
+      !Number.isInteger(recvWindow) ||
+      recvWindow <= 0
+    ) {
+      throw new Error(
+        `Invalid recvWindow: ${recvWindow}`
+      );
+    }
+
+    let url =
+      `${this.futuresUrl}${endpoint}`;
+
     let body: string | undefined;
     let parameterString: string;
 
@@ -345,6 +360,7 @@ export class MexcAuthenticatedClient {
     } else {
       parameterString =
         this.buildPostBody(params);
+
       body = parameterString;
     }
 
@@ -354,11 +370,12 @@ export class MexcAuthenticatedClient {
         parameterString
       );
 
-    const controller = new AbortController();
+    const controller =
+      new AbortController();
 
     const timeout = setTimeout(() => {
       controller.abort();
-    }, options.timeoutMs ?? 15_000);
+    }, options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT);
 
     let response: Response;
 
@@ -380,13 +397,15 @@ export class MexcAuthenticatedClient {
           : String(error);
 
       throw new Error(
-        `MEXC request failed ${method} ${endpoint}: ${message}`
+        `MEXC request failed ${method} ${endpoint}: ` +
+        `${message}`
       );
     } finally {
       clearTimeout(timeout);
     }
 
-    const data = await this.readResponse(response);
+    const data =
+      await this.readResponse(response);
 
     if (data.success !== true) {
       throw new Error(
@@ -402,7 +421,8 @@ export class MexcAuthenticatedClient {
   private parseOrderDetails(
     response: any
   ): FuturesOrderDetails {
-    const data = response?.data ?? response;
+    const data =
+      response?.data ?? response;
 
     if (!data || typeof data !== 'object') {
       throw new Error(
@@ -410,8 +430,11 @@ export class MexcAuthenticatedClient {
       );
     }
 
-    const side = Number(data.side);
-    const state = Number(data.state);
+    const side =
+      Number(data.side);
+
+    const state =
+      Number(data.state);
 
     if (![1, 2, 3, 4].includes(side)) {
       throw new Error(
@@ -454,7 +477,9 @@ export class MexcAuthenticatedClient {
       quantity: this.toFiniteNumber(
         data.vol ?? data.quantity
       ),
-      price: this.toFiniteNumber(data.price),
+      price: this.toFiniteNumber(
+        data.price
+      ),
       dealQty: this.toFiniteNumber(
         data.dealVol ?? data.dealQty
       ),
@@ -491,12 +516,15 @@ export class MexcAuthenticatedClient {
           ? openType
           : undefined,
       positionMode:
-        positionMode === 1 || positionMode === 2
+        positionMode === 1 ||
+        positionMode === 2
           ? positionMode
           : undefined,
       leverage:
         data.leverage != null
-          ? this.toFiniteNumber(data.leverage)
+          ? this.toFiniteNumber(
+              data.leverage
+            )
           : undefined
     };
   }
@@ -504,25 +532,38 @@ export class MexcAuthenticatedClient {
   private parseDeals(
     response: any
   ): FuturesDeal[] {
-    const rows = Array.isArray(response?.data)
-      ? response.data
-      : [];
+    const rows =
+      Array.isArray(response?.data)
+        ? response.data
+        : [];
 
     return rows.map((data: any) => ({
       id: String(data.id ?? ''),
-      orderId: String(data.orderId ?? ''),
-      symbol: String(data.symbol ?? ''),
-      side: Number(data.side) as FuturesOrderSide,
+      orderId: String(
+        data.orderId ?? ''
+      ),
+      symbol: String(
+        data.symbol ?? ''
+      ),
+      side: Number(
+        data.side
+      ) as FuturesOrderSide,
       quantity: this.toFiniteNumber(
         data.vol ?? data.quantity
       ),
-      price: this.toFiniteNumber(data.price),
-      fee: this.toFiniteNumber(data.fee),
+      price: this.toFiniteNumber(
+        data.price
+      ),
+      fee: this.toFiniteNumber(
+        data.fee
+      ),
       feeCurrency:
         data.feeCurrency != null
           ? String(data.feeCurrency)
           : undefined,
-      profit: this.toFiniteNumber(data.profit),
+      profit: this.toFiniteNumber(
+        data.profit
+      ),
       timestamp: this.toFiniteNumber(
         data.timestamp,
         Date.now()
@@ -534,30 +575,38 @@ export class MexcAuthenticatedClient {
     orderId: string
   ): Promise<FuturesOrderDetails> {
     if (!orderId.trim()) {
-      throw new Error('orderId is required');
+      throw new Error(
+        'orderId is required'
+      );
     }
 
-    const response = await this.futuresRequest(
-      'GET',
-      `/api/v1/private/order/get/` +
-      `${encodeURIComponent(orderId)}`
-    );
+    const response =
+      await this.futuresRequest(
+        'GET',
+        `/api/v1/private/order/get/` +
+        `${encodeURIComponent(orderId)}`
+      );
 
-    return this.parseOrderDetails(response);
+    return this.parseOrderDetails(
+      response
+    );
   }
 
   async getFuturesDealDetails(
     orderId: string
   ): Promise<FuturesDeal[]> {
     if (!orderId.trim()) {
-      throw new Error('orderId is required');
+      throw new Error(
+        'orderId is required'
+      );
     }
 
-    const response = await this.futuresRequest(
-      'GET',
-      `/api/v1/private/order/deal_details/` +
-      `${encodeURIComponent(orderId)}`
-    );
+    const response =
+      await this.futuresRequest(
+        'GET',
+        `/api/v1/private/order/deal_details/` +
+        `${encodeURIComponent(orderId)}`
+      );
 
     return this.parseDeals(response);
   }
@@ -568,33 +617,46 @@ export class MexcAuthenticatedClient {
     details: FuturesOrderDetails;
     deals: FuturesDeal[];
   }> {
-    const startedAt = Date.now();
-    let lastState: number | undefined;
+    const startedAt =
+      Date.now();
+
+    let lastState:
+      number | undefined;
 
     while (
       Date.now() - startedAt <
       DEFAULT_ORDER_TIMEOUT
     ) {
       const details =
-        await this.getFuturesOrderDetails(orderId);
+        await this.getFuturesOrderDetails(
+          orderId
+        );
 
-      lastState = details.state;
+      lastState =
+        details.state;
 
-      if (details.state === ORDER_STATE_FILLED) {
+      if (
+        details.state ===
+        ORDER_STATE_FILLED
+      ) {
         return {
           details,
-          deals: await this.getFuturesDealDetails(
-            orderId
-          )
+          deals:
+            await this.getFuturesDealDetails(
+              orderId
+            )
         };
       }
 
       if (
-        details.state === ORDER_STATE_CANCELED ||
-        details.state === ORDER_STATE_INVALID
+        details.state ===
+          ORDER_STATE_CANCELED ||
+        details.state ===
+          ORDER_STATE_INVALID
       ) {
         throw new Error(
-          `Futures order ${orderId} was not filled. ` +
+          `Futures order ${orderId} ` +
+          `was not filled. ` +
           `state=${details.state}`
         );
       }
@@ -619,16 +681,21 @@ export class MexcAuthenticatedClient {
     deals: FuturesDeal[],
     requestedQuantity: number
   ): FuturesOrder {
-    const dealsQuantity = deals.reduce(
-      (sum, deal) => sum + deal.quantity,
-      0
-    );
+    const dealsQuantity =
+      deals.reduce(
+        (sum, deal) =>
+          sum + deal.quantity,
+        0
+      );
 
-    const weightedQuote = deals.reduce(
-      (sum, deal) =>
-        sum + deal.quantity * deal.price,
-      0
-    );
+    const weightedQuote =
+      deals.reduce(
+        (sum, deal) =>
+          sum +
+          deal.quantity *
+          deal.price,
+        0
+      );
 
     const executedQty =
       details.dealQty > 0
@@ -640,8 +707,9 @@ export class MexcAuthenticatedClient {
       executedQty <= 0
     ) {
       throw new Error(
-        `Filled order ${details.orderId} has invalid ` +
-        `executed quantity ${executedQty}. ` +
+        `Filled order ${details.orderId} ` +
+        `has invalid executed quantity ` +
+        `${executedQty}. ` +
         `Requested ${requestedQuantity}`
       );
     }
@@ -658,23 +726,27 @@ export class MexcAuthenticatedClient {
       avgPrice <= 0
     ) {
       throw new Error(
-        `Filled order ${details.orderId} has invalid ` +
-        `average price ${avgPrice}`
+        `Filled order ${details.orderId} ` +
+        `has invalid average price ` +
+        `${avgPrice}`
       );
     }
 
     const executedQuoteQty =
       executedQty * avgPrice;
 
-    const dealsFee = deals.reduce(
-      (sum, deal) => sum + deal.fee,
-      0
-    );
+    const dealsFee =
+      deals.reduce(
+        (sum, deal) =>
+          sum + deal.fee,
+        0
+      );
 
     const orderFee =
       details.totalFee !== 0
         ? details.totalFee
-        : details.takerFee + details.makerFee;
+        : details.takerFee +
+          details.makerFee;
 
     const totalFee =
       deals.length > 0
@@ -685,17 +757,22 @@ export class MexcAuthenticatedClient {
       details.profit !== 0
         ? details.profit
         : deals.reduce(
-            (sum, deal) => sum + deal.profit,
+            (sum, deal) =>
+              sum + deal.profit,
             0
           );
 
     const isEntry =
-      details.side === FUTURES_SIDE.OPEN_LONG ||
-      details.side === FUTURES_SIDE.OPEN_SHORT;
+      details.side ===
+        FUTURES_SIDE.OPEN_LONG ||
+      details.side ===
+        FUTURES_SIDE.OPEN_SHORT;
 
     const isExit =
-      details.side === FUTURES_SIDE.CLOSE_LONG ||
-      details.side === FUTURES_SIDE.CLOSE_SHORT;
+      details.side ===
+        FUTURES_SIDE.CLOSE_LONG ||
+      details.side ===
+        FUTURES_SIDE.CLOSE_SHORT;
 
     return {
       orderId: details.orderId,
@@ -711,8 +788,14 @@ export class MexcAuthenticatedClient {
       executedQty,
       executedQuoteQty,
       avgPrice,
-      entryFee: isEntry ? totalFee : 0,
-      exitFee: isExit ? totalFee : 0,
+      entryFee:
+        isEntry
+          ? totalFee
+          : 0,
+      exitFee:
+        isExit
+          ? totalFee
+          : 0,
       totalFee,
       realizedPnL,
       feeCurrency:
@@ -723,7 +806,8 @@ export class MexcAuthenticatedClient {
       state: details.state,
       createdAt: details.createTime,
       openType: details.openType,
-      positionMode: details.positionMode
+      positionMode:
+        details.positionMode
     };
   }
 
@@ -736,12 +820,25 @@ export class MexcAuthenticatedClient {
     positionMode: FuturesPositionMode = 1
   ): Promise<FuturesOrder> {
     const futuresSymbol =
-      this.normalizeFuturesSymbol(symbol);
+      this.normalizeFuturesSymbol(
+        symbol
+      );
 
-    this.validatePositionSide(positionSide);
-    this.validateMarginMode(marginMode);
-    this.validatePositionMode(positionMode);
-    this.validateLeverage(leverage);
+    this.validatePositionSide(
+      positionSide
+    );
+
+    this.validateMarginMode(
+      marginMode
+    );
+
+    this.validatePositionMode(
+      positionMode
+    );
+
+    this.validateLeverage(
+      leverage
+    );
 
     const validQuantity =
       this.requirePositiveNumber(
@@ -754,7 +851,10 @@ export class MexcAuthenticatedClient {
         ? FUTURES_SIDE.OPEN_LONG
         : FUTURES_SIDE.OPEN_SHORT;
 
-    const params: Record<string, RequestValue> = {
+    const params: Record<
+      string,
+      RequestValue
+    > = {
       symbol: futuresSymbol,
       price: 0,
       vol: validQuantity,
@@ -768,23 +868,29 @@ export class MexcAuthenticatedClient {
       positionMode
     };
 
-    const response = await this.futuresRequest(
-      'POST',
-      '/api/v1/private/order/create',
-      params
-    );
+    const response =
+      await this.futuresRequest(
+        'POST',
+        '/api/v1/private/order/create',
+        params
+      );
 
     const orderId =
-      String(response.data?.orderId ?? '');
+      String(
+        response.data?.orderId ?? ''
+      );
 
     if (!orderId) {
       throw new Error(
-        'MEXC returned no orderId for opening order'
+        'MEXC returned no orderId for ' +
+        'opening order'
       );
     }
 
     const filled =
-      await this.waitForFilledOrder(orderId);
+      await this.waitForFilledOrder(
+        orderId
+      );
 
     return this.makeFilledOrder(
       filled.details,
@@ -802,11 +908,21 @@ export class MexcAuthenticatedClient {
     positionMode: FuturesPositionMode = 1
   ): Promise<FuturesOrder> {
     const futuresSymbol =
-      this.normalizeFuturesSymbol(symbol);
+      this.normalizeFuturesSymbol(
+        symbol
+      );
 
-    this.validatePositionSide(positionSide);
-    this.validateMarginMode(marginMode);
-    this.validatePositionMode(positionMode);
+    this.validatePositionSide(
+      positionSide
+    );
+
+    this.validateMarginMode(
+      marginMode
+    );
+
+    this.validatePositionMode(
+      positionMode
+    );
 
     const validQuantity =
       this.requirePositiveNumber(
@@ -816,8 +932,10 @@ export class MexcAuthenticatedClient {
 
     if (
       positionId != null &&
-      (!Number.isInteger(positionId) ||
-        positionId <= 0)
+      (
+        !Number.isInteger(positionId) ||
+        positionId <= 0
+      )
     ) {
       throw new Error(
         `Invalid positionId: ${positionId}`
@@ -829,7 +947,10 @@ export class MexcAuthenticatedClient {
         ? FUTURES_SIDE.CLOSE_LONG
         : FUTURES_SIDE.CLOSE_SHORT;
 
-    const params: Record<string, RequestValue> = {
+    const params: Record<
+      string,
+      RequestValue
+    > = {
       symbol: futuresSymbol,
       price: 0,
       vol: validQuantity,
@@ -843,26 +964,33 @@ export class MexcAuthenticatedClient {
     };
 
     if (positionId != null) {
-      params.positionId = positionId;
+      params.positionId =
+        positionId;
     }
 
-    const response = await this.futuresRequest(
-      'POST',
-      '/api/v1/private/order/create',
-      params
-    );
+    const response =
+      await this.futuresRequest(
+        'POST',
+        '/api/v1/private/order/create',
+        params
+      );
 
     const orderId =
-      String(response.data?.orderId ?? '');
+      String(
+        response.data?.orderId ?? ''
+      );
 
     if (!orderId) {
       throw new Error(
-        'MEXC returned no orderId for closing order'
+        'MEXC returned no orderId for ' +
+        'closing order'
       );
     }
 
     const filled =
-      await this.waitForFilledOrder(orderId);
+      await this.waitForFilledOrder(
+        orderId
+      );
 
     return this.makeFilledOrder(
       filled.details,
@@ -879,23 +1007,46 @@ export class MexcAuthenticatedClient {
     positionId?: number
   ): Promise<void> {
     const futuresSymbol =
-      this.normalizeFuturesSymbol(symbol);
+      this.normalizeFuturesSymbol(
+        symbol
+      );
 
-    this.validateMarginMode(marginMode);
-    this.validateLeverage(leverage);
+    this.validateMarginMode(
+      marginMode
+    );
 
-    const params: Record<string, RequestValue> = {
+    this.validateLeverage(
+      leverage
+    );
+
+    const params: Record<
+      string,
+      RequestValue
+    > = {
       leverage
     };
 
     if (positionId != null) {
-      params.positionId = positionId;
+      if (
+        !Number.isInteger(positionId) ||
+        positionId <= 0
+      ) {
+        throw new Error(
+          `Invalid positionId: ${positionId}`
+        );
+      }
+
+      params.positionId =
+        positionId;
     } else {
-      params.symbol = futuresSymbol;
+      params.symbol =
+        futuresSymbol;
+
       params.openType =
         marginMode === 'isolated'
           ? ISOLATED_MARGIN
           : CROSS_MARGIN;
+
       params.positionType =
         positionSide === 'long'
           ? FUTURES_POSITION_TYPE.LONG
@@ -909,25 +1060,79 @@ export class MexcAuthenticatedClient {
     );
   }
 
+  async getTradeFee(
+    symbol: string
+  ): Promise<TradeFee> {
+    const futuresSymbol =
+      this.normalizeFuturesSymbol(
+        symbol
+      );
+
+    const response =
+      await this.futuresRequest(
+        'GET',
+        '/api/v1/private/account/' +
+        'tiered_fee_rate/v2',
+        {
+          symbol: futuresSymbol
+        }
+      );
+
+    const data =
+      response?.data ?? response;
+
+    const row =
+      Array.isArray(data)
+        ? data[0]
+        : data;
+
+    if (!row || typeof row !== 'object') {
+      throw new Error(
+        `MEXC Futures fee data not found for ` +
+        `${futuresSymbol}`
+      );
+    }
+
+    return {
+      symbol: futuresSymbol,
+      makerFeeRate: this.toFiniteNumber(
+        row.makerFeeRate ??
+        row.realMakerFee ??
+        row.originalMakerFee ??
+        row.makerFee
+      ),
+      takerFeeRate: this.toFiniteNumber(
+        row.takerFeeRate ??
+        row.realTakerFee ??
+        row.originalTakerFee ??
+        row.takerFee
+      )
+    };
+  }
+
   async getFuturesAccount(): Promise<{
     available: number;
     total: number;
     unrealizedPnl: number;
   }> {
-    const response = await this.futuresRequest(
-      'GET',
-      '/api/v1/private/account/assets'
-    );
+    const response =
+      await this.futuresRequest(
+        'GET',
+        '/api/v1/private/account/assets'
+      );
 
-    const rows = Array.isArray(response.data)
-      ? response.data
-      : [];
+    const rows =
+      Array.isArray(response.data)
+        ? response.data
+        : [];
 
-    const usdt = rows.find(
-      (row: any) =>
-        String(row.currency ?? row.asset)
-          .toUpperCase() === 'USDT'
-    );
+    const usdt =
+      rows.find(
+        (row: any) =>
+          String(
+            row.currency ?? row.asset
+          ).toUpperCase() === 'USDT'
+      );
 
     if (!usdt) {
       throw new Error(
@@ -965,26 +1170,39 @@ export class MexcAuthenticatedClient {
     fundingRate: number | null;
   }> {
     const futuresSymbol =
-      this.normalizeFuturesSymbol(symbol);
+      this.normalizeFuturesSymbol(
+        symbol
+      );
 
-    const response = await fetch(
-      `${this.futuresUrl}` +
-      `/api/v1/contract/ticker?symbol=` +
-      `${encodeURIComponent(futuresSymbol)}`
-    );
+    const response =
+      await fetch(
+        `${this.futuresUrl}` +
+        `/api/v1/contract/ticker?symbol=` +
+        `${encodeURIComponent(futuresSymbol)}`
+      );
 
     const data =
       await this.readResponse(response);
 
-    const rows = Array.isArray(data.data)
-      ? data.data
-      : [data.data ?? data];
+    if (data.success === false) {
+      throw new Error(
+        `MEXC ticker error ` +
+        `${data.code ?? 'unknown'}: ` +
+        `${data.msg ?? data.message ?? 'Unknown error'}`
+      );
+    }
+
+    const rows =
+      Array.isArray(data.data)
+        ? data.data
+        : [data.data ?? data];
 
     const ticker =
       rows.find(
         (row: any) =>
           String(row.symbol ?? '')
-            .toUpperCase() === futuresSymbol
+            .toUpperCase() ===
+          futuresSymbol
       ) ?? rows[0];
 
     if (!ticker) {
@@ -1006,7 +1224,8 @@ export class MexcAuthenticatedClient {
       markPrice <= 0
     ) {
       throw new Error(
-        `Invalid mark price for ${futuresSymbol}`
+        `Invalid mark price for ` +
+        `${futuresSymbol}`
       );
     }
 
@@ -1028,72 +1247,120 @@ export class MexcAuthenticatedClient {
   async getFuturesPositions(): Promise<
     FuturesPosition[]
   > {
-    const response = await this.futuresRequest(
-      'GET',
-      '/api/v1/private/position/open_positions'
-    );
+    const response =
+      await this.futuresRequest(
+        'GET',
+        '/api/v1/private/position/open_positions'
+      );
 
-    const rows = Array.isArray(response.data)
-      ? response.data
-      : [];
+    const rows =
+      Array.isArray(response.data)
+        ? response.data
+        : [];
 
-    return rows.map((row: any) => ({
-      positionId:
-        row.positionId != null
-          ? String(row.positionId)
-          : undefined,
-      symbol: String(row.symbol ?? ''),
-      positionType:
-        Number(row.positionType) === 1
-          ? 1
-          : 2,
-      openType:
-        Number(row.openType) === 2
-          ? 2
-          : 1,
-      positionMode:
+    return rows.map((row: any) => {
+      const positionType =
+        Number(row.positionType);
+
+      const openType =
+        Number(row.openType);
+
+      if (
+        positionType !== 1 &&
+        positionType !== 2
+      ) {
+        throw new Error(
+          `Invalid positionType: ` +
+          `${row.positionType}`
+        );
+      }
+
+      if (
+        openType !== 1 &&
+        openType !== 2
+      ) {
+        throw new Error(
+          `Invalid openType: ${row.openType}`
+        );
+      }
+
+      const positionMode =
         row.positionMode != null
-          ? Number(row.positionMode) as
-              FuturesPositionMode
-          : undefined,
-      quantity: Math.abs(
-        this.toFiniteNumber(
-          row.holdVol ?? row.holdQty
-        )
-      ),
-      entryPrice: this.toFiniteNumber(
-        row.holdAvgPrice ??
-        row.openAvgPrice ??
-        row.openPrice
-      ),
-      markPrice: this.toFiniteNumber(
-        row.fairPrice ??
-        row.markPrice
-      ),
-      unrealizedPnl: this.toFiniteNumber(
-        row.unRealizedPnl ??
-        row.unrealisedPnl ??
-        row.unrealizedPnl
-      ),
-      liquidationPrice: this.toFiniteNumber(
-        row.liquidatePrice ??
-        row.liquidationPrice
-      ),
-      leverage: this.toFiniteNumber(
-        row.leverage,
-        1
-      ),
-      margin: this.toFiniteNumber(
-        row.im ?? row.margin
-      ),
-      realizedPnl:
-        row.realised != null
-          ? this.toFiniteNumber(row.realised)
-          : undefined,
-      totalFee:
-        row.totalFee != null
-          ? this.toFiniteNumber(row.totalFee)
-          : undefined
-    }));
+          ? Number(row.positionMode)
+          : undefined;
+
+      if (
+        positionMode != null &&
+        positionMode !== 1 &&
+        positionMode !== 2
+      ) {
+        throw new Error(
+          `Invalid positionMode: ` +
+          `${row.positionMode}`
+        );
+      }
+
+      return {
+        positionId:
+          row.positionId != null
+            ? String(row.positionId)
+            : undefined,
+        symbol: String(
+          row.symbol ?? ''
+        ),
+        positionType:
+          positionType as 1 | 2,
+        openType:
+          openType as 1 | 2,
+        positionMode:
+          positionMode as
+            | FuturesPositionMode
+            | undefined,
+        quantity: Math.abs(
+          this.toFiniteNumber(
+            row.holdVol ??
+            row.holdQty
+          )
+        ),
+        entryPrice: this.toFiniteNumber(
+          row.holdAvgPrice ??
+          row.openAvgPrice ??
+          row.openPrice
+        ),
+        markPrice: this.toFiniteNumber(
+          row.fairPrice ??
+          row.markPrice
+        ),
+        unrealizedPnl: this.toFiniteNumber(
+          row.unRealizedPnl ??
+          row.unrealisedPnl ??
+          row.unrealizedPnl
+        ),
+        liquidationPrice:
+          this.toFiniteNumber(
+            row.liquidatePrice ??
+            row.liquidationPrice
+          ),
+        leverage: this.toFiniteNumber(
+          row.leverage,
+          1
+        ),
+        margin: this.toFiniteNumber(
+          row.im ?? row.margin
+        ),
+        realizedPnl:
+          row.realised != null
+            ? this.toFiniteNumber(
+                row.realised
+              )
+            : undefined,
+        totalFee:
+          row.totalFee != null
+            ? this.toFiniteNumber(
+                row.totalFee
+              )
+            : undefined
+      };
+    });
   }
 }
