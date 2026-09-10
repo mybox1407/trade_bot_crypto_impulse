@@ -1,3 +1,4 @@
+// src/services/telegram.ts
 import axios from 'axios';
 import { env } from '../config/env';
 
@@ -152,6 +153,7 @@ export function notifyStartup(data: {
   tradingPairs: string[];
   signalInterval: number;
   positionInterval: number;
+  balance?: { total: number; available: number };
 }) {
   const text = `🤖 TRADING BOT STARTED 🤖
 
@@ -159,6 +161,7 @@ Port: ${data.port}
 Trading Pairs: ${data.tradingPairs.join(', ')}
 Signal Check: every ${data.signalInterval}s
 Position Check: every ${data.positionInterval}s
+${data.balance ? `💼 MEXC Balance: $${data.balance.total.toFixed(2)} (Available: $${data.balance.available.toFixed(2)})` : ''}
 
 Bot is running...
 
