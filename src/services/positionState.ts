@@ -82,7 +82,7 @@ export interface VirtualPosition {
   symbol: string;
   side: PositionSide;
   entryPrice: number;
-  quantity: number;
+  quantity: number;          // теперь это монеты (базовая валюта), а не контракты
   notional: number;
   reservedCapital: number;
   takeProfitPrice: number;
@@ -777,12 +777,27 @@ export async function openPosition(
         false // quantityInUsdt = false, quantity уже в монетах
       );
 
+    // CORRECTION: получить contractSize и конвертировать quantity из контрактов в монеты
+    const symbolInfo =
+      await mexcClient.getFuturesSymbolInfo(normalizedSymbol);
+
     const fill =
       buildActualFill(
         quantity,
         data.entryPrice,
         mexcOrder
       );
+
+    // fill.quantity = контракты → конвертируем в монеты
+    const quantityInBase = fill.quantity * symbolInfo.contractSize;
+    const notionalInBase = quantityInBase * fill.price;
+
+    if (!isFinitePositive(quantityInBase) || !isFinitePositive(notionalInBase)) {
+      throw new Error(
+        `Invalid converted quantity or notional: ` +
+        `quantityInBase=${quantityInBase}, notionalInBase=${notionalInBase}`
+      );
+    }
 
     const position: VirtualPosition = {
       id: String(
@@ -792,10 +807,10 @@ export async function openPosition(
       symbol: normalizedSymbol,
       side: data.side,
       entryPrice: fill.price,
-      quantity: fill.quantity,
-      notional: fill.notional,
+      quantity: quantityInBase,          // ← теперь это монеты (BTC, ETH и т.д.)
+      notional: notionalInBase,
       reservedCapital:
-        fill.notional /
+        notionalInBase /
         FUTURES_LEVERAGE,
       takeProfitPrice:
         data.takeProfitPrice,
