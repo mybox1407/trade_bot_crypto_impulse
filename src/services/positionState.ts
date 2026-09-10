@@ -1,3 +1,4 @@
+// src/services/positionState.ts
 import {
   MAX_RISK_PER_TRADE,
   STARTING_BALANCE,
@@ -115,6 +116,24 @@ function calculateReservedCapital() {
     0
   );
 }
+
+// ========== НОВАЯ ФУНКЦИЯ ==========
+export function setBalance(newBalance: number): void {
+  if (!Number.isFinite(newBalance) || newBalance <= 0) {
+    console.warn(
+      `[${new Date().toISOString()}] ⚠️ Attempted to set invalid balance: ${newBalance}`
+    );
+    return;
+  }
+
+  const oldBalance = balance;
+  balance = newBalance;
+
+  console.log(
+    `[${new Date().toISOString()}] 💰 Balance updated: $${oldBalance.toFixed(2)} → $${newBalance.toFixed(2)}`
+  );
+}
+// ========== КОНЕЦ НОВОЙ ФУНКЦИИ ==========
 
 export function getBalance() {
   return balance;
