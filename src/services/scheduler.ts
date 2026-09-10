@@ -43,9 +43,9 @@ async function fetchMexcBalance(): Promise<{ total: number; available: number }>
   await mexcExchange.loadMarkets();
   const balance = await mexcExchange.fetchBalance();
 
-  // ← ИСПРАВЛЕНИЕ: правильное приведение типов
-  const totalBalance = balance.total as Record<string, number>;
-  const freeBalance = balance.free as Record<string, number>;
+  // ← ИСПРАВЛЕНИЕ: двойное приведение через unknown
+  const totalBalance = balance.total as unknown as Record<string, number>;
+  const freeBalance = balance.free as unknown as Record<string, number>;
 
   const usdt = totalBalance['USDT'] ?? 0;
   const usdc = totalBalance['USDC'] ?? 0;
