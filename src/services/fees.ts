@@ -1,80 +1,7 @@
 // src/services/fees.ts
-import crypto from 'crypto';
+import { MexcAuthenticatedClient } from './mexcClient';
 
-interface TradeFee {
-  symbol: string;
-  makerFeeRate: number;
-  takerFeeRate: number;
-}
-
-async function getTradeFeeFromMexc(symbol: string): Promise<TradeFee> {
-  const apiKey = process.env.MEXC_API_KEY;
-  const apiSecret = process.env.MEXC_SECRET_KEY;
-
-  if (!apiKey || !apiSecret) {
-    throw new Error('MEXC API credentials not configured');
-  }
-
-  const normalizedSymbol = symbol.replace('/', '').toUpperCase();
-
-  const params = new URLSearchParams({
-    symbol: normalizedSymbol,
-    timestamp: Date.now().toString(),
-    recvWindow: '5000'
-  });
-
-  const signature = crypto
-    .createHmac('sha256', apiSecret)
-    .update(params.toString())
-    .digest('hex');
-
-  const url = `https://api.mexc.com/api/v3/tradeFee?${params}&signature=${signature}`;
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'X-MEXC-APIKEY': apiKey,
-      'Content-Type': 'application/json'
-    }
-  });
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text}`);
-  }
-
-  const data = JSON.parse(text);
-
-  const feeData = Array.isArray(data.data)
-    ? data.data[0]
-    : data.data ?? data;
-
-  const makerFeeRate = Number(
-    feeData?.makerCommission ??
-    feeData?.makerFeeRate
-  );
-
-  const takerFeeRate = Number(
-    feeData?.takerCommission ??
-    feeData?.takerFeeRate
-  );
-
-  if (
-    !Number.isFinite(makerFeeRate) ||
-    !Number.isFinite(takerFeeRate)
-  ) {
-    throw new Error(
-      `Invalid fee response for ${normalizedSymbol}: ${JSON.stringify(data)}`
-    );
-  }
-
-  return {
-    symbol: normalizedSymbol,
-    makerFeeRate,
-    takerFeeRate
-  };
-}
+const mexcClient = new MexcAuthenticatedClient();
 
 export type FeeInfo = {
   symbol: string;
@@ -88,8 +15,8 @@ export async function getTradingFees(symbols: string[]): Promise<FeeInfo[]> {
 
   for (const symbol of symbols) {
     try {
-      const tradeFee = await getTradeFeeFromMexc(symbol);
-
+      const tradeFee = await mexcClient.getTradeFee(symbol);
+      
       const maker = tradeFee.makerFeeRate;
       const taker = tradeFee.takerFeeRate;
       const isZeroFee = taker === 0;
@@ -109,6 +36,13 @@ export async function getTradingFees(symbols: string[]): Promise<FeeInfo[]> {
       console.error(
         `[${new Date().toISOString()}] 💥 Failed to fetch fees for ${symbol}: ${errorMsg}`
       );
+      
+      feeResults.push({
+        symbol,
+        maker: 0,
+        taker: 0,
+        isZeroFee: false,
+      });
     }
   }
 
