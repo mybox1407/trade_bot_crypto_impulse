@@ -29,14 +29,12 @@ export class MexcAuthenticatedClient {
   private buildQueryString(
     params: Record<string, RequestValue>
   ): string {
-    return new URLSearchParams(
-      Object.entries(params).map(
-        ([key, value]) => [
-          key,
-          String(value)
-        ]
-      )
-    ).toString();
+    // Сортируем ключи по алфавиту - это критично для подписи!
+    const sortedKeys = Object.keys(params).sort();
+    
+    return sortedKeys
+      .map(key => `${key}=${String(params[key])}`)
+      .join('&');
   }
 
   private signQueryString(
