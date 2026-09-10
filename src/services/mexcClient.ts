@@ -16,7 +16,7 @@ export class MexcAuthenticatedClient {
 
   constructor() {
     const apiKey = process.env.MEXC_API_KEY;
-    const apiSecret = process.env.MEXC_SECRET_KEY;
+    const apiSecret = process.env.MEXC_API_SECRET; // Было MEXC_SECRET_KEY
 
     if (!apiKey || !apiSecret) {
       throw new Error('MEXC API credentials not configured');
