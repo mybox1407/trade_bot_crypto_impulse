@@ -80,42 +80,54 @@ export class MexcAuthenticatedClient {
   }
 
   async getTradeFee(symbol: string): Promise<TradeFee> {
-    const normalizedSymbol = symbol.toUpperCase();
-
+    // MEXC ожидает BTCUSDT, а не BTC/USDT
+    const normalizedSymbol = symbol.toUpperCase().replace('/', '');
+  
     const params: Record<string, RequestValue> = {
       symbol: normalizedSymbol,
       timestamp: Date.now(),
       recvWindow: 5000
     };
-
+  
+    const queryString = this.buildQueryString(params);
+    const signature = this.signQueryString(queryString);
+    
+    // Логирование для отладки
+    console.log('[MEXC] Input symbol:', symbol);
+    console.log('[MEXC] Normalized symbol:', normalizedSymbol);
+    console.log('[MEXC] Query string:', queryString);
+    console.log('[MEXC] Signature:', signature);
+  
     const response = await fetch(
-      this.buildSignedUrl('/api/v3/tradeFee', params),
+      `${this.restUrl}/api/v3/tradeFee?${queryString}&signature=${signature}`,
       {
         method: 'GET',
         headers: this.headers()
       }
     );
-
+  
     const data = await this.readResponse(response);
-
+  
+    console.log('[MEXC] Response:', JSON.stringify(data).slice(0, 200));
+  
     const feeData = Array.isArray(data.data)
       ? data.data[0]
       : data.data ?? data;
-
+  
     const makerFeeRate = Number(
       feeData?.makerCommission ??
       feeData?.makerFeeRate ??
       0.001
     );
-
+  
     const takerFeeRate = Number(
       feeData?.takerCommission ??
       feeData?.takerFeeRate ??
       0.001
     );
-
+  
     return {
-      symbol: normalizedSymbol,
+      symbol: symbol.toUpperCase(), // Возвращаем оригинальный формат с /
       makerFeeRate: Number.isFinite(makerFeeRate) ? makerFeeRate : 0.001,
       takerFeeRate: Number.isFinite(takerFeeRate) ? takerFeeRate : 0.001
     };
