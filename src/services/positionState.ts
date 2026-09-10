@@ -1,5 +1,3 @@
-// src/services/positionState.ts
-
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -20,7 +18,9 @@ import {
 
 import {
   MexcAuthenticatedClient,
-  FuturesOrder
+  FuturesOrder,
+  FuturesMarginMode,
+  FuturesPositionMode
 } from './mexcClient';
 
 export const POSITION_PERCENT = 0.30;
@@ -30,12 +30,12 @@ const FUTURES_LEVERAGE = Number(
   process.env.MEXC_FUTURES_LEVERAGE ?? 1
 );
 
-const FUTURES_MARGIN_MODE =
+const FUTURES_MARGIN_MODE: FuturesMarginMode =
   process.env.MEXC_FUTURES_MARGIN_MODE === 'cross'
     ? 'cross'
     : 'isolated';
 
-const FUTURES_POSITION_MODE =
+const FUTURES_POSITION_MODE: FuturesPositionMode =
   process.env.MEXC_FUTURES_POSITION_MODE === '2'
     ? 2
     : 1;
@@ -62,8 +62,8 @@ export interface VirtualPosition {
   stopLossPrice: number;
   entryFee: number;
   openedAt: string;
-  marginMode: 'isolated' | 'cross';
-  positionMode: 1 | 2;
+  marginMode: FuturesMarginMode;
+  positionMode: FuturesPositionMode;
   positionId?: number;
   metadata?: {
     regime: string;
@@ -239,11 +239,19 @@ function calculateReservedCapital(): number {
   );
 }
 
+function updateReservedCapital(): void {
+  reservedCapital = Math.max(
+    0,
+    calculateReservedCapital()
+  );
+}
+
 function createRejectedResult(
   message: string,
   balanceBefore: number = balance,
   reservedCapitalBefore: number = reservedCapital,
-  availableBalanceBefore: number = getAvailableBalance()
+  availableBalanceBefore: number =
+    getAvailableBalance()
 ): PositionStateResult {
   return {
     ok: false,
@@ -299,11 +307,7 @@ function getExecutedPrice(
   }
 
   throw new Error(
-    `Cannot determine executed price. ` +
-    `fallback=${fallbackPrice}, ` +
-    `orderPrice=${orderPrice}, ` +
-    `quote=${executedQuoteQty}, ` +
-    `qty=${executedQty}`
+    `Cannot determine executed price`
   );
 }
 
@@ -333,65 +337,31 @@ function validateConfig(): string | null {
     );
   }
 
-  if (
-    FUTURES_MARGIN_MODE !== 'isolated' &&
-    FUTURES_MARGIN_MODE !== 'cross'
-  ) {
-    return (
-      `Invalid MEXC_FUTURES_MARGIN_MODE: ` +
-      `${FUTURES_MARGIN_MODE}`
-    );
-  }
-
-  if (
-    FUTURES_POSITION_MODE !== 1 &&
-    FUTURES_POSITION_MODE !== 2
-  ) {
-    return (
-      `Invalid MEXC_FUTURES_POSITION_MODE: ` +
-      `${FUTURES_POSITION_MODE}`
-    );
-  }
-
   return null;
-}
-
-function getPositionType(
-  side: PositionSide
-): 1 | 2 {
-  return side === 'long' ? 1 : 2;
-}
-
-function updateReservedCapital(): void {
-  reservedCapital = Math.max(
-    0,
-    calculateReservedCapital()
-  );
 }
 
 function updatePositionAfterPartialClose(
   position: VirtualPosition,
-  actualQuantity: number,
+  quantity: number,
   entryFeeShare: number
 ): void {
-  const newQuantity =
-    position.quantity - actualQuantity;
+  const remainingQuantity =
+    position.quantity - quantity;
 
   if (
-    !isValidFuturesQuantity(newQuantity)
+    !isValidFuturesQuantity(remainingQuantity)
   ) {
     throw new Error(
-      `Invalid remaining quantity: ${newQuantity}`
+      `Invalid remaining quantity: ` +
+      `${remainingQuantity}`
     );
   }
 
-  position.quantity = newQuantity;
+  position.quantity = remainingQuantity;
   position.notional =
     position.quantity * position.entryPrice;
-
   position.reservedCapital =
     position.notional / FUTURES_LEVERAGE;
-
   position.entryFee = Math.max(
     0,
     position.entryFee - entryFeeShare
@@ -435,16 +405,11 @@ function buildActualFill(
     );
   }
 
-  const fee = getActualOrderFee(
-    order,
-    notional
-  );
-
   return {
     quantity,
     price,
     notional,
-    fee
+    fee: getActualOrderFee(order, notional)
   };
 }
 
@@ -459,7 +424,6 @@ export function setBalance(
       `[${new Date().toISOString()}] ` +
       `⚠️ Invalid balance: ${newBalance}`
     );
-
     return;
   }
 
@@ -509,20 +473,20 @@ export function getPositions(): VirtualPosition[] {
 export function getPosition(
   symbol?: string
 ): VirtualPosition | null {
-  if (symbol) {
-    const normalizedInput =
-      normalizeSymbol(symbol);
-
-    return (
-      currentPositions.find(
-        position =>
-          normalizeSymbol(position.symbol) ===
-          normalizedInput
-      ) ?? null
-    );
+  if (!symbol) {
+    return currentPositions[0] ?? null;
   }
 
-  return currentPositions[0] ?? null;
+  const normalized =
+    normalizeSymbol(symbol);
+
+  return (
+    currentPositions.find(
+      position =>
+        normalizeSymbol(position.symbol) ===
+        normalized
+    ) ?? null
+  );
 }
 
 export function getPositionById(
@@ -542,13 +506,13 @@ export function hasOpenPosition(
     return currentPositions.length > 0;
   }
 
-  const normalizedInput =
+  const normalized =
     normalizeSymbol(symbol);
 
   return currentPositions.some(
     position =>
       normalizeSymbol(position.symbol) ===
-      normalizedInput
+      normalized
   );
 }
 
@@ -572,7 +536,8 @@ export async function openPosition(
   data: OpenPositionInput
 ): Promise<PositionStateResult> {
   const balanceBefore = balance;
-  const reservedCapitalBefore = reservedCapital;
+  const reservedCapitalBefore =
+    reservedCapital;
   const availableBalanceBefore =
     getAvailableBalance();
 
@@ -670,19 +635,6 @@ export async function openPosition(
         FUTURES_LEVERAGE
     );
 
-  if (
-    !isFinitePositive(
-      maxNotionalByAvailableBalance
-    )
-  ) {
-    return createRejectedResult(
-      'Calculated Futures notional is invalid',
-      balanceBefore,
-      reservedCapitalBefore,
-      availableBalanceBefore
-    );
-  }
-
   const maxQuantityByNotional =
     maxNotionalByAvailableBalance /
     data.entryPrice;
@@ -708,27 +660,9 @@ export async function openPosition(
     data.totalRiskPerUnit ??
     stopDistance + worstCaseFeePerUnit;
 
-  if (!isFinitePositive(totalRiskPerUnit)) {
-    return createRejectedResult(
-      'Invalid total risk per unit',
-      balanceBefore,
-      reservedCapitalBefore,
-      availableBalanceBefore
-    );
-  }
-
   const riskQuantity =
     data.calculatedQuantity ??
     riskCapital / totalRiskPerUnit;
-
-  if (!isValidFuturesQuantity(riskQuantity)) {
-    return createRejectedResult(
-      'Invalid calculated risk quantity',
-      balanceBefore,
-      reservedCapitalBefore,
-      availableBalanceBefore
-    );
-  }
 
   const quantity = Math.min(
     riskQuantity,
@@ -741,14 +675,10 @@ export async function openPosition(
   const initialMargin =
     notional / FUTURES_LEVERAGE;
 
-  const estimatedEntryFee =
-    notional * TRADE_FEE_RATE;
-
   if (
     !isValidFuturesQuantity(quantity) ||
     !isFinitePositive(notional) ||
-    !isFinitePositive(initialMargin) ||
-    !Number.isFinite(estimatedEntryFee)
+    !isFinitePositive(initialMargin)
   ) {
     return createRejectedResult(
       'Calculated Futures position size is invalid',
@@ -773,18 +703,8 @@ export async function openPosition(
     await mexcClient.setFuturesLeverage(
       normalizedSymbol,
       FUTURES_LEVERAGE,
-      FUTURES_MARGIN_MODE
-    );
-
-    console.log(
-      `[${new Date().toISOString()}] ` +
-      `🚀 Opening MEXC Futures ` +
-      `${data.side.toUpperCase()} ` +
-      `${normalizedSymbol} ` +
-      `qty=${quantity.toFixed(8)} ` +
-      `leverage=${FUTURES_LEVERAGE}x ` +
-      `margin=${FUTURES_MARGIN_MODE} ` +
-      `positionMode=${FUTURES_POSITION_MODE}`
+      FUTURES_MARGIN_MODE,
+      data.side
     );
 
     const mexcOrder =
@@ -803,9 +723,6 @@ export async function openPosition(
       mexcOrder
     );
 
-    const marginReserved =
-      fill.notional / FUTURES_LEVERAGE;
-
     const position: VirtualPosition = {
       id: String(
         mexcOrder.orderId ||
@@ -816,7 +733,8 @@ export async function openPosition(
       entryPrice: fill.price,
       quantity: fill.quantity,
       notional: fill.notional,
-      reservedCapital: marginReserved,
+      reservedCapital:
+        fill.notional / FUTURES_LEVERAGE,
       takeProfitPrice: data.takeProfitPrice,
       stopLossPrice: data.stopLossPrice,
       entryFee: fill.fee,
@@ -861,10 +779,8 @@ export async function openPosition(
       entryPrice: position.entryPrice,
       quantity: position.quantity,
       notional: position.notional,
-      takeProfitPrice:
-        position.takeProfitPrice,
-      stopLossPrice:
-        position.stopLossPrice,
+      takeProfitPrice: position.takeProfitPrice,
+      stopLossPrice: position.stopLossPrice,
       entryFee: position.entryFee,
       balanceBefore,
       balanceAfter: balance,
@@ -879,29 +795,20 @@ export async function openPosition(
         data.metadata?.macdCrossUp ?? false,
       macdCrossDown:
         data.metadata?.macdCrossDown ?? false,
-      lastRsi:
-        data.metadata?.lastRsi ?? 0,
-      lastAtr:
-        data.metadata?.lastAtr ?? 0,
-      adx:
-        data.metadata?.adx ?? 0,
-      bbWidth:
-        data.metadata?.bbWidth ?? 0,
-      atrPct:
-        data.metadata?.atrPct ?? 0,
-      ema20:
-        data.metadata?.ema20 ?? 0,
-      ema50:
-        data.metadata?.ema50 ?? 0,
-      ema200:
-        data.metadata?.ema200 ?? 0,
+      lastRsi: data.metadata?.lastRsi ?? 0,
+      lastAtr: data.metadata?.lastAtr ?? 0,
+      adx: data.metadata?.adx ?? 0,
+      bbWidth: data.metadata?.bbWidth ?? 0,
+      atrPct: data.metadata?.atrPct ?? 0,
+      ema20: data.metadata?.ema20 ?? 0,
+      ema50: data.metadata?.ema50 ?? 0,
+      ema200: data.metadata?.ema200 ?? 0,
       entryDistanceFromEma20,
       entryDistanceFromEma20Percent,
       entryDistanceFromEma20Atr:
         entryExtensionAtr,
       entryTooExtended:
-        data.metadata?.entryTooExtended ??
-        false
+        data.metadata?.entryTooExtended ?? false
     });
 
     void notifyPositionOpen({
@@ -910,10 +817,8 @@ export async function openPosition(
       entryPrice: position.entryPrice,
       quantity: position.quantity,
       notional: position.notional,
-      takeProfitPrice:
-        position.takeProfitPrice,
-      stopLossPrice:
-        position.stopLossPrice,
+      takeProfitPrice: position.takeProfitPrice,
+      stopLossPrice: position.stopLossPrice,
       positionId: position.id,
       regime: data.metadata?.regime ?? '',
       balance
@@ -940,8 +845,8 @@ export async function openPosition(
 
     console.error(
       `[${new Date().toISOString()}] ` +
-      `❌ Failed to open MEXC Futures ` +
-      `position: ${errorMsg}`
+      `❌ Failed to open MEXC Futures position: ` +
+      `${errorMsg}`
     );
 
     return createRejectedResult(
@@ -985,14 +890,6 @@ export async function closePosition(
     getAvailableBalance();
 
   try {
-    console.log(
-      `[${new Date().toISOString()}] ` +
-      `🚀 Closing MEXC Futures ` +
-      `${position.symbol} ` +
-      `${position.side.toUpperCase()} ` +
-      `qty=${position.quantity.toFixed(8)}`
-    );
-
     const mexcOrder =
       await mexcClient.closeFuturesPosition(
         position.symbol,
@@ -1009,13 +906,11 @@ export async function closePosition(
       mexcOrder
     );
 
-    if (
-      fill.quantity > position.quantity
-    ) {
+    if (fill.quantity > position.quantity) {
       throw new Error(
         `Exchange returned close quantity ` +
-        `${fill.quantity}, but position quantity ` +
-        `is ${position.quantity}`
+        `${fill.quantity}, position quantity ` +
+        `${position.quantity}`
       );
     }
 
@@ -1028,37 +923,18 @@ export async function closePosition(
             position.entryPrice - fill.price
           ) * fill.quantity;
 
-    const realizedPnLPercent =
-      position.notional > 0
-        ? (
-            realizedPnL /
-            position.notional
-          ) * 100
-        : 0;
-
-    const exitFee = fill.fee;
-
     const entryFeeShare =
       position.entryFee *
       (fill.quantity / position.quantity);
 
     const totalFee =
-      entryFeeShare + exitFee;
+      entryFeeShare + fill.fee;
 
     const netPnL =
       realizedPnL - totalFee;
 
-    const netPnLPercent =
-      position.notional > 0
-        ? (
-            netPnL /
-            position.notional
-          ) * 100
-        : 0;
-
-    const closedAtMs = Date.now();
     const closedAt =
-      new Date(closedAtMs).toISOString();
+      new Date().toISOString();
 
     const openedAtMs =
       new Date(position.openedAt).getTime();
@@ -1068,8 +944,7 @@ export async function closePosition(
         ? Math.max(
             0,
             Math.floor(
-              (closedAtMs - openedAtMs) /
-              1000
+              (Date.now() - openedAtMs) / 1000
             )
           )
         : 0;
@@ -1087,15 +962,26 @@ export async function closePosition(
         exitPrice: fill.price,
         quantity: fill.quantity,
         notional:
-          position.entryPrice *
-          fill.quantity,
+          position.entryPrice * fill.quantity,
         realizedPnL,
-        realizedPnLPercent,
+        realizedPnLPercent:
+          position.notional > 0
+            ? (
+                realizedPnL /
+                position.notional
+              ) * 100
+            : 0,
         entryFee: entryFeeShare,
-        exitFee,
+        exitFee: fill.fee,
         totalFee,
         netPnL,
-        netPnLPercent,
+        netPnLPercent:
+          position.notional > 0
+            ? (
+                netPnL /
+                position.notional
+              ) * 100
+            : 0,
         openedAt: position.openedAt,
         closedAt,
         positionAgeSeconds,
@@ -1104,11 +990,8 @@ export async function closePosition(
 
       currentPositions =
         currentPositions.filter(
-          openPosition =>
-            openPosition.id !== positionId
+          item => item.id !== positionId
         );
-
-      updateReservedCapital();
     } else {
       updatePositionAfterPartialClose(
         position,
@@ -1117,6 +1000,7 @@ export async function closePosition(
       );
     }
 
+    updateReservedCapital();
     balance += netPnL;
 
     logPositionClose({
@@ -1128,15 +1012,26 @@ export async function closePosition(
       exitPrice: fill.price,
       quantity: fill.quantity,
       notional:
-        position.entryPrice *
-        fill.quantity,
+        position.entryPrice * fill.quantity,
       realizedPnL,
-      realizedPnLPercent,
+      realizedPnLPercent:
+        position.notional > 0
+          ? (
+              realizedPnL /
+              position.notional
+            ) * 100
+          : 0,
       entryFee: entryFeeShare,
-      exitFee,
+      exitFee: fill.fee,
       totalFee,
       netPnL,
-      netPnLPercent,
+      netPnLPercent:
+        position.notional > 0
+          ? (
+              netPnL /
+              position.notional
+            ) * 100
+          : 0,
       balanceBefore,
       balanceAfter: balance,
       reason,
@@ -1146,22 +1041,17 @@ export async function closePosition(
       maxUnrealizedPnL:
         position.metadata?.maxUnrealizedPnL,
       maxUnrealizedPnLPercent:
-        position.metadata
-          ?.maxUnrealizedPnLPercent,
+        position.metadata?.maxUnrealizedPnLPercent,
       worstUnrealizedPnL:
         position.metadata?.worstUnrealizedPnL,
       worstUnrealizedPnLPercent:
-        position.metadata
-          ?.worstUnrealizedPnLPercent,
+        position.metadata?.worstUnrealizedPnLPercent,
       beTriggered:
-        position.metadata?.beTriggered ??
-        false,
+        position.metadata?.beTriggered ?? false,
       partialClosed:
-        position.metadata?.partialClosed ??
-        false,
+        position.metadata?.partialClosed ?? false,
       trailingActive:
-        position.metadata?.trailingActive ??
-        false,
+        position.metadata?.trailingActive ?? false,
       trailingStopPrice:
         position.metadata?.trailingStopPrice
     });
@@ -1173,11 +1063,16 @@ export async function closePosition(
       exitPrice: fill.price,
       quantity: fill.quantity,
       notional:
-        position.entryPrice *
-        fill.quantity,
+        position.entryPrice * fill.quantity,
       realizedPnL,
       netPnL,
-      netPnLPercent,
+      netPnLPercent:
+        position.notional > 0
+          ? (
+              netPnL /
+              position.notional
+            ) * 100
+          : 0,
       reason,
       positionAgeSeconds,
       balance,
@@ -1205,8 +1100,8 @@ export async function closePosition(
 
     console.error(
       `[${new Date().toISOString()}] ` +
-      `❌ Failed to close MEXC Futures ` +
-      `position: ${errorMsg}`
+      `❌ Failed to close MEXC Futures position: ` +
+      `${errorMsg}`
     );
 
     return createRejectedResult(
@@ -1292,15 +1187,13 @@ export async function partialClosePosition(
             position.entryPrice - fill.price
           ) * fill.quantity;
 
-    const exitFee = fill.fee;
-
     const entryFeeShare =
       position.entryFee *
       (fill.quantity / position.quantity);
 
     const netPnL =
       realizedPnL -
-      exitFee -
+      fill.fee -
       entryFeeShare;
 
     updatePositionAfterPartialClose(
@@ -1315,7 +1208,7 @@ export async function partialClosePosition(
       ok: true,
       realizedPnL,
       netPnL,
-      exitFee,
+      exitFee: fill.fee,
       entryFeeShare,
       position: {
         ...position,
@@ -1334,8 +1227,8 @@ export async function partialClosePosition(
 
     console.error(
       `[${new Date().toISOString()}] ` +
-      `❌ Failed Futures partial close ` +
-      `for ${position.symbol}: ${errorMsg}`
+      `❌ Failed Futures partial close for ` +
+      `${position.symbol}: ${errorMsg}`
     );
 
     return {
@@ -1361,13 +1254,10 @@ export function updatePositionMetadata(
     return false;
   }
 
-  const position =
-    currentPositions[index];
-
   currentPositions[index] = {
-    ...position,
+    ...currentPositions[index],
     metadata: {
-      ...(position.metadata ?? {}),
+      ...(currentPositions[index].metadata ?? {}),
       ...updates
     }
   };
