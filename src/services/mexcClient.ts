@@ -9,6 +9,19 @@ export interface TradeFee {
   takerFeeRate: number;
 }
 
+export interface MexcOrder {
+  orderId: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  type: 'LIMIT' | 'MARKET';
+  quantity: number;
+  price: number;
+  status: 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELED' | 'REJECTED';
+  executedQty: number;
+  executedQuoteQty: number;
+  createdAt: number;
+}
+
 export class MexcAuthenticatedClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
@@ -16,7 +29,7 @@ export class MexcAuthenticatedClient {
 
   constructor() {
     const apiKey = process.env.MEXC_API_KEY;
-    const apiSecret = process.env.MEXC_API_SECRET; // Было MEXC_SECRET_KEY
+    const apiSecret = process.env.MEXC_API_SECRET;
 
     if (!apiKey || !apiSecret) {
       throw new Error('MEXC API credentials not configured');
@@ -29,7 +42,6 @@ export class MexcAuthenticatedClient {
   private buildQueryString(
     params: Record<string, RequestValue>
   ): string {
-    // Сортируем ключи по алфавиту - это критично для подписи!
     const sortedKeys = Object.keys(params).sort();
     
     return sortedKeys
@@ -79,8 +91,125 @@ export class MexcAuthenticatedClient {
     return `${this.restUrl}${endpoint}?${queryString}&signature=${signature}`;
   }
 
+  async placeOrder(
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    quantity: number
+  ): Promise<MexcOrder> {
+    const normalizedSymbol = symbol.toUpperCase().replace('/', '');
+    
+    const params: Record<string, RequestValue> = {
+      symbol: normalizedSymbol,
+      side,
+      type: 'MARKET',
+      quantity: quantity.toFixed(8),
+      timestamp: Date.now(),
+      recvWindow: 5000
+    };
+
+    console.log(
+      `[MEXC] Placing ${side} order: ${quantity} ${normalizedSymbol} @ MARKET`
+    );
+
+    const response = await fetch(
+      this.buildSignedUrl('/api/v3/order', params),
+      {
+        method: 'POST',
+        headers: this.headers()
+      }
+    );
+
+    const data = await this.readResponse(response);
+
+    if (data.code && data.code !== 200) {
+      throw new Error(`MEXC API error: ${data.code} - ${data.msg}`);
+    }
+
+    console.log(
+      `[MEXC] Order placed: ${data.orderId}, executed: ${data.executedQty} @ ${data.price}`
+    );
+
+    return {
+      orderId: data.orderId,
+      symbol: normalizedSymbol,
+      side,
+      type: 'MARKET',
+      quantity: Number(data.quantity ?? quantity),
+      price: Number(data.price ?? 0),
+      status: data.status,
+      executedQty: Number(data.executedQty ?? 0),
+      executedQuoteQty: Number(data.executedQuoteQty ?? 0),
+      createdAt: Number(data.transactTime ?? Date.now())
+    };
+  }
+
+  async cancelOrder(
+    symbol: string,
+    orderId: string
+  ): Promise<void> {
+    const normalizedSymbol = symbol.toUpperCase().replace('/', '');
+    
+    const params: Record<string, RequestValue> = {
+      symbol: normalizedSymbol,
+      orderId,
+      timestamp: Date.now(),
+      recvWindow: 5000
+    };
+
+    const response = await fetch(
+      this.buildSignedUrl('/api/v3/order', params),
+      {
+        method: 'DELETE',
+        headers: this.headers()
+      }
+    );
+
+    const data = await this.readResponse(response);
+
+    if (data.code && data.code !== 200) {
+      throw new Error(`MEXC API error: ${data.code} - ${data.msg}`);
+    }
+  }
+
+  async getOpenOrders(symbol?: string): Promise<MexcOrder[]> {
+    const params: Record<string, RequestValue> = {
+      timestamp: Date.now(),
+      recvWindow: 5000
+    };
+
+    if (symbol) {
+      params.symbol = symbol.toUpperCase().replace('/', '');
+    }
+
+    const response = await fetch(
+      this.buildSignedUrl('/api/v3/openOrders', params),
+      {
+        method: 'GET',
+        headers: this.headers()
+      }
+    );
+
+    const data = await this.readResponse(response);
+
+    if (!Array.isArray(data)) {
+      throw new Error('Invalid open orders response from MEXC');
+    }
+
+    return data.map((order: any) => ({
+      orderId: order.orderId,
+      symbol: order.symbol,
+      side: order.side,
+      type: order.type,
+      quantity: Number(order.origQty),
+      price: Number(order.price),
+      status: order.status,
+      executedQty: Number(order.executedQty),
+      executedQuoteQty: Number(order.executedQuoteQty),
+      createdAt: Number(order.time)
+    }));
+  }
+
   async getTradeFee(symbol: string): Promise<TradeFee> {
-    // MEXC ожидает BTCUSDT, а не BTC/USDT
     const normalizedSymbol = symbol.toUpperCase().replace('/', '');
   
     const params: Record<string, RequestValue> = {
@@ -92,7 +221,6 @@ export class MexcAuthenticatedClient {
     const queryString = this.buildQueryString(params);
     const signature = this.signQueryString(queryString);
     
-    // Логирование для отладки
     console.log('[MEXC] Input symbol:', symbol);
     console.log('[MEXC] Normalized symbol:', normalizedSymbol);
     console.log('[MEXC] Query string:', queryString);
@@ -127,7 +255,7 @@ export class MexcAuthenticatedClient {
     );
   
     return {
-      symbol: symbol.toUpperCase(), // Возвращаем оригинальный формат с /
+      symbol: symbol.toUpperCase(),
       makerFeeRate: Number.isFinite(makerFeeRate) ? makerFeeRate : 0.001,
       takerFeeRate: Number.isFinite(takerFeeRate) ? takerFeeRate : 0.001
     };
