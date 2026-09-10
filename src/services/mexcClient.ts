@@ -12,6 +12,9 @@ export interface TradeFee {
   symbol: string;
   makerFeeRate: number;
   takerFeeRate: number;
+  source: 'account_real';
+  originalMakerFee?: number;
+  originalTakerFee?: number;
 }
 
 export interface MexcFeeDetails {
@@ -169,9 +172,14 @@ export class MexcAuthenticatedClient {
       return `${normalized.slice(0, -4)}_USDT`;
     }
 
+    if (normalized.endsWith('USDC')) {
+      return `${normalized.slice(0, -4)}_USDC`;
+    }
+
     throw new Error(
       `Invalid Futures symbol "${symbol}". ` +
-      `Expected format BASE_USDT or BASEUSDT`
+      `Expected format BASE_USDT, BASE_USDC, ` +
+      `BASEUSDT or BASEUSDC`
     );
   }
 
