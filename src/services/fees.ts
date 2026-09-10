@@ -17,7 +17,7 @@ export type FeeInfo = {
   symbol: string;
   maker: number;
   taker: number;
-  isAllowed: boolean;
+  isZeroFee: boolean;
   source: 'account_real';
   originalMaker?: number;
   originalTaker?: number;
@@ -52,7 +52,10 @@ export async function getTradingFees(
   const feeResults: FeeInfo[] = [];
 
   const usdtSymbols =
-    symbols.filter(isUsdtPair);
+    symbols.filter(
+      (symbol: string): boolean =>
+        isUsdtPair(symbol)
+    );
 
   for (const symbol of usdtSymbols) {
     try {
@@ -72,7 +75,7 @@ export async function getTradingFees(
         symbol,
         maker,
         taker,
-        isAllowed,
+        isZeroFee: isAllowed,
         source: 'account_real',
         originalMaker:
           tradeFee.originalMakerFee,
@@ -98,23 +101,35 @@ export async function getTradingFees(
         `Failed to fetch fees for ${symbol}: ` +
         `${errorMsg}`
       );
+
+      feeResults.push({
+        symbol,
+        maker: Number.POSITIVE_INFINITY,
+        taker: Number.POSITIVE_INFINITY,
+        isZeroFee: false,
+        source: 'account_real'
+      });
     }
   }
 
   return feeResults;
 }
 
-export function filterAllowedFeePairs(
+export function filterZeroFeePairs(
   fees: FeeInfo[]
 ): string[] {
-  const selectedSymbols =
+  const selectedSymbols: string[] =
     fees
-      .filter(fee =>
-        fee.source === 'account_real' &&
-        fee.isAllowed &&
-        isUsdtPair(fee.symbol)
+      .filter(
+        (fee: FeeInfo): boolean =>
+          fee.source === 'account_real' &&
+          fee.isZeroFee &&
+          isUsdtPair(fee.symbol)
       )
-      .map(fee => fee.symbol);
+      .map(
+        (fee: FeeInfo): string =>
+          fee.symbol
+      );
 
   console.log(
     `[${new Date().toISOString()}] ✅ ` +
