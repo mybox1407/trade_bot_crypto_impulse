@@ -1,4 +1,5 @@
-export const TRADING_PAIRS = [
+// src/config/constants.ts
+export const ALL_TRADING_PAIRS = [
   'SOL/USDT',
   'SOL/USDC',
   'AVAX/USDT',
@@ -45,5 +46,11 @@ export const TRADING_PAIRS = [
   'VIRTUAL/USDC'
 ];
 
-export const SIGNAL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 15 минут
-export const POSITION_CHECK_INTERVAL_MS = 3 * 1000; // 15 секунд
+export let TRADING_PAIRS: string[] = [];
+
+export function setTradingPairs(pairs: string[]) {
+  TRADING_PAIRS = pairs;
+}
+
+export const SIGNAL_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+export const POSITION_CHECK_INTERVAL_MS = 3 * 1000;
