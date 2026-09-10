@@ -1,7 +1,8 @@
 // src/config/env.ts
-import dotenv from 'dotenv';
+import { config } from '@dotenvx/dotenvx';
 
-dotenv.config();
+// Явно указать путь к .env
+config({ path: '.env' });
 
 export const env = {
   port: Number(process.env.PORT) || 3002,
