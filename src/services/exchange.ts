@@ -1,6 +1,12 @@
+// src/services/exchange.ts
 import ccxt from 'ccxt';
 
-const exchange = new ccxt.binance();
+const exchange = new ccxt.mexc({
+  apiKey: process.env.MEXC_API_KEY,
+  secret: process.env.MEXC_SECRET_KEY,
+  // Если нужно: раскомментируй и настрой под спот/фьючерсы
+  // options: { defaultType: 'spot' }
+});
 
 export async function getCandles(symbol: string, timeframe = '15m', limit = 250) {
   await exchange.loadMarkets();
