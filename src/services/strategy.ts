@@ -14,7 +14,9 @@ export const MAX_RISK_PER_TRADE = 0.01;
 
 // Paper-trading комиссия MEXC: 0%
 // Применяется отдельно при входе и при выходе позиции.
-export const TRADE_FEE_RATE = 0.0;
+// Paper-trading комиссия MEXC: 0.064%
+// Применяется отдельно при входе и при выходе позиции.
+export const TRADE_FEE_RATE = 0.00064;
 
 export const ENABLE_TREND_UP_TRADES = true;
 
