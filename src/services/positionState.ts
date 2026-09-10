@@ -773,7 +773,8 @@ export async function openPosition(
         quantity,
         FUTURES_LEVERAGE,
         FUTURES_MARGIN_MODE,
-        FUTURES_POSITION_MODE
+        FUTURES_POSITION_MODE,
+        false // quantityInUsdt = false, quantity уже в монетах
       );
 
     const fill =
@@ -987,7 +988,8 @@ export async function closePosition(
         position.quantity,
         position.positionId,
         position.marginMode,
-        position.positionMode
+        position.positionMode,
+        false // quantityInUsdt = false, quantity уже в монетах
       );
 
     const fill =
@@ -1272,7 +1274,8 @@ export async function partialClosePosition(
         quantityToClose,
         position.positionId,
         position.marginMode,
-        position.positionMode
+        position.positionMode,
+        false // quantityInUsdt = false, quantityToClose уже в монетах
       );
 
     const fill =
