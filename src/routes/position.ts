@@ -1,5 +1,7 @@
 // src/routes/position.ts
+
 import { Router } from 'express';
+
 import {
   closePosition,
   getBalance,
@@ -12,6 +14,7 @@ import {
   MAX_PARALLEL_POSITIONS,
   openPosition
 } from '../services/positionState';
+
 import { MexcAuthenticatedClient } from '../services/mexcClient';
 
 const router = Router();
@@ -24,6 +27,13 @@ type CloseReason =
   | 'time_stop'
   | 'breakeven_stop'
   | 'dead_trade_mfe';
+
+type TickerResponse = {
+  symbol?: string;
+  fairPrice?: number | string;
+  lastPrice?: number | string;
+  indexPrice?: number | string;
+};
 
 function normalizeSymbol(
   symbol?: string
@@ -47,7 +57,9 @@ function normalizeFuturesSymbol(
   const normalized = normalizeSymbol(symbol);
 
   if (!normalized) {
-    throw new Error('Invalid Futures symbol');
+    throw new Error(
+      'Invalid Futures symbol'
+    );
   }
 
   if (normalized.includes('_')) {
@@ -59,7 +71,8 @@ function normalizeFuturesSymbol(
   }
 
   throw new Error(
-    `Invalid Futures symbol "${symbol}". Expected BASE_USDT`
+    `Invalid Futures symbol "${symbol}". ` +
+    `Expected BASE_USDT`
   );
 }
 
@@ -69,10 +82,52 @@ async function getFuturesCurrentPrice(
   const futuresSymbol =
     normalizeFuturesSymbol(symbol);
 
-  const ticker =
-    await mexcClient.getFuturesTicker(
-      futuresSymbol
+  const response = await fetch(
+    'https://contract.mexc.com/api/v1/contract/ticker' +
+    `?symbol=${encodeURIComponent(futuresSymbol)}`
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+
+    throw new Error(
+      `MEXC ticker HTTP ${response.status}: ${text}`
     );
+  }
+
+  const payload = await response.json() as {
+    success?: boolean;
+    code?: number | string;
+    msg?: string;
+    data?: TickerResponse | TickerResponse[];
+  };
+
+  if (payload.success === false) {
+    throw new Error(
+      `MEXC ticker error ` +
+      `${payload.code ?? 'unknown'}: ` +
+      `${payload.msg ?? 'Unknown error'}`
+    );
+  }
+
+  const rows = Array.isArray(payload.data)
+    ? payload.data
+    : payload.data
+      ? [payload.data]
+      : [];
+
+  const ticker =
+    rows.find(
+      row =>
+        String(row.symbol ?? '')
+          .toUpperCase() === futuresSymbol
+    ) ?? rows[0];
+
+  if (!ticker) {
+    throw new Error(
+      `No ticker returned for ${futuresSymbol}`
+    );
+  }
 
   const price = Number(
     ticker.fairPrice ??
@@ -81,7 +136,8 @@ async function getFuturesCurrentPrice(
 
   if (!Number.isFinite(price) || price <= 0) {
     throw new Error(
-      `Invalid Futures price for ${futuresSymbol}: ${price}`
+      `Invalid Futures price for ` +
+      `${futuresSymbol}: ${price}`
     );
   }
 
@@ -130,26 +186,34 @@ router.get('/balance', (_req, res) => {
 router.post('/open', async (req, res) => {
   try {
     const rawBody = req.body as {
-      symbol?: string;
-      side?: 'long' | 'short';
-      takeProfitPrice?: number;
-      stopLossPrice?: number;
+      symbol?: unknown;
+      side?: unknown;
+      takeProfitPrice?: unknown;
+      stopLossPrice?: unknown;
     };
 
-    const symbol = normalizeFuturesSymbol(
-      rawBody.symbol ?? ''
-    );
+    const rawSymbol =
+      typeof rawBody.symbol === 'string'
+        ? rawBody.symbol
+        : '';
+
+    const symbol =
+      normalizeFuturesSymbol(rawSymbol);
 
     const side = rawBody.side;
+
     const takeProfitPrice =
       Number(rawBody.takeProfitPrice);
+
     const stopLossPrice =
       Number(rawBody.stopLossPrice);
 
     if (
       !isValidSide(side) ||
       !Number.isFinite(takeProfitPrice) ||
-      !Number.isFinite(stopLossPrice)
+      !Number.isFinite(stopLossPrice) ||
+      takeProfitPrice <= 0 ||
+      stopLossPrice <= 0
     ) {
       return res.status(400).json({
         ok: false,
@@ -192,9 +256,9 @@ router.post('/open', async (req, res) => {
       stopLossPrice
     });
 
-    const statusCode = result.ok ? 200 : 400;
-
-    return res.status(statusCode).json(result);
+    return res
+      .status(result.ok ? 200 : 400)
+      .json(result);
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -208,9 +272,13 @@ router.post('/open', async (req, res) => {
 
 router.post('/check-close', async (req, res) => {
   try {
-    const symbol = normalizeFuturesSymbol(
-      (req.body as { symbol?: string }).symbol ?? ''
-    );
+    const rawSymbol =
+      typeof req.body?.symbol === 'string'
+        ? req.body.symbol
+        : '';
+
+    const symbol =
+      normalizeFuturesSymbol(rawSymbol);
 
     const position = getPosition(symbol);
 
@@ -251,7 +319,9 @@ router.post('/check-close', async (req, res) => {
 
       return res.json({
         ok: result.ok,
-        action: result.ok ? 'closed' : 'error',
+        action: result.ok
+          ? 'closed'
+          : 'error',
         symbol: position.symbol,
         currentPrice,
         result
@@ -267,7 +337,9 @@ router.post('/check-close', async (req, res) => {
 
       return res.json({
         ok: result.ok,
-        action: result.ok ? 'closed' : 'error',
+        action: result.ok
+          ? 'closed'
+          : 'error',
         symbol: position.symbol,
         currentPrice,
         result
@@ -295,9 +367,9 @@ router.post('/check-close', async (req, res) => {
 router.post('/close', async (req, res) => {
   try {
     const rawBody = req.body as {
-      positionId?: string;
-      symbol?: string;
-      reason?: CloseReason;
+      positionId?: unknown;
+      symbol?: unknown;
+      reason?: unknown;
     };
 
     const positionId =
@@ -305,16 +377,21 @@ router.post('/close', async (req, res) => {
         ? rawBody.positionId.trim()
         : undefined;
 
-    const symbol = rawBody.symbol
-      ? normalizeFuturesSymbol(rawBody.symbol)
-      : undefined;
+    const symbol =
+      typeof rawBody.symbol === 'string'
+        ? normalizeFuturesSymbol(
+            rawBody.symbol
+          )
+        : undefined;
 
-    const reason = rawBody.reason ?? 'manual';
+    const reason =
+      rawBody.reason ?? 'manual';
 
     if (!isValidCloseReason(reason)) {
       return res.status(400).json({
         ok: false,
-        message: `Invalid close reason: ${reason}`
+        message:
+          `Invalid close reason: ${String(reason)}`
       });
     }
 
@@ -342,7 +419,9 @@ router.post('/close', async (req, res) => {
       reason
     );
 
-    return res.status(result.ok ? 200 : 400).json(result);
+    return res
+      .status(result.ok ? 200 : 400)
+      .json(result);
   } catch (error) {
     return res.status(500).json({
       ok: false,
