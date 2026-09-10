@@ -14,6 +14,17 @@ export interface TradeFee {
   takerFeeRate: number;
 }
 
+export interface MexcFeeDetails {
+  symbol: string;
+  originalMakerFee: number;
+  originalTakerFee: number;
+  realMakerFee: number;
+  realTakerFee: number;
+  minLeverage?: number;
+  maxLeverage?: number;
+  isMaxLeverage?: boolean;
+}
+
 export interface FuturesOrder {
   orderId: string;
   positionId?: number;
@@ -1064,9 +1075,7 @@ export class MexcAuthenticatedClient {
     symbol: string
   ): Promise<TradeFee> {
     const futuresSymbol =
-      this.normalizeFuturesSymbol(
-        symbol
-      );
+      this.normalizeFuturesSymbol(symbol);
 
     const response =
       await this.futuresRequest(
@@ -1078,35 +1087,83 @@ export class MexcAuthenticatedClient {
         }
       );
 
-    const data =
-      response?.data ?? response;
+    const rawData =
+      response?.data;
 
     const row =
-      Array.isArray(data)
-        ? data[0]
-        : data;
+      Array.isArray(rawData)
+        ? rawData[0]
+        : rawData;
 
     if (!row || typeof row !== 'object') {
       throw new Error(
-        `MEXC Futures fee data not found for ` +
+        `MEXC personal fee data not found for ` +
         `${futuresSymbol}`
       );
     }
 
+    const realMakerFee =
+      this.toFiniteNumber(
+        row.realMakerFee,
+        NaN
+      );
+
+    const realTakerFee =
+      this.toFiniteNumber(
+        row.realTakerFee,
+        NaN
+      );
+
+    const originalMakerFee =
+      this.toFiniteNumber(
+        row.originalMakerFee,
+        NaN
+      );
+
+    const originalTakerFee =
+      this.toFiniteNumber(
+        row.originalTakerFee,
+        NaN
+      );
+
+    if (
+      !Number.isFinite(realMakerFee) ||
+      !Number.isFinite(realTakerFee) ||
+      realMakerFee < 0 ||
+      realTakerFee < 0
+    ) {
+      throw new Error(
+        `Invalid personal fee values for ` +
+        `${futuresSymbol}: ` +
+        `${JSON.stringify(row)}`
+      );
+    }
+
+    console.log(
+      `[${new Date().toISOString()}] 💰 ` +
+      `${futuresSymbol}: ` +
+      `original maker=` +
+      `${
+        Number.isFinite(originalMakerFee)
+          ? (originalMakerFee * 100).toFixed(4)
+          : 'n/a'
+      }%, ` +
+      `original taker=` +
+      `${
+        Number.isFinite(originalTakerFee)
+          ? (originalTakerFee * 100).toFixed(4)
+          : 'n/a'
+      }%, ` +
+      `real maker=` +
+      `${(realMakerFee * 100).toFixed(4)}%, ` +
+      `real taker=` +
+      `${(realTakerFee * 100).toFixed(4)}%`
+    );
+
     return {
       symbol: futuresSymbol,
-      makerFeeRate: this.toFiniteNumber(
-        row.makerFeeRate ??
-        row.realMakerFee ??
-        row.originalMakerFee ??
-        row.makerFee
-      ),
-      takerFeeRate: this.toFiniteNumber(
-        row.takerFeeRate ??
-        row.realTakerFee ??
-        row.originalTakerFee ??
-        row.takerFee
-      )
+      makerFeeRate: realMakerFee,
+      takerFeeRate: realTakerFee
     };
   }
 
