@@ -35,7 +35,7 @@ import ccxt from 'ccxt';
 // ========== MEXC BALANCE ==========
 const mexcExchange = new ccxt.mexc({
   apiKey: process.env.MEXC_API_KEY,
-  secret: process.env.MEXC_SECRET_KEY,
+  secret: process.env.MEXC_API_SECRET,
   enableRateLimit: true,
 });
 
