@@ -1,4 +1,4 @@
-//ВАЖНО! В этом версии было давблено - MACD + RSI фильтром для трендов
+// ВАЖНО! Версия с MACD + RSI-фильтром для трендов.
 
 import {
   MACD,
@@ -14,7 +14,7 @@ export const MAX_RISK_PER_TRADE = 0.01;
 
 // Paper-trading комиссия MEXC: 0% (USDC/USDT пары с 0% комиссией).
 // Применяется отдельно при входе и при выходе позиции.
-export const TRADE_FEE_RATE = 0.0;  //ВАЖНО <<< БЫЛО 0.0004
+export const TRADE_FEE_RATE = 0.0; // ВАЖНО <<< БЫЛО 0.0004
 
 export const ENABLE_TREND_UP_TRADES = true;
 
@@ -42,6 +42,19 @@ const BREAKOUT_MIN_ATR_PCT = 0.015;
 const BREAKOUT_MAX_ATR_PCT = 0.035;
 const BREAKOUT_MIN_BB_WIDTH = 0.03;
 const BREAKOUT_MAX_BB_WIDTH = 0.08;
+
+// ИЗМЕНЕНО 2026-09-10: RSI-границы для trend_up/trend_down.
+// Подобраны по position_open_log.csv + trade_log.csv.
+// Long:  52.52 <= RSI <= 58.50.
+// Short: 35.00 < RSI < 42.43.
+//
+// ВАЖНО: MACD-cross НЕ является обязательным условием.
+// Для входа достаточно MACD-cross ИЛИ роста RSI,
+// но само RSI-окно теперь обязательно.
+const TREND_LONG_RSI_MIN = 52.52;
+const TREND_LONG_RSI_MAX = 58.50;
+const TREND_SHORT_RSI_MIN = 35.0;
+const TREND_SHORT_RSI_MAX = 42.43;
 
 export interface Candle {
   time: number;
@@ -87,8 +100,13 @@ function getVolumeSpike(volumes: number[], avgVol20: number) {
 }
 
 // Изменение 4: поиск локального экстремума за lookback свечей
-function findLocalExtremum(candles: Candle[], side: 'long' | 'short', lookback: number) {
+function findLocalExtremum(
+  candles: Candle[],
+  side: 'long' | 'short',
+  lookback: number
+) {
   const slice = candles.slice(-lookback);
+
   if (slice.length === 0) {
     return { extremePrice: 0, distanceAtr: 0 };
   }
@@ -318,12 +336,20 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
   // MACD + RSI фильтр для трендов
   const rsiRising = lastRsi > (rsi[rsi.length - 2] ?? lastRsi);
-  
-  const rsiBull = regime === 'trend_up'
-    ? (lastRsi > 45 && lastRsi < 75)
-    : (lastRsi > 45 && lastRsi < 75);
 
-  const rsiBear = lastRsi < 60 && lastRsi > 35;
+  // ИЗМЕНЕНО 2026-09-10:
+  // Было: lastRsi > 45 && lastRsi < 75.
+  // Теперь: обязательное RSI-окно для long: 52.52 <= RSI <= 58.50.
+  const rsiBull =
+    lastRsi >= TREND_LONG_RSI_MIN &&
+    lastRsi <= TREND_LONG_RSI_MAX;
+
+  // ИЗМЕНЕНО 2026-09-10:
+  // Было: lastRsi < 60 && lastRsi > 35.
+  // Теперь: обязательное RSI-окно для short: 35 < RSI < 42.43.
+  const rsiBear =
+    lastRsi > TREND_SHORT_RSI_MIN &&
+    lastRsi < TREND_SHORT_RSI_MAX;
 
   const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
 
@@ -341,11 +367,14 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
 
-  // <<< ИЗМЕНЕНИЕ: MACD cross up ИЛИ (RSI > 55 и растёт)
+  // ИЗМЕНЕНО 2026-09-10:
+  // RSI-окно rsiBull теперь обязательно даже при macdCrossUp.
+  // MACD-cross НЕ обязателен: вход есть при macdCrossUp ИЛИ rsiRising.
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    (macdCrossUp || (rsiBull && rsiRising && lastRsi > 55)) &&  // <<< ДОБАВИЛ RSI фильтр БЫЛО 55
+    rsiBull &&
+    (macdCrossUp || rsiRising) &&
     price > regimeIndicators.ema200
   ) {
     side = 'long';
@@ -354,10 +383,13 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
     takeProfitPrice = price + lastAtr * 2.8;
   }
 
+  // ИЗМЕНЕНО 2026-09-10:
+  // RSI-окно rsiBear теперь обязательно даже при macdCrossDown.
+  // MACD-cross НЕ обязателен: вход есть при macdCrossDown ИЛИ rsiRising.
   if (
     regime === 'trend_down' &&
-    (macdCrossDown || (rsiBear && rsiRising && lastRsi < 45)) &&  // <<< ДОБАВИЛ RSI фильтр для downtrend БЫЛО 45
     rsiBear &&
+    (macdCrossDown || rsiRising) &&
     price < regimeIndicators.ema200
   ) {
     side = 'short';
@@ -400,15 +432,24 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
     // Изменение 4: проверка расстояния до локального экстремума
     let extremumOk = true;
+
     if (breakoutUp || breakoutDown) {
       const sideForExtremum = breakoutUp ? 'long' : 'short';
-      const { extremePrice } = findLocalExtremum(candles, sideForExtremum, EXTREMUM_LOOKBACK);
+
+      const { extremePrice } = findLocalExtremum(
+        candles,
+        sideForExtremum,
+        EXTREMUM_LOOKBACK
+      );
+
       if (extremePrice !== 0 && lastAtr > 0) {
         const distanceFromExtremum =
           sideForExtremum === 'long'
             ? lastClose - extremePrice
             : extremePrice - lastClose;
+
         const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
+
         if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
           extremumOk = false;
         }
@@ -420,6 +461,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
         side = 'long';
         buy = true;
         sell = false;
+
         // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
         stopLossPrice = price - lastAtr * 1.5;
         takeProfitPrice = price + lastAtr * 2.2;
@@ -427,6 +469,7 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
         side = 'short';
         sell = true;
         buy = false;
+
         // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
         stopLossPrice = price + lastAtr * 1.5;
         takeProfitPrice = price - lastAtr * 2.2;
@@ -479,14 +522,15 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
         ? MAX_ENTRY_EXTENSION_BREAKOUT_ATR
         : MAX_ENTRY_EXTENSION_TREND_ATR;
 
-    entryTooExtended =
-      entryExtensionAtr > maxEntryExtensionAtr;
+    entryTooExtended = entryExtensionAtr > maxEntryExtensionAtr;
 
     if (entryTooExtended) {
       const direction = side === 'long' ? 'above' : 'below';
-      const refLabel = regime === 'breakout_watch'
-        ? (side === 'long' ? 'BB.upper' : 'BB.lower')
-        : 'EMA20';
+
+      const refLabel =
+        regime === 'breakout_watch'
+          ? (side === 'long' ? 'BB.upper' : 'BB.lower')
+          : 'EMA20';
 
       buy = false;
       sell = false;
@@ -497,8 +541,9 @@ export function analyzeMarket(candles: Candle[], signalPrice?: number) {
 
       skipReason =
         `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
-        `${direction} ${refLabel} (max ${maxEntryExtensionAtr.toFixed(2)} ATR, ` +
-        `regime ${regime})`;
+        `${direction} ${refLabel} (max ${maxEntryExtensionAtr.toFixed(
+          2
+        )} ATR, regime ${regime})`;
     }
   }
 
