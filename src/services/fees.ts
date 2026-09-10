@@ -22,8 +22,7 @@ export async function getTradingFees(symbols: string[]): Promise<FeeInfo[]> {
     try {
       const market = exchange.market(symbol);
       
-      const fees = await exchange.fetchTradingFees();
-      const symbolFees = fees[symbol];
+      const symbolFees = await exchange.fetchTradingFee(symbol);
 
       if (!symbolFees) {
         console.warn(`[${new Date().toISOString()}] ⚠️ No fees found for ${symbol}`);
