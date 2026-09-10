@@ -1,8 +1,10 @@
 // src/config/env.ts
-import { config } from '@dotenvx/dotenvx';
+import dotenv from 'dotenv';
 
-// Явно указать путь к .env
-config({ path: '.env' });
+// Загрузить .env (только в development, в production переменные приходят из Docker)
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 export const env = {
   port: Number(process.env.PORT) || 3002,
