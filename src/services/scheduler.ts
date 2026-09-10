@@ -490,7 +490,7 @@ function notifyClosedTradeFromResult(
       totalFee: number;
       reason: string;
       positionAgeSeconds: number;
-    };
+    } | null;
   }
 ): void {
   const trade =
