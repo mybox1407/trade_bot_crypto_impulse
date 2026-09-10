@@ -1,10 +1,7 @@
 // src/services/fees.ts
-import ccxt from 'ccxt';
+import { MexcAuthenticatedClient } from './mexcClient';
 
-const exchange = new ccxt.mexc({
-  apiKey: process.env.MEXC_API_KEY,
-  secret: process.env.MEXC_SECRET_KEY,
-});
+const mexcClient = new MexcAuthenticatedClient();
 
 export type FeeInfo = {
   symbol: string;
@@ -14,23 +11,14 @@ export type FeeInfo = {
 };
 
 export async function getTradingFees(symbols: string[]): Promise<FeeInfo[]> {
-  await exchange.loadMarkets();
-
   const feeResults: FeeInfo[] = [];
 
   for (const symbol of symbols) {
     try {
-      const market = exchange.market(symbol);
+      const tradeFee = await mexcClient.getTradeFee(symbol);
       
-      const symbolFees = await exchange.fetchTradingFee(symbol);
-
-      if (!symbolFees) {
-        console.warn(`[${new Date().toISOString()}] ⚠️ No fees found for ${symbol}`);
-        continue;
-      }
-
-      const maker = symbolFees.maker ?? 0;
-      const taker = symbolFees.taker ?? 0;
+      const maker = tradeFee.makerFeeRate;
+      const taker = tradeFee.takerFeeRate;
       const isZeroFee = taker === 0;
 
       feeResults.push({
@@ -44,9 +32,17 @@ export async function getTradingFees(symbols: string[]): Promise<FeeInfo[]> {
         `[${new Date().toISOString()}] 💰 ${symbol}: maker=${(maker * 100).toFixed(3)}%, taker=${(taker * 100).toFixed(3)}% ${isZeroFee ? '✅' : '❌'}`
       );
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown';
       console.error(
-        `[${new Date().toISOString()}] 💥 Failed to fetch fees for ${symbol}: ${error instanceof Error ? error.message : 'Unknown'}`
+        `[${new Date().toISOString()}] 💥 Failed to fetch fees for ${symbol}: ${errorMsg}`
       );
+      
+      feeResults.push({
+        symbol,
+        maker: 0,
+        taker: 0,
+        isZeroFee: false,
+      });
     }
   }
 
