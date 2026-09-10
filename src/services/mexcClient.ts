@@ -1196,45 +1196,64 @@ export class MexcAuthenticatedClient {
       );
 
     const rows =
-      Array.isArray(response.data)
+      Array.isArray(response?.data)
         ? response.data
         : [];
+
+    console.log(
+      `[${new Date().toISOString()}] ` +
+      `MEXC Futures account assets: ` +
+      `${JSON.stringify(rows)}`
+    );
 
     const usdt =
       rows.find(
         (row: any) =>
           String(
-            row.currency ?? row.asset
+            row.currency ?? ''
           ).toUpperCase() === 'USDT'
       );
 
     if (!usdt) {
       throw new Error(
-        'USDT Futures account asset was not returned'
+        `USDT Futures account asset was not returned. ` +
+        `Assets: ${JSON.stringify(rows)}`
       );
     }
 
-    return {
-      available: this.toFiniteNumber(
+    const available =
+      this.toFiniteNumber(
         usdt.availableBalance ??
         usdt.availableCash ??
-        usdt.availableOpen ??
-        usdt.available
-      ),
-      total: this.toFiniteNumber(
+        usdt.availableOpen
+      );
+
+    const total =
+      this.toFiniteNumber(
         usdt.equity ??
-        usdt.cashBalance ??
-        usdt.totalBalance ??
-        usdt.balance
-      ),
-      unrealizedPnl: this.toFiniteNumber(
-        usdt.unrealized ??
-        usdt.unrealisedPnl ??
-        usdt.unrealizedPnl
-      )
+        usdt.cashBalance
+      );
+
+    const unrealizedPnl =
+      this.toFiniteNumber(
+        usdt.unrealized
+      );
+
+    console.log(
+      `[${new Date().toISOString()}] 💼 ` +
+      `MEXC Futures Balance: ` +
+      `Total $${total.toFixed(2)}, ` +
+      `Available $${available.toFixed(2)}, ` +
+      `Unrealized PnL $${unrealizedPnl.toFixed(2)}`
+    );
+
+    return {
+      available,
+      total,
+      unrealizedPnl
     };
   }
-
+  
   async getFuturesMarkPrice(
     symbol: string
   ): Promise<{
