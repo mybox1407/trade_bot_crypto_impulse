@@ -105,10 +105,10 @@ export interface FuturesDeal {
 export interface FuturesSymbolInfo {
   symbol: string;
   contractSize: number;
-  priceTickSize: number;
   priceScale: number;
-  volTickSize: number;
   volScale: number;
+  priceUnit: number;
+  volUnit: number;
   minVol: number;
   maxVol?: number;
   quoteCurrency: string;
@@ -157,10 +157,10 @@ function roundToTick(value: number, tickSize: number): number {
 
 export function roundVolToExchangePrecision(
   rawVol: number,
-  volTickSize: number,
+  volUnit: number,
   minVol: number
 ): number {
-  let vol = roundToTick(rawVol, volTickSize);
+  let vol = roundToTick(rawVol, volUnit);
   if (vol < minVol) {
     vol = minVol;
   }
@@ -169,9 +169,9 @@ export function roundVolToExchangePrecision(
 
 export function roundPriceToExchangePrecision(
   rawPrice: number,
-  priceTickSize: number
+  priceUnit: number
 ): number {
-  return roundToTick(rawPrice, priceTickSize);
+  return roundToTick(rawPrice, priceUnit);
 }
 
 export class MexcAuthenticatedClient {
@@ -887,24 +887,31 @@ export class MexcAuthenticatedClient {
     }
 
     const url =
-      `${this.futuresUrl}` +
-      `/api/v1/contract/symbols`;
+      'https://api.mexc.com' +
+      `/api/v1/contract/detail`;
 
-    const response = await fetch(url);
-    const data = await this.readResponse(response);
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0'
+      }
+    });
 
-    if (data.success === false) {
+    if (!response.ok) {
       throw new Error(
-        `MEXC symbols error ` +
-        `${data.code ?? 'unknown'}: ` +
-        `${data.msg ?? data.message ?? 'Unknown error'}`
+        `MEXC contract/detail HTTP ${response.status}`
       );
     }
 
-    const rows =
-      Array.isArray(data.data) ? data.data : [];
+    const data = await response.json();
 
-    const row = rows.find(
+    if (!data.success || !Array.isArray(data.data)) {
+      throw new Error(
+        `MEXC contract/detail returned invalid response: ${JSON.stringify(data)}`
+      );
+    }
+
+    const row = data.data.find(
       (r: any) =>
         String(r.symbol ?? '').toUpperCase() ===
         futuresSymbol
@@ -912,33 +919,27 @@ export class MexcAuthenticatedClient {
 
     if (!row) {
       throw new Error(
-        `Symbol ${futuresSymbol} not found in MEXC Futures symbols`
+        `Symbol ${futuresSymbol} not found in MEXC Futures contracts`
       );
     }
 
     const contractSize =
-      this.toFiniteNumber(row.contractSize ?? row.size ?? 1, 1);
-
-    const priceTickSize =
-      this.toFiniteNumber(
-        row.priceTickSize ?? row.priceUnit ?? 0.01,
-        0.01
-      );
+      this.toFiniteNumber(row.contractSize ?? 1, 1);
 
     const priceScale =
-      this.toFiniteNumber(row.priceScale ?? 2, 2);
-
-    const volTickSize =
-      this.toFiniteNumber(
-        row.volTickSize ?? row.volUnit ?? 1,
-        1
-      );
+      this.toFiniteNumber(row.priceScale ?? 1, 1);
 
     const volScale =
       this.toFiniteNumber(row.volScale ?? 0, 0);
 
+    const priceUnit =
+      this.toFiniteNumber(row.priceUnit ?? 0.1, 0.1);
+
+    const volUnit =
+      this.toFiniteNumber(row.volUnit ?? 1, 1);
+
     const minVol =
-      this.toFiniteNumber(row.minVol ?? row.minQty ?? 1, 1);
+      this.toFiniteNumber(row.minVol ?? 1, 1);
 
     const maxVol =
       row.maxVol != null
@@ -946,18 +947,18 @@ export class MexcAuthenticatedClient {
         : undefined;
 
     const quoteCurrency =
-      String(row.quoteCurrency ?? row.settleCurrency ?? 'USDT');
+      String(row.quoteCoin ?? row.settleCoin ?? 'USDT');
 
     const baseCurrency =
-      String(row.baseCurrency ?? row.coin ?? '');
+      String(row.baseCoin ?? '');
 
     const info: FuturesSymbolInfo = {
       symbol: futuresSymbol,
       contractSize,
-      priceTickSize,
       priceScale,
-      volTickSize,
       volScale,
+      priceUnit,
+      volUnit,
       minVol,
       maxVol,
       quoteCurrency,
@@ -977,6 +978,7 @@ export class MexcAuthenticatedClient {
     vol: number;
     price: number;
     symbolInfo: FuturesSymbolInfo;
+    quantityInBase: number;
   }> {
     const symbolInfo =
       await this.getFuturesSymbolInfo(symbol);
@@ -988,7 +990,7 @@ export class MexcAuthenticatedClient {
       price = mark.markPrice;
     } else {
       throw new Error(
-        'useMarkPrice=false требует отдельного параметра price'
+        'useMarkPrice=false requires separate price parameter'
       );
     }
 
@@ -998,18 +1000,21 @@ export class MexcAuthenticatedClient {
       );
     }
 
-    const rawVol = desiredUsdt / price;
+    const quantityInBase = desiredUsdt / price;
+
+    const rawContracts = quantityInBase / symbolInfo.contractSize;
 
     const vol = roundVolToExchangePrecision(
-      rawVol,
-      symbolInfo.volTickSize,
+      rawContracts,
+      symbolInfo.volUnit,
       symbolInfo.minVol
     );
 
     return {
       vol,
       price,
-      symbolInfo
+      symbolInfo,
+      quantityInBase
     };
   }
 
@@ -1048,26 +1053,46 @@ export class MexcAuthenticatedClient {
     if (quantityInUsdt) {
       const {
         vol: calculatedVol,
-        price
+        price,
+        quantityInBase
       } = await this.calculateVolFromUsdt(
         symbol,
         quantity,
         true
       );
 
+      const symbolInfo =
+        await this.getFuturesSymbolInfo(symbol);
+
       console.log(
         `[${new Date().toISOString()}] 🧮 ` +
         `${futuresSymbol}: ` +
         `desiredUsdt=${quantity}, ` +
         `price=${price}, ` +
-        `vol=${calculatedVol}`
+        `quantityInBase=${quantityInBase}, ` +
+        `contractSize=${symbolInfo.contractSize}, ` +
+        `vol=${calculatedVol} contracts`
       );
 
       vol = calculatedVol;
     } else {
-      vol = this.requirePositiveNumber(
-        quantity,
-        'quantity'
+      const symbolInfo =
+        await this.getFuturesSymbolInfo(symbol);
+
+      const contracts = quantity / symbolInfo.contractSize;
+
+      vol = roundVolToExchangePrecision(
+        contracts,
+        symbolInfo.volUnit,
+        symbolInfo.minVol
+      );
+
+      console.log(
+        `[${new Date().toISOString()}] 🧮 ` +
+        `${futuresSymbol}: ` +
+        `quantityInBase=${quantity}, ` +
+        `contractSize=${symbolInfo.contractSize}, ` +
+        `vol=${vol} contracts`
       );
     }
 
@@ -1155,7 +1180,8 @@ export class MexcAuthenticatedClient {
     if (quantityInUsdt) {
       const {
         vol: calculatedVol,
-        price
+        price,
+        quantityInBase
       } = await this.calculateVolFromUsdt(
         symbol,
         quantity,
@@ -1167,14 +1193,29 @@ export class MexcAuthenticatedClient {
         `${futuresSymbol} (close): ` +
         `desiredUsdt=${quantity}, ` +
         `price=${price}, ` +
-        `vol=${calculatedVol}`
+        `quantityInBase=${quantityInBase}, ` +
+        `vol=${calculatedVol} contracts`
       );
 
       vol = calculatedVol;
     } else {
-      vol = this.requirePositiveNumber(
-        quantity,
-        'close quantity'
+      const symbolInfo =
+        await this.getFuturesSymbolInfo(symbol);
+
+      const contracts = quantity / symbolInfo.contractSize;
+
+      vol = roundVolToExchangePrecision(
+        contracts,
+        symbolInfo.volUnit,
+        symbolInfo.minVol
+      );
+
+      console.log(
+        `[${new Date().toISOString()}] 🧮 ` +
+        `${futuresSymbol} (close): ` +
+        `quantityInBase=${quantity}, ` +
+        `contractSize=${symbolInfo.contractSize}, ` +
+        `vol=${vol} contracts`
       );
     }
 
