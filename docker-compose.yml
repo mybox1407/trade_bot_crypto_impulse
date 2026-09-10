@@ -10,6 +10,8 @@ services:
       - NODE_ENV=production
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - MEXC_API_KEY=${MEXC_API_KEY:-}
+      - MEXC_SECRET_KEY=${MEXC_SECRET_KEY:-}
     volumes:
       - ./logs:/app/logs
     healthcheck:
