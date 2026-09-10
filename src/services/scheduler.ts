@@ -43,7 +43,6 @@ async function fetchMexcBalance(): Promise<{ total: number; available: number }>
   await mexcExchange.loadMarkets();
   const balance = await mexcExchange.fetchBalance();
 
-  // ← ИСПРАВЛЕНИЕ: двойное приведение через unknown
   const totalBalance = balance.total as unknown as Record<string, number>;
   const freeBalance = balance.free as unknown as Record<string, number>;
 
@@ -229,6 +228,89 @@ ${new Date().toISOString()}`;
   } catch (error) {
     console.error(
       `[${new Date().toISOString()}] Failed to send summary: ${
+        error instanceof Error ? error.message : 'Unknown'
+      }`
+    );
+  }
+}
+
+// ========== TRADE CLOSE NOTIFICATION ==========
+async function notifyTradeClosed(trade: {
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  notional: number;
+  realizedPnL: number;
+  netPnL: number;
+  netPnLPercent: number;
+  entryFee: number;
+  exitFee: number;
+  totalFee: number;
+  reason: string;
+  positionAgeSeconds: number;
+  positionId: string;
+}) {
+  const emoji = trade.netPnL >= 0 ? '✅' : '❌';
+  const pnlEmoji = trade.netPnL >= 0 ? '📈' : '📉';
+  const sideEmoji = trade.side === 'long' ? '🟢' : '🔴';
+  const reasonEmoji = 
+    trade.reason === 'take_profit' ? '🎯' : 
+    trade.reason === 'stop_loss' ? '🛑' : 
+    trade.reason === 'time_stop' ? '⏱️' : 
+    trade.reason === 'breakeven_stop' ? '🛡️' : 
+    trade.reason === 'dead_trade_mfe' ? '✂️' : '✋';
+
+  const pnlSign = trade.netPnL >= 0 ? '+' : '';
+  
+  const hours = Math.floor(trade.positionAgeSeconds / 3600);
+  const minutes = Math.floor((trade.positionAgeSeconds % 3600) / 60);
+  const seconds = trade.positionAgeSeconds % 60;
+  const duration = `${hours}h ${minutes}m ${seconds}s`;
+
+  const text = `${emoji} TRADE CLOSED ${emoji}
+
+${sideEmoji} ${trade.symbol} ${trade.side.toUpperCase()}
+
+💰 Entry: $${trade.entryPrice.toFixed(4)}
+💸 Exit: $${trade.exitPrice.toFixed(4)}
+📊 Quantity: ${trade.quantity.toFixed(8)}
+💵 Notional: $${trade.notional.toFixed(2)}
+
+${pnlEmoji} PnL: ${pnlSign}$${trade.netPnL.toFixed(2)} (${pnlSign}${trade.netPnLPercent.toFixed(2)}%)
+📈 Realized: ${pnlSign}$${trade.realizedPnL.toFixed(2)}
+
+💰 Fees:
+├ Entry: $${trade.entryFee.toFixed(4)}
+├ Exit: $${trade.exitFee.toFixed(4)}
+└ Total: $${trade.totalFee.toFixed(4)}
+
+${reasonEmoji} Reason: ${trade.reason.replace('_', ' ').toUpperCase()}
+⏱ Duration: ${duration}
+🆔 ID: ${trade.positionId}
+
+${new Date().toISOString()}`;
+
+  try {
+    const telegramToken = process.env.TELEGRAM_BOT_TOKEN || '';
+    const telegramChatId = process.env.TELEGRAM_CHAT_ID || '';
+
+    if (!telegramToken || !telegramChatId) {
+      return;
+    }
+
+    const url = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+
+    await axios.post(url, {
+      chat_id: telegramChatId,
+      text
+    });
+
+    console.log(`[${new Date().toISOString()}] 📱 Trade close notification sent`);
+  } catch (error) {
+    console.error(
+      `[${new Date().toISOString()}] Failed to send trade close notification: ${
         error instanceof Error ? error.message : 'Unknown'
       }`
     );
@@ -567,7 +649,7 @@ async function checkSignals() {
           const totalRiskPerUnit = stopDistance + worstCaseFeePerUnit;
           const calculatedQuantity = riskCapital / totalRiskPerUnit;
 
-          const openResult = openPosition({
+          const openResult = await openPosition({
             symbol,
             side,
             entryPrice: price,
@@ -582,16 +664,12 @@ async function checkSignals() {
               adx: indicators?.regimeIndicators?.adx ?? 0,
               bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
               atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
-
               ema20: indicators?.regimeIndicators?.ema20 ?? 0,
               ema50: indicators?.regimeIndicators?.ema50 ?? 0,
               ema200: indicators?.regimeIndicators?.ema200 ?? 0,
-
               entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
-              maxEntryExtensionAtr:
-                indicators?.maxEntryExtensionAtr ?? 0,
-              entryTooExtended:
-                indicators?.entryTooExtended ?? false
+              maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
+              entryTooExtended: indicators?.entryTooExtended ?? false
             } as any,
             riskCapital,
             maxNotionalByPercent,
@@ -1003,7 +1081,7 @@ async function checkPositions() {
             : 0;
         
           if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
-            const result = closePosition(
+            const result = await closePosition(
               position.id,
               currentPrice,
               'dead_trade_mfe'
@@ -1020,6 +1098,26 @@ async function checkPositions() {
                 `MFE ${mfeAtr.toFixed(2)} ATR after ${positionAgeSeconds}s | ` +
                 `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
             );
+
+            if (result.lastClosedTrade) {
+              void notifyTradeClosed({
+                symbol: result.lastClosedTrade.symbol,
+                side: result.lastClosedTrade.side,
+                entryPrice: result.lastClosedTrade.entryPrice,
+                exitPrice: result.lastClosedTrade.exitPrice,
+                quantity: result.lastClosedTrade.quantity,
+                notional: result.lastClosedTrade.notional,
+                realizedPnL: result.lastClosedTrade.realizedPnL,
+                netPnL: result.lastClosedTrade.netPnL,
+                netPnLPercent: result.lastClosedTrade.netPnLPercent,
+                entryFee: result.lastClosedTrade.entryFee,
+                exitFee: result.lastClosedTrade.exitFee,
+                totalFee: result.lastClosedTrade.totalFee,
+                reason: result.lastClosedTrade.reason,
+                positionAgeSeconds: result.lastClosedTrade.positionAgeSeconds,
+                positionId: result.lastClosedTrade.id
+              });
+            }
         
             continue;
           }
@@ -1034,7 +1132,7 @@ async function checkPositions() {
           maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT &&
           unrealizedPnLPercent > TIME_STOP_MAX_LOSS_PERCENT
         ) {
-          const result = closePosition(
+          const result = await closePosition(
             position.id,
             currentPrice,
             'time_stop'
@@ -1051,6 +1149,26 @@ async function checkPositions() {
               `MFE ${maxUnrealizedPnLPercent.toFixed(2)}% after ${positionAgeSeconds}s | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
+
+          if (result.lastClosedTrade) {
+            void notifyTradeClosed({
+              symbol: result.lastClosedTrade.symbol,
+              side: result.lastClosedTrade.side,
+              entryPrice: result.lastClosedTrade.entryPrice,
+              exitPrice: result.lastClosedTrade.exitPrice,
+              quantity: result.lastClosedTrade.quantity,
+              notional: result.lastClosedTrade.notional,
+              realizedPnL: result.lastClosedTrade.realizedPnL,
+              netPnL: result.lastClosedTrade.netPnL,
+              netPnLPercent: result.lastClosedTrade.netPnLPercent,
+              entryFee: result.lastClosedTrade.entryFee,
+              exitFee: result.lastClosedTrade.exitFee,
+              totalFee: result.lastClosedTrade.totalFee,
+              reason: result.lastClosedTrade.reason,
+              positionAgeSeconds: result.lastClosedTrade.positionAgeSeconds,
+              positionId: result.lastClosedTrade.id
+            });
+          }
 
           continue;
         }
@@ -1172,7 +1290,7 @@ async function checkPositions() {
         );
 
         if (hitTakeProfit) {
-          const result = closePosition(
+          const result = await closePosition(
             position.id,
             currentPrice,
             'take_profit'
@@ -1188,8 +1306,28 @@ async function checkPositions() {
             `[${new Date().toISOString()}] 🎯 ${position.symbol}: CLOSED AT TP | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
+
+          if (result.lastClosedTrade) {
+            void notifyTradeClosed({
+              symbol: result.lastClosedTrade.symbol,
+              side: result.lastClosedTrade.side,
+              entryPrice: result.lastClosedTrade.entryPrice,
+              exitPrice: result.lastClosedTrade.exitPrice,
+              quantity: result.lastClosedTrade.quantity,
+              notional: result.lastClosedTrade.notional,
+              realizedPnL: result.lastClosedTrade.realizedPnL,
+              netPnL: result.lastClosedTrade.netPnL,
+              netPnLPercent: result.lastClosedTrade.netPnLPercent,
+              entryFee: result.lastClosedTrade.entryFee,
+              exitFee: result.lastClosedTrade.exitFee,
+              totalFee: result.lastClosedTrade.totalFee,
+              reason: result.lastClosedTrade.reason,
+              positionAgeSeconds: result.lastClosedTrade.positionAgeSeconds,
+              positionId: result.lastClosedTrade.id
+            });
+          }
         } else if (hitStopLoss) {
-          const result = closePosition(
+          const result = await closePosition(
             position.id,
             currentPrice,
             beTriggered ? 'breakeven_stop' : 'stop_loss'
@@ -1205,6 +1343,26 @@ async function checkPositions() {
             `[${new Date().toISOString()}] 🛑 ${position.symbol}: CLOSED AT ${beTriggered ? 'BE' : 'STOP'} | ` +
               `Net $${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
+
+          if (result.lastClosedTrade) {
+            void notifyTradeClosed({
+              symbol: result.lastClosedTrade.symbol,
+              side: result.lastClosedTrade.side,
+              entryPrice: result.lastClosedTrade.entryPrice,
+              exitPrice: result.lastClosedTrade.exitPrice,
+              quantity: result.lastClosedTrade.quantity,
+              notional: result.lastClosedTrade.notional,
+              realizedPnL: result.lastClosedTrade.realizedPnL,
+              netPnL: result.lastClosedTrade.netPnL,
+              netPnLPercent: result.lastClosedTrade.netPnLPercent,
+              entryFee: result.lastClosedTrade.entryFee,
+              exitFee: result.lastClosedTrade.exitFee,
+              totalFee: result.lastClosedTrade.totalFee,
+              reason: result.lastClosedTrade.reason,
+              positionAgeSeconds: result.lastClosedTrade.positionAgeSeconds,
+              positionId: result.lastClosedTrade.id
+            });
+          }
         } else {
           console.log(
             `[${new Date().toISOString()}] ⏳ ${position.symbol}: HOLDING`
@@ -1272,7 +1430,6 @@ async function checkPositions() {
 export async function startScheduler() {
   console.log(`\n[${new Date().toISOString()}] 🚀 TRADING BOT STARTING...`);
 
-  // 1. Инициализация пар
   const initialized = await initializeTradingPairs();
   if (!initialized) {
     console.error(
@@ -1281,7 +1438,6 @@ export async function startScheduler() {
     return;
   }
 
-  // 2. Получение баланса
   let mexcBalance: { total: number; available: number } | undefined;
   try {
     mexcBalance = await fetchMexcBalance();
@@ -1338,7 +1494,6 @@ export async function startScheduler() {
     );
   }
 
-  // 3. Уведомление о запуске
   await notifyStartup({
     port: Number(process.env.PORT) || 3002,
     tradingPairs: [...TRADING_PAIRS],
@@ -1347,7 +1502,6 @@ export async function startScheduler() {
     balance: mexcBalance
   });
 
-  // 4. Запуск циклов
   void checkSignals();
   signalCheckInterval = setInterval(() => {
     void checkSignals();
@@ -1358,7 +1512,6 @@ export async function startScheduler() {
     void checkPositions();
   }, POSITION_CHECK_INTERVAL_MS);
 
-  // 5. Обновление комиссий раз в 24 часа
   feeRefreshInterval = setInterval(() => {
     void refreshTradingPairs();
   }, 24 * 60 * 60 * 1000);
