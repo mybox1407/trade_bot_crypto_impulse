@@ -11,10 +11,24 @@ import { MexcAuthenticatedClient } from './mexcClient';
 export const POSITION_PERCENT = 0.30;
 export const MAX_PARALLEL_POSITIONS = 3;
 
+const FUTURES_LEVERAGE = Number(
+  process.env.MEXC_FUTURES_LEVERAGE ?? 1
+);
+
+type PositionSide = 'long' | 'short';
+
+type CloseReason =
+  | 'take_profit'
+  | 'stop_loss'
+  | 'manual'
+  | 'time_stop'
+  | 'breakeven_stop'
+  | 'dead_trade_mfe';
+
 export interface VirtualPosition {
   id: string;
   symbol: string;
-  side: 'long' | 'short';
+  side: PositionSide;
   entryPrice: number;
   quantity: number;
   notional: number;
@@ -52,153 +66,27 @@ export interface VirtualPosition {
 export interface ClosedTrade {
   id: string;
   symbol: string;
-  side: 'long' | 'short';
+  side: PositionSide;
   entryPrice: number;
   exitPrice: number;
   quantity: number;
   notional: number;
   realizedPnL: number;
+  realizedPnLPercent: number;
   entryFee: number;
   exitFee: number;
   totalFee: number;
   netPnL: number;
+  netPnLPercent: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe';
+  positionAgeSeconds: number;
+  reason: CloseReason;
 }
 
-let balance = STARTING_BALANCE;
-let reservedCapital = 0;
-let currentPositions: VirtualPosition[] = [];
-let lastClosedTrade: ClosedTrade | null = null;
-
-// MEXC клиент для реальной торговли
-const mexcClient = new MexcAuthenticatedClient();
-
-function isFinitePositive(value: number) {
-  return Number.isFinite(value) && value > 0;
-}
-
-function createPositionId() {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function isValidLevels(params: {
-  side: 'long' | 'short';
-  entryPrice: number;
-  takeProfitPrice: number;
-  stopLossPrice: number;
-}) {
-  const { side, entryPrice, takeProfitPrice, stopLossPrice } = params;
-
-  if (
-    !isFinitePositive(entryPrice) ||
-    !Number.isFinite(takeProfitPrice) ||
-    !Number.isFinite(stopLossPrice)
-  ) {
-    return false;
-  }
-
-  if (side === 'long') {
-    return stopLossPrice < entryPrice && takeProfitPrice > entryPrice;
-  }
-
-  return stopLossPrice > entryPrice && takeProfitPrice < entryPrice;
-}
-
-function calculateReservedCapital() {
-  return currentPositions.reduce(
-    (total, position) => total + position.reservedCapital,
-    0
-  );
-}
-
-export function setBalance(newBalance: number): void {
-  if (!Number.isFinite(newBalance) || newBalance <= 0) {
-    console.warn(
-      `[${new Date().toISOString()}] ⚠️ Attempted to set invalid balance: ${newBalance}`
-    );
-    return;
-  }
-
-  const oldBalance = balance;
-  balance = newBalance;
-
-  console.log(
-    `[${new Date().toISOString()}] 💰 Balance updated: $${oldBalance.toFixed(2)} → $${newBalance.toFixed(2)}`
-  );
-}
-
-export function getBalance() {
-  return balance;
-}
-
-export function getReservedCapital() {
-  return reservedCapital;
-}
-
-export function getAvailableBalance() {
-  return Math.max(0, balance - reservedCapital);
-}
-
-export function getTotalOpenNotional() {
-  return currentPositions.reduce(
-    (total, position) => total + position.notional,
-    0
-  );
-}
-
-export function getPositions() {
-  return [...currentPositions];
-}
-
-export function getPosition(symbol?: string) {
-  if (symbol) {
-    return (
-      currentPositions.find(position => position.symbol === symbol) ?? null
-    );
-  }
-
-  return currentPositions[0] ?? null;
-}
-
-export function getPositionById(positionId: string) {
-  return (
-    currentPositions.find(position => position.id === positionId) ?? null
-  );
-}
-
-export function hasOpenPosition(symbol?: string) {
-  if (!symbol) {
-    return currentPositions.length > 0;
-  }
-
-  return currentPositions.some(
-    position => position.symbol === symbol
-  );
-}
-
-export function getLastClosedTrade() {
-  return lastClosedTrade;
-}
-
-export function getPositionNotional() {
-  return balance * POSITION_PERCENT;
-}
-
-export function getRiskCapital() {
-  return balance * MAX_RISK_PER_TRADE;
-}
-
-export function getOpenPositionsCount() {
-  return currentPositions.length;
-}
-
-export async function openPosition(data: {
+type OpenPositionInput = {
   symbol: string;
-  side: 'long' | 'short';
+  side: PositionSide;
   entryPrice: number;
   takeProfitPrice: number;
   stopLossPrice: number;
@@ -208,11 +96,14 @@ export async function openPosition(data: {
   stopDistance?: number;
   totalRiskPerUnit?: number;
   calculatedQuantity?: number;
-}): Promise<{
+};
+
+type PositionStateResult = {
   ok: boolean;
   message?: string;
   balance?: number;
   position?: VirtualPosition;
+  lastClosedTrade?: ClosedTrade;
   positions: VirtualPosition[];
   balanceBefore: number;
   balanceAfter: number;
@@ -220,50 +111,267 @@ export async function openPosition(data: {
   reservedCapitalAfter: number;
   availableBalanceBefore: number;
   availableBalanceAfter: number;
-}> {
+};
+
+let balance = STARTING_BALANCE;
+let reservedCapital = 0;
+let currentPositions: VirtualPosition[] = [];
+let lastClosedTrade: ClosedTrade | null = null;
+
+const mexcClient = new MexcAuthenticatedClient();
+
+function isFinitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function normalizeSymbol(symbol: string): string {
+  return symbol.toUpperCase().replace('/', '');
+}
+
+function isValidLeverage(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 200;
+}
+
+function isValidFuturesQuantity(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function createPositionId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isValidLevels(params: {
+  side: PositionSide;
+  entryPrice: number;
+  takeProfitPrice: number;
+  stopLossPrice: number;
+}): boolean {
+  const {
+    side,
+    entryPrice,
+    takeProfitPrice,
+    stopLossPrice
+  } = params;
+
+  if (
+    !isFinitePositive(entryPrice) ||
+    !isFinitePositive(takeProfitPrice) ||
+    !isFinitePositive(stopLossPrice)
+  ) {
+    return false;
+  }
+
+  if (side === 'long') {
+    return (
+      stopLossPrice < entryPrice &&
+      takeProfitPrice > entryPrice
+    );
+  }
+
+  return (
+    stopLossPrice > entryPrice &&
+    takeProfitPrice < entryPrice
+  );
+}
+
+function calculateReservedCapital(): number {
+  return currentPositions.reduce(
+    (total, position) => total + position.reservedCapital,
+    0
+  );
+}
+
+function getAvailableBalanceForMargin(): number {
+  return Math.max(0, balance - reservedCapital);
+}
+
+function createRejectedResult(
+  message: string,
+  balanceBefore: number = balance,
+  reservedCapitalBefore: number = reservedCapital,
+  availableBalanceBefore: number = getAvailableBalance()
+): PositionStateResult {
+  return {
+    ok: false,
+    message,
+    positions: getPositions(),
+    balanceBefore,
+    balanceAfter: balance,
+    reservedCapitalBefore,
+    reservedCapitalAfter: reservedCapital,
+    availableBalanceBefore,
+    availableBalanceAfter: getAvailableBalance()
+  };
+}
+
+function getExecutedQuantity(
+  requestedQuantity: number,
+  executedQuantity: number
+): number {
+  return isFiniteFuturesQuantity(executedQuantity)
+    ? executedQuantity
+    : requestedQuantity;
+}
+
+function getExecutedPrice(
+  fallbackPrice: number,
+  orderPrice: number,
+  executedQuoteQty: number,
+  executedQty: number
+): number {
+  if (
+    isFinitePositive(executedQuoteQty) &&
+    isFinitePositive(executedQty)
+  ) {
+    return executedQuoteQty / executedQty;
+  }
+
+  if (isFinitePositive(orderPrice)) {
+    return orderPrice;
+  }
+
+  return fallbackPrice;
+}
+
+function isFiniteFuturesQuantity(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+export function setBalance(newBalance: number): void {
+  if (!Number.isFinite(newBalance) || newBalance <= 0) {
+    console.warn(
+      `[${new Date().toISOString()}] ⚠️ Invalid balance: ${newBalance}`
+    );
+    return;
+  }
+
+  const oldBalance = balance;
+  balance = newBalance;
+
+  console.log(
+    `[${new Date().toISOString()}] 💰 Futures balance updated: ` +
+      `$${oldBalance.toFixed(2)} → $${balance.toFixed(2)}`
+  );
+}
+
+export function getBalance(): number {
+  return balance;
+}
+
+export function getReservedCapital(): number {
+  return reservedCapital;
+}
+
+export function getAvailableBalance(): number {
+  return Math.max(0, balance - reservedCapital);
+}
+
+export function getTotalOpenNotional(): number {
+  return currentPositions.reduce(
+    (total, position) => total + position.notional,
+    0
+  );
+}
+
+export function getPositions(): VirtualPosition[] {
+  return [...currentPositions];
+}
+
+export function getPosition(
+  symbol?: string
+): VirtualPosition | null {
+  if (symbol) {
+    return (
+      currentPositions.find(
+        position => position.symbol === symbol
+      ) ?? null
+    );
+  }
+
+  return currentPositions[0] ?? null;
+}
+
+export function getPositionById(
+  positionId: string
+): VirtualPosition | null {
+  return (
+    currentPositions.find(
+      position => position.id === positionId
+    ) ?? null
+  );
+}
+
+export function hasOpenPosition(symbol?: string): boolean {
+  if (!symbol) {
+    return currentPositions.length > 0;
+  }
+
+  return currentPositions.some(
+    position => position.symbol === symbol
+  );
+}
+
+export function getLastClosedTrade(): ClosedTrade | null {
+  return lastClosedTrade;
+}
+
+export function getPositionNotional(): number {
+  return balance * POSITION_PERCENT;
+}
+
+export function getRiskCapital(): number {
+  return balance * MAX_RISK_PER_TRADE;
+}
+
+export function getOpenPositionsCount(): number {
+  return currentPositions.length;
+}
+
+export async function openPosition(
+  data: OpenPositionInput
+): Promise<PositionStateResult> {
   const balanceBefore = balance;
   const reservedCapitalBefore = reservedCapital;
   const availableBalanceBefore = getAvailableBalance();
 
-  if (currentPositions.length >= MAX_PARALLEL_POSITIONS) {
-    return {
-      ok: false,
-      message: `Max ${MAX_PARALLEL_POSITIONS} open positions reached`,
-      positions: getPositions(),
+  if (
+    !isValidLeverage(FUTURES_LEVERAGE)
+  ) {
+    return createRejectedResult(
+      `Invalid MEXC_FUTURES_LEVERAGE: ${FUTURES_LEVERAGE}`,
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
+  }
+
+  if (currentPositions.length >= MAX_PARALLEL_POSITIONS) {
+    return createRejectedResult(
+      `Max ${MAX_PARALLEL_POSITIONS} open positions reached`,
+      balanceBefore,
+      reservedCapitalBefore,
+      availableBalanceBefore
+    );
   }
 
   if (hasOpenPosition(data.symbol)) {
-    return {
-      ok: false,
-      message: `Position for ${data.symbol} is already open`,
-      positions: getPositions(),
+    return createRejectedResult(
+      `Position for ${data.symbol} is already open`,
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
   if (!isValidLevels(data)) {
-    return {
-      ok: false,
-      message: 'Invalid entry / stop / take-profit levels',
+    return createRejectedResult(
+      'Invalid entry / stop / take-profit levels',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
   const stopDistance =
@@ -271,59 +379,50 @@ export async function openPosition(data: {
     Math.abs(data.entryPrice - data.stopLossPrice);
 
   if (!isFinitePositive(stopDistance)) {
-    return {
-      ok: false,
-      message: 'Invalid stop distance',
+    return createRejectedResult(
+      'Invalid stop distance',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
   if (!isFinitePositive(availableBalanceBefore)) {
-    return {
-      ok: false,
-      message: 'Insufficient available balance for a new position',
+    return createRejectedResult(
+      'Insufficient available margin',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
   const requestedNotionalByPercent =
-    data.maxNotionalByPercent ?? getPositionNotional();
+    data.maxNotionalByPercent ??
+    getPositionNotional();
 
   const maxNotionalByAvailableBalance = Math.min(
     requestedNotionalByPercent,
-    availableBalanceBefore
+    availableBalanceBefore * FUTURES_LEVERAGE
   );
 
   if (!isFinitePositive(maxNotionalByAvailableBalance)) {
-    return {
-      ok: false,
-      message: 'Calculated available notional is invalid',
+    return createRejectedResult(
+      'Calculated futures notional is invalid',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
-  const maxQuantityByPercent =
+  const maxQuantityByNotional =
     maxNotionalByAvailableBalance / data.entryPrice;
 
-  const riskCapital = data.riskCapital ?? getRiskCapital();
+  const riskCapital =
+    data.riskCapital ?? getRiskCapital();
 
   const worstCaseFeePerUnit =
-    (data.entryPrice + data.stopLossPrice) * TRADE_FEE_RATE;
+    (data.entryPrice + data.stopLossPrice) *
+    TRADE_FEE_RATE;
 
   const totalRiskPerUnit =
     data.totalRiskPerUnit ??
@@ -333,87 +432,108 @@ export async function openPosition(data: {
     data.calculatedQuantity ??
     riskCapital / totalRiskPerUnit;
 
-  const quantity = Math.min(riskQuantity, maxQuantityByPercent);
+  const quantity = Math.min(
+    riskQuantity,
+    maxQuantityByNotional
+  );
+
   const notional = quantity * data.entryPrice;
+  const initialMargin = notional / FUTURES_LEVERAGE;
   const entryFee = notional * TRADE_FEE_RATE;
 
   if (
-    !isFinitePositive(quantity) ||
+    !isFiniteFuturesQuantity(quantity) ||
     !isFinitePositive(notional) ||
+    !isFinitePositive(initialMargin) ||
     !Number.isFinite(entryFee)
   ) {
-    return {
-      ok: false,
-      message: 'Calculated position size is invalid',
+    return createRejectedResult(
+      'Calculated futures position size is invalid',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
-  if (notional > availableBalanceBefore) {
-    return {
-      ok: false,
-      message: 'Insufficient available balance to reserve position notional',
+  if (initialMargin > availableBalanceBefore) {
+    return createRejectedResult(
+      'Insufficient margin for futures position',
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 
-  if (balance < entryFee) {
-    return {
-      ok: false,
-      message: 'Insufficient balance to pay entry fee',
-      balanceBefore,
-      balanceAfter: balance,
-      reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
-  }
-
-  // ========== РЕАЛЬНЫЙ ВЫЗОВ MEXC API ==========
-  let mexcOrder;
-  
   try {
+    const normalizedSymbol = normalizeSymbol(data.symbol);
+
+    await mexcClient.setFuturesLeverage(
+      normalizedSymbol,
+      FUTURES_LEVERAGE,
+      'ISOLATED'
+    );
+
+    const orderSide = data.side === 'long'
+      ? 'BUY'
+      : 'SELL';
+
     console.log(
-      `[${new Date().toISOString()}] 🚀 Opening MEXC position: ${data.symbol} ${data.side.toUpperCase()} ${quantity} @ MARKET`
+      `[${new Date().toISOString()}] 🚀 Opening MEXC Futures ` +
+        `${data.side.toUpperCase()} ${normalizedSymbol} ` +
+        `qty=${quantity.toFixed(8)} leverage=${FUTURES_LEVERAGE}x`
     );
 
-    mexcOrder = await mexcClient.placeOrder(
-      data.symbol,
-      data.side === 'long' ? 'BUY' : 'SELL',
-      quantity
+    const mexcOrder =
+      await mexcClient.openFuturesPosition(
+        normalizedSymbol,
+        orderSide,
+        quantity,
+        FUTURES_LEVERAGE
+      );
+
+    const actualQuantity = getExecutedQuantity(
+      quantity,
+      mexcOrder.executedQty
     );
 
-    console.log(
-      `[${new Date().toISOString()}] ✅ MEXC order placed: ${mexcOrder.orderId}, executed: ${mexcOrder.executedQty} @ ${mexcOrder.price}`
+    const actualEntryPrice = getExecutedPrice(
+      data.entryPrice,
+      mexcOrder.avgPrice || mexcOrder.price,
+      mexcOrder.executedQuoteQty,
+      actualQuantity
     );
 
-    // Обновляем entryPrice реальной ценой исполнения
-    const actualEntryPrice = mexcOrder.price > 0 ? mexcOrder.price : data.entryPrice;
-    const actualQuantity = mexcOrder.executedQty > 0 ? mexcOrder.executedQty : quantity;
-    const actualNotional = actualQuantity * actualEntryPrice;
-    const actualEntryFee = actualNotional * TRADE_FEE_RATE;
+    const actualNotional =
+      actualQuantity * actualEntryPrice;
 
-    reservedCapital += actualNotional;
+    const actualEntryFee =
+      actualNotional * TRADE_FEE_RATE;
+
+    if (
+      !isFiniteFuturesQuantity(actualQuantity) ||
+      !isFinitePositive(actualEntryPrice) ||
+      !isFinitePositive(actualNotional)
+    ) {
+      throw new Error(
+        `Invalid Futures fill: ` +
+          `qty=${mexcOrder.executedQty}, ` +
+          `price=${mexcOrder.avgPrice || mexcOrder.price}, ` +
+          `quote=${mexcOrder.executedQuoteQty}`
+      );
+    }
+
+    reservedCapital += actualNotional / FUTURES_LEVERAGE;
 
     const position: VirtualPosition = {
-      id: mexcOrder.orderId,
+      id: String(
+        mexcOrder.orderId || createPositionId()
+      ),
       symbol: data.symbol,
       side: data.side,
       entryPrice: actualEntryPrice,
       quantity: actualQuantity,
       notional: actualNotional,
-      reservedCapital: actualNotional,
+      reservedCapital: actualNotional / FUTURES_LEVERAGE,
       takeProfitPrice: data.takeProfitPrice,
       stopLossPrice: data.stopLossPrice,
       entryFee: actualEntryFee,
@@ -421,9 +541,10 @@ export async function openPosition(data: {
       metadata: data.metadata
     };
 
-    currentPositions = [...currentPositions, position];
-
-    const availableBalanceAfter = getAvailableBalance();
+    currentPositions = [
+      ...currentPositions,
+      position
+    ];
 
     const entryExtensionAtr =
       data.metadata?.entryExtensionAtr ?? 0;
@@ -438,11 +559,12 @@ export async function openPosition(data: {
     const entryDistanceFromEma20Percent =
       data.metadata?.ema20 != null &&
       data.metadata.ema20 > 0
-        ? (entryDistanceFromEma20 / data.metadata.ema20) * 100
+        ? (entryDistanceFromEma20 /
+            data.metadata.ema20) * 100
         : 0;
 
     logPositionOpen({
-      timestamp: new Date().toISOString(),
+      timestamp: position.openedAt,
       positionId: position.id,
       symbol: position.symbol,
       side: position.side,
@@ -455,13 +577,16 @@ export async function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       riskCapital,
-      maxNotionalByPercent: requestedNotionalByPercent,
+      maxNotionalByPercent:
+        requestedNotionalByPercent,
       stopDistance,
       totalRiskPerUnit,
       calculatedQuantity: riskQuantity,
       regime: data.metadata?.regime ?? '',
-      macdCrossUp: data.metadata?.macdCrossUp ?? false,
-      macdCrossDown: data.metadata?.macdCrossDown ?? false,
+      macdCrossUp:
+        data.metadata?.macdCrossUp ?? false,
+      macdCrossDown:
+        data.metadata?.macdCrossDown ?? false,
       lastRsi: data.metadata?.lastRsi ?? 0,
       lastAtr: data.metadata?.lastAtr ?? 0,
       adx: data.metadata?.adx ?? 0,
@@ -472,11 +597,13 @@ export async function openPosition(data: {
       ema200: data.metadata?.ema200 ?? 0,
       entryDistanceFromEma20,
       entryDistanceFromEma20Percent,
-      entryDistanceFromEma20Atr: entryExtensionAtr,
-      entryTooExtended: data.metadata?.entryTooExtended ?? false
+      entryDistanceFromEma20Atr:
+        entryExtensionAtr,
+      entryTooExtended:
+        data.metadata?.entryTooExtended ?? false
     });
 
-    notifyPositionOpen({
+    void notifyPositionOpen({
       symbol: position.symbol,
       side: position.side,
       entryPrice: position.entryPrice,
@@ -499,129 +626,142 @@ export async function openPosition(data: {
       reservedCapitalBefore,
       reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
-      availableBalanceAfter
+      availableBalanceAfter:
+        getAvailableBalance()
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorMsg =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
+
     console.error(
-      `[${new Date().toISOString()}] ❌ Failed to open MEXC position: ${errorMsg}`
+      `[${new Date().toISOString()}] ❌ ` +
+        `Failed to open MEXC Futures position: ` +
+        `${errorMsg}`
     );
 
-    return {
-      ok: false,
-      message: `MEXC API error: ${errorMsg}`,
+    return createRejectedResult(
+      `MEXC Futures API error: ${errorMsg}`,
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 }
 
 export async function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe'
-): Promise<{
-  ok: boolean;
-  message?: string;
-  balance?: number;
-  lastClosedTrade?: ClosedTrade;
-  positions: VirtualPosition[];
-  balanceBefore: number;
-  balanceAfter: number;
-  reservedCapitalBefore: number;
-  reservedCapitalAfter: number;
-  availableBalanceBefore: number;
-  availableBalanceAfter: number;
-}> {
+  reason: CloseReason
+): Promise<PositionStateResult> {
   const index = currentPositions.findIndex(
     position => position.id === positionId
   );
 
   if (index === -1) {
-    return { 
-      ok: false, 
-      message: 'No open position',
-      positions: getPositions(),
-      balanceBefore: balance,
-      balanceAfter: balance,
-      reservedCapitalBefore: reservedCapital,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore: getAvailableBalance(),
-      availableBalanceAfter: getAvailableBalance()
-    };
+    return createRejectedResult('No open position');
   }
 
   if (!isFinitePositive(exitPrice)) {
-    return { 
-      ok: false, 
-      message: 'Invalid exit price',
-      positions: getPositions(),
-      balanceBefore: balance,
-      balanceAfter: balance,
-      reservedCapitalBefore: reservedCapital,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore: getAvailableBalance(),
-      availableBalanceAfter: getAvailableBalance()
-    };
+    return createRejectedResult('Invalid exit price');
   }
 
   const position = currentPositions[index];
-
   const balanceBefore = balance;
   const reservedCapitalBefore = reservedCapital;
   const availableBalanceBefore = getAvailableBalance();
 
-  // ========== РЕАЛЬНЫЙ ВЫЗОВ MEXC API ==========
   try {
-    console.log(
-      `[${new Date().toISOString()}] 🚀 Closing MEXC position: ${position.symbol} ${position.side === 'long' ? 'SELL' : 'BUY'} ${position.quantity} @ MARKET`
-    );
-
-    const mexcOrder = await mexcClient.placeOrder(
-      position.symbol,
-      position.side === 'long' ? 'SELL' : 'BUY',
-      position.quantity
-    );
+    const orderSide = position.side === 'long'
+      ? 'SELL'
+      : 'BUY';
 
     console.log(
-      `[${new Date().toISOString()}] ✅ MEXC close order placed: ${mexcOrder.orderId}, executed: ${mexcOrder.executedQty} @ ${mexcOrder.price}`
+      `[${new Date().toISOString()}] 🚀 Closing MEXC Futures ` +
+        `${position.symbol} ${position.side.toUpperCase()} ` +
+        `qty=${position.quantity.toFixed(8)}`
     );
 
-    // Используем реальную цену исполнения
-    const actualExitPrice = mexcOrder.price > 0 ? mexcOrder.price : exitPrice;
-    const actualQuantity = mexcOrder.executedQty > 0 ? mexcOrder.executedQty : position.quantity;
+    const mexcOrder =
+      await mexcClient.closeFuturesPosition(
+        position.symbol,
+        orderSide,
+        position.quantity
+      );
+
+    const actualQuantity = getExecutedQuantity(
+      position.quantity,
+      mexcOrder.executedQty
+    );
+
+    const actualExitPrice = getExecutedPrice(
+      exitPrice,
+      mexcOrder.avgPrice || mexcOrder.price,
+      mexcOrder.executedQuoteQty,
+      actualQuantity
+    );
+
+    if (
+      !isFiniteFuturesQuantity(actualQuantity) ||
+      !isFinitePositive(actualExitPrice)
+    ) {
+      throw new Error(
+        `Invalid Futures close fill: ` +
+          `qty=${mexcOrder.executedQty}, ` +
+          `price=${mexcOrder.avgPrice || mexcOrder.price}, ` +
+          `quote=${mexcOrder.executedQuoteQty}`
+      );
+    }
 
     const realizedPnL =
       position.side === 'long'
-        ? (actualExitPrice - position.entryPrice) * actualQuantity
-        : (position.entryPrice - actualExitPrice) * actualQuantity;
+        ? (actualExitPrice -
+            position.entryPrice) *
+          actualQuantity
+        : (position.entryPrice -
+            actualExitPrice) *
+          actualQuantity;
 
     const realizedPnLPercent =
       position.notional > 0
-        ? (realizedPnL / position.notional) * 100
+        ? (realizedPnL /
+            position.notional) * 100
         : 0;
 
     const exitFee =
-      actualExitPrice * actualQuantity * TRADE_FEE_RATE;
+      actualExitPrice *
+      actualQuantity *
+      TRADE_FEE_RATE;
 
-    const netPnL = realizedPnL - exitFee - position.entryFee;
+    const totalFee =
+      position.entryFee + exitFee;
+
+    const netPnL =
+      realizedPnL - totalFee;
 
     const netPnLPercent =
       position.notional > 0
-        ? (netPnL / position.notional) * 100
+        ? (netPnL /
+            position.notional) * 100
         : 0;
 
-    const openedAtMs = new Date(position.openedAt).getTime();
     const closedAtMs = Date.now();
-    const closedAt = new Date(closedAtMs).toISOString();
+    const closedAt =
+      new Date(closedAtMs).toISOString();
 
-    const positionAgeSeconds = Math.floor(
-      (closedAtMs - openedAtMs) / 1000
-    );
+    const openedAtMs =
+      new Date(position.openedAt).getTime();
+
+    const positionAgeSeconds =
+      Number.isFinite(openedAtMs)
+        ? Math.max(
+            0,
+            Math.floor(
+              (closedAtMs - openedAtMs) / 1000
+            )
+          )
+        : 0;
 
     lastClosedTrade = {
       id: position.id,
@@ -632,29 +772,25 @@ export async function closePosition(
       quantity: actualQuantity,
       notional: position.notional,
       realizedPnL,
+      realizedPnLPercent,
       entryFee: position.entryFee,
       exitFee,
-      totalFee: position.entryFee + exitFee,
+      totalFee,
       netPnL,
+      netPnLPercent,
       openedAt: position.openedAt,
       closedAt,
+      positionAgeSeconds,
       reason
     };
 
-    currentPositions = currentPositions.filter(
-      openPosition => openPosition.id !== positionId
-    );
-
-    reservedCapital = Math.max(
-      0,
-      reservedCapital - position.reservedCapital
-    );
+    currentPositions =
+      currentPositions.filter(
+        openPosition => openPosition.id !== positionId
+      );
 
     reservedCapital = calculateReservedCapital();
-
     balance += netPnL;
-
-    const availableBalanceAfter = getAvailableBalance();
 
     logPositionClose({
       timestamp: closedAt,
@@ -669,7 +805,7 @@ export async function closePosition(
       realizedPnLPercent,
       entryFee: position.entryFee,
       exitFee,
-      totalFee: position.entryFee + exitFee,
+      totalFee,
       netPnL,
       netPnLPercent,
       balanceBefore,
@@ -678,17 +814,25 @@ export async function closePosition(
       positionAgeSeconds,
       openedAt: position.openedAt,
       closedAt,
-      maxUnrealizedPnL: position.metadata?.maxUnrealizedPnL,
-      maxUnrealizedPnLPercent: position.metadata?.maxUnrealizedPnLPercent,
-      worstUnrealizedPnL: position.metadata?.worstUnrealizedPnL,
-      worstUnrealizedPnLPercent: position.metadata?.worstUnrealizedPnLPercent,
-      beTriggered: position.metadata?.beTriggered ?? false,
-      partialClosed: position.metadata?.partialClosed ?? false,
-      trailingActive: position.metadata?.trailingActive ?? false,
-      trailingStopPrice: position.metadata?.trailingStopPrice
+      maxUnrealizedPnL:
+        position.metadata?.maxUnrealizedPnL,
+      maxUnrealizedPnLPercent:
+        position.metadata?.maxUnrealizedPnLPercent,
+      worstUnrealizedPnL:
+        position.metadata?.worstUnrealizedPnL,
+      worstUnrealizedPnLPercent:
+        position.metadata?.worstUnrealizedPnLPercent,
+      beTriggered:
+        position.metadata?.beTriggered ?? false,
+      partialClosed:
+        position.metadata?.partialClosed ?? false,
+      trailingActive:
+        position.metadata?.trailingActive ?? false,
+      trailingStopPrice:
+        position.metadata?.trailingStopPrice
     });
 
-    notifyPositionClose({
+    void notifyPositionClose({
       symbol: position.symbol,
       side: position.side,
       entryPrice: position.entryPrice,
@@ -714,45 +858,61 @@ export async function closePosition(
       reservedCapitalBefore,
       reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
-      availableBalanceAfter
+      availableBalanceAfter:
+        getAvailableBalance()
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const errorMsg =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
+
     console.error(
-      `[${new Date().toISOString()}] ❌ Failed to close MEXC position: ${errorMsg}`
+      `[${new Date().toISOString()}] ❌ ` +
+        `Failed to close MEXC Futures position: ` +
+        `${errorMsg}`
     );
 
-    return {
-      ok: false,
-      message: `MEXC API error: ${errorMsg}`,
+    return createRejectedResult(
+      `MEXC Futures API error: ${errorMsg}`,
       balanceBefore,
-      balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
+      availableBalanceBefore
+    );
   }
 }
 
-export function partialClosePosition(
+export async function partialClosePosition(
   positionId: string,
   quantityToClose: number,
   exitPrice: number
-): { ok: true; realizedPnL: number; position: VirtualPosition } | {
-  ok: false;
-  message: string;
-} {
+): Promise<
+  | {
+      ok: true;
+      realizedPnL: number;
+      position: VirtualPosition;
+    }
+  | {
+      ok: false;
+      message: string;
+    }
+> {
   const index = currentPositions.findIndex(
     position => position.id === positionId
   );
 
   if (index === -1) {
-    return { ok: false, message: 'No open position' };
+    return {
+      ok: false,
+      message: 'No open position'
+    };
   }
 
   if (!isFinitePositive(exitPrice)) {
-    return { ok: false, message: 'Invalid exit price' };
+    return {
+      ok: false,
+      message: 'Invalid exit price'
+    };
   }
 
   const position = currentPositions[index];
@@ -767,52 +927,122 @@ export function partialClosePosition(
     };
   }
 
-  const realizedPnL =
-    position.side === 'long'
-      ? (exitPrice - position.entryPrice) * quantityToClose
-      : (position.entryPrice - exitPrice) * quantityToClose;
+  try {
+    const orderSide = position.side === 'long'
+      ? 'SELL'
+      : 'BUY';
 
-  const exitFee =
-    exitPrice * quantityToClose * TRADE_FEE_RATE;
+    const mexcOrder =
+      await mexcClient.closeFuturesPosition(
+        position.symbol,
+        orderSide,
+        quantityToClose
+      );
 
-  const proportionalEntryFee =
-    position.entryFee * (quantityToClose / position.quantity);
+    const actualQuantity = getExecutedQuantity(
+      quantityToClose,
+      mexcOrder.executedQty
+    );
 
-  const netPnL = realizedPnL - exitFee - proportionalEntryFee;
+    const actualExitPrice = getExecutedPrice(
+      exitPrice,
+      mexcOrder.avgPrice || mexcOrder.price,
+      mexcOrder.executedQuoteQty,
+      actualQuantity
+    );
 
-  const oldQuantity = position.quantity;
-  const oldNotional = position.notional;
+    if (
+      !isFiniteFuturesQuantity(actualQuantity) ||
+      actualQuantity >= position.quantity
+    ) {
+      throw new Error(
+        `Invalid partial Futures fill quantity: ` +
+          `${actualQuantity}`
+      );
+    }
 
-  position.quantity -= quantityToClose;
+    const realizedPnL =
+      position.side === 'long'
+        ? (actualExitPrice -
+            position.entryPrice) *
+          actualQuantity
+        : (position.entryPrice -
+            actualExitPrice) *
+          actualQuantity;
 
-  position.notional = position.quantity * position.entryPrice;
-  position.reservedCapital = position.notional;
+    const exitFee =
+      actualExitPrice *
+      actualQuantity *
+      TRADE_FEE_RATE;
 
-  position.entryFee -= proportionalEntryFee;
+    const entryFeeShare =
+      position.entryFee *
+      (actualQuantity / position.quantity);
 
-  const closedNotional =
-    (quantityToClose / oldQuantity) * oldNotional;
+    const netPnL =
+      realizedPnL - exitFee - entryFeeShare;
 
-  reservedCapital = Math.max(
-    0,
-    reservedCapital - closedNotional
-  );
+    const oldQuantity = position.quantity;
+    const oldNotional = position.notional;
 
-  reservedCapital = calculateReservedCapital();
+    position.quantity =
+      oldQuantity - actualQuantity;
 
-  balance += netPnL;
+    position.notional =
+      position.quantity * position.entryPrice;
 
-  return {
-    ok: true,
-    realizedPnL: netPnL,
-    position
-  };
+    position.reservedCapital =
+      position.notional / FUTURES_LEVERAGE;
+
+    position.entryFee =
+      Math.max(
+        0,
+        position.entryFee - entryFeeShare
+      );
+
+    const closedNotional =
+      oldNotional *
+      (actualQuantity / oldQuantity);
+
+    reservedCapital = Math.max(
+      0,
+      reservedCapital -
+        closedNotional / FUTURES_LEVERAGE
+    );
+
+    reservedCapital = calculateReservedCapital();
+    balance += netPnL;
+
+    return {
+      ok: true,
+      realizedPnL: netPnL,
+      position
+    };
+  } catch (error) {
+    const errorMsg =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
+
+    console.error(
+      `[${new Date().toISOString()}] ❌ ` +
+        `Failed Futures partial close for ` +
+        `${position.symbol}: ${errorMsg}`
+    );
+
+    return {
+      ok: false,
+      message: `MEXC Futures API error: ${errorMsg}`
+    };
+  }
 }
 
 export function updatePositionMetadata(
   positionId: string,
-  updates: Partial<NonNullable<VirtualPosition['metadata']>>
-) {
+  updates: Partial<
+    NonNullable<VirtualPosition['metadata']>
+  >
+): boolean {
   const exists = currentPositions.some(
     position => position.id === positionId
   );
@@ -831,7 +1061,9 @@ export function updatePositionMetadata(
       metadata: {
         ...(position.metadata ?? {}),
         ...updates
-      } as NonNullable<VirtualPosition['metadata']>
+      } as NonNullable<
+        VirtualPosition['metadata']
+      >
     };
   });
 
@@ -854,7 +1086,8 @@ export function updatePositionStopLoss(
     return false;
   }
 
-  currentPositions[index].stopLossPrice = newStopLossPrice;
+  currentPositions[index].stopLossPrice =
+    newStopLossPrice;
 
   return true;
 }
