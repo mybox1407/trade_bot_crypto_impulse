@@ -1,7 +1,7 @@
 import { app } from './app';
 import { startScheduler, stopScheduler } from './services/scheduler';
 
-const port = Number(process.env.PORT) || 3002;
+const port = Number(process.env.PORT) || 3005;
 
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`[${new Date().toISOString()}] Server started on port ${port}`);
