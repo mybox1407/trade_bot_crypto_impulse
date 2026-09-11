@@ -118,13 +118,6 @@ function isEligibleMarket(
   }
 
   if (
-    market.market_config?.trading_hours &&
-    market.market_config.trading_hours.trim() !== ''
-  ) {
-    return false;
-  }
-
-  if (
     NON_CRYPTO_SYMBOLS.has(
       market.symbol.toUpperCase()
     )
@@ -139,6 +132,91 @@ export function toTradingPair(
   market: LighterMarket
 ): string {
   return `${market.symbol}/USDT`;
+}
+
+export function normalizeSymbol(
+  symbol: string
+): string {
+  const value = symbol.trim().toUpperCase();
+
+  return value.endsWith('/USDT')
+    ? value
+    : `${value}/USDT`;
+}
+
+export function validateOrderSize(
+  market: LighterMarket,
+  quantity: number,
+  price: number
+): {
+  ok: true;
+  quantity: number;
+} | {
+  ok: false;
+  reason: string;
+} {
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return {
+      ok: false,
+      reason: 'Invalid quantity'
+    };
+  }
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return {
+      ok: false,
+      reason: 'Invalid price'
+    };
+  }
+
+  if (quantity < market.minBaseAmount) {
+    return {
+      ok: false,
+      reason:
+        `Quantity ${quantity.toFixed(8)} ` +
+        `is below min_base_amount ${market.minBaseAmount}`
+    };
+  }
+
+  const quoteAmount = quantity * price;
+
+  if (quoteAmount < market.minQuoteAmount) {
+    return {
+      ok: false,
+      reason:
+        `Quote amount ${quoteAmount.toFixed(4)} ` +
+        `is below min_quote_amount ${market.minQuoteAmount}`
+    };
+  }
+
+  const sizeFactor = Math.pow(10, market.sizeDecimals);
+  const roundedQuantity =
+    Math.floor(quantity * sizeFactor) / sizeFactor;
+
+  if (roundedQuantity < market.minBaseAmount) {
+    return {
+      ok: false,
+      reason:
+        `Rounded quantity ${roundedQuantity.toFixed(8)} ` +
+        `is below min_base_amount ${market.minBaseAmount}`
+    };
+  }
+
+  const roundedQuote = roundedQuantity * price;
+
+  if (roundedQuote < market.minQuoteAmount) {
+    return {
+      ok: false,
+      reason:
+        `Rounded quote ${roundedQuote.toFixed(4)} ` +
+        `is below min_quote_amount ${market.minQuoteAmount}`
+    };
+  }
+
+  return {
+    ok: true,
+    quantity: roundedQuantity
+  };
 }
 
 export async function fetchTopLighterMarkets(
@@ -204,6 +282,39 @@ export async function fetchTopLighterMarkets(
         market.open_interest
       )
     }))
+    .filter(market => {
+      if (
+        market.priceDecimals <= 0 ||
+        market.sizeDecimals <= 0
+      ) {
+        console.warn(
+          `[${new Date().toISOString()}] ` +
+            `Skipping market ${market.symbol} ` +
+            `with invalid decimals: ` +
+            `priceDecimals=${market.priceDecimals}, ` +
+            `sizeDecimals=${market.sizeDecimals}`
+        );
+
+        return false;
+      }
+
+      if (
+        market.minBaseAmount <= 0 ||
+        market.minQuoteAmount <= 0
+      ) {
+        console.warn(
+          `[${new Date().toISOString()}] ` +
+            `Skipping market ${market.symbol} ` +
+            `with invalid min amounts: ` +
+            `minBaseAmount=${market.minBaseAmount}, ` +
+            `minQuoteAmount=${market.minQuoteAmount}`
+        );
+
+        return false;
+      }
+
+      return true;
+    })
     .sort((a, b) => {
       if (
         b.dailyQuoteTokenVolume !==
