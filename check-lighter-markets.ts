@@ -1,34 +1,70 @@
-const baseUrl =
-  process.env.LIGHTER_API_URL ??
-  'https://mainnet.zklighter.elliot.ai';
+import WebSocket from 'ws';
 
-async function main() {
-  const url = `${baseUrl}/api/v1/orderBookDetails`;
+const WS_URL =
+  process.env.LIGHTER_WS_URL ??
+  'wss://mainnet.zklighter.elliot.ai/stream';
 
-  console.log(`Request: ${url}`);
+const MARKET_ID = 0;
+const RESOLUTION = '15m';
 
-  const response = await fetch(url);
+const ws = new WebSocket(WS_URL);
 
-  const text = await response.text();
+const closeTimer = setTimeout(() => {
+  console.log('Test finished');
 
-  if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status}: ${text}`
-    );
-  }
+  ws.close();
+  process.exit(0);
+}, 60_000);
 
-  const data = JSON.parse(text);
+ws.on('open', () => {
+  console.log(`Connected: ${WS_URL}`);
 
-  console.dir(data, {
-    depth: null,
-    colors: false
-  });
-}
+  const candleSubscription = {
+    type: 'subscribe',
+    channel: `candle/${MARKET_ID}/${RESOLUTION}`
+  };
 
-main().catch(error => {
-  console.error(
-    error instanceof Error ? error.message : error
+  const statsSubscription = {
+    type: 'subscribe',
+    channel: `market_stats/${MARKET_ID}`
+  };
+
+  console.log(
+    'Subscribe:',
+    JSON.stringify(candleSubscription)
   );
 
-  process.exit(1);
+  ws.send(JSON.stringify(candleSubscription));
+  ws.send(JSON.stringify(statsSubscription));
+
+  const pingTimer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, 30_000);
+
+  ws.once('close', () => {
+    clearInterval(pingTimer);
+  });
+});
+
+ws.on('message', raw => {
+  console.log(
+    `[${new Date().toISOString()}]`,
+    raw.toString()
+  );
+});
+
+ws.on('error', error => {
+  console.error('WebSocket error:', error);
+});
+
+ws.on('close', (code, reason) => {
+  clearTimeout(closeTimer);
+
+  console.log(
+    'WebSocket closed:',
+    code,
+    reason.toString()
+  );
 });
