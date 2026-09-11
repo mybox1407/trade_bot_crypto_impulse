@@ -14,7 +14,7 @@ const LIGHTER_API_URL =
 
 const MAX_CANDLES = 250;
 
-type MarketReference = {
+export type MarketReference = {
   symbol: string;
   marketId: number;
 };
@@ -417,3 +417,5 @@ export function stopMarketData(
     market.marketId
   );
 }
+
+export { resolveMarket };
