@@ -9,6 +9,17 @@ export type ExecutionStatus =
   | 'rejected'
   | 'unknown';
 
+export type CloseReason =
+  | 'take_profit'
+  | 'stop_loss'
+  | 'manual'
+  | 'time_stop'
+  | 'breakeven_stop'
+  | 'dead_trade_mfe'
+  | 'partial_close'
+  | 'reconciliation_missing_remote'
+  | 'reconciliation_severe_mismatch';
+
 export interface OpenExecutionRequest {
   symbol: string;
   marketId: number;
@@ -16,6 +27,8 @@ export interface OpenExecutionRequest {
   quantity: number;
   expectedPrice: number;
   clientOrderId: string;
+  priceDecimals?: number;
+  sizeDecimals?: number;
 }
 
 export interface CloseExecutionRequest {
@@ -24,8 +37,10 @@ export interface CloseExecutionRequest {
   positionSide: PositionSide;
   quantity: number;
   expectedPrice: number;
-  reason: string;
+  reason: CloseReason | string;
   clientOrderId: string;
+  priceDecimals?: number;
+  sizeDecimals?: number;
 }
 
 export interface ExecutionResult {
@@ -48,4 +63,6 @@ export interface ExecutionService {
   closePosition(
     req: CloseExecutionRequest
   ): Promise<ExecutionResult>;
+
+  stop?(): void;
 }
