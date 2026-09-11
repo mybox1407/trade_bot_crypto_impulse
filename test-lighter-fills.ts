@@ -1,7 +1,11 @@
 // src/scripts/test-lighter-fills.ts
 
+// Загружаем переменные окружения ДО всего остального
+import './config/env';
+
 import WebSocket from 'ws';
 import { SignerClient } from 'zklighter-sdk';
+import { env } from '../config/env';
 
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
@@ -11,7 +15,7 @@ const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
   'wss://mainnet.zklighter.elliot.ai/stream';
 
-const API_SECRET = process.env.LIGHTER_API_SECRET;
+const API_SECRET = env.apiSecret;
 const API_KEY_INDEX = parseInt(process.env.LIGHTER_API_KEY_INDEX ?? '0', 10);
 const ACCOUNT_INDEX = parseInt(process.env.LIGHTER_ACCOUNT_INDEX ?? '0', 10);
 
