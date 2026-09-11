@@ -21,8 +21,9 @@ import {
 
 let activeMarkets: LighterMarket[] = [];
 
-let marketRefreshInterval:
-  NodeJS.Timeout | null = null;
+let marketRefreshInterval: NodeJS.Timeout | null = null;
+
+let refreshRunning = false;
 
 function hasPositionForPair(
   pair: string
@@ -41,83 +42,104 @@ export function getActiveMarkets(): LighterMarket[] {
 }
 
 export async function refreshTopMarkets(): Promise<void> {
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Refreshing Lighter top-${TOP_MARKETS_LIMIT} markets...`
-  );
+  if (refreshRunning) {
+    console.warn(
+      `[${new Date().toISOString()}] Market refresh already running, skipping`
+    );
+    return;
+  }
 
-  const nextMarkets =
-    await fetchTopLighterMarkets(
-      TOP_MARKETS_LIMIT
+  refreshRunning = true;
+
+  try {
+    console.log(
+      `[${new Date().toISOString()}] Refreshing Lighter top-${TOP_MARKETS_LIMIT} markets...`
     );
 
-  if (nextMarkets.length === 0) {
-    throw new Error(
-      'Lighter returned zero eligible markets'
+    const nextMarkets =
+      await fetchTopLighterMarkets(
+        TOP_MARKETS_LIMIT
+      );
+
+    if (nextMarkets.length === 0) {
+      throw new Error(
+        'Lighter returned zero eligible markets'
+      );
+    }
+
+    const previousMarkets = activeMarkets;
+
+    const previousPairs = new Set(
+      previousMarkets.map(toTradingPair)
     );
-  }
 
-  const previousMarkets = activeMarkets;
+    const nextPairs = new Set(
+      nextMarkets.map(toTradingPair)
+    );
 
-  const previousPairs = new Set(
-    previousMarkets.map(toTradingPair)
-  );
+    for (const previousMarket of previousMarkets) {
+      const pair = toTradingPair(previousMarket);
 
-  const nextPairs = new Set(
-    nextMarkets.map(toTradingPair)
-  );
+      if (
+        !nextPairs.has(pair) &&
+        !hasPositionForPair(pair)
+      ) {
+        stopMarketDataByMarketId(
+          previousMarket.marketId
+        );
 
-  for (const previousMarket of previousMarkets) {
-    const pair = toTradingPair(previousMarket);
-
-    if (
-      !nextPairs.has(pair) &&
-      !hasPositionForPair(pair)
-    ) {
-      stopMarketDataByMarketId(
-        previousMarket.marketId
-      );
-
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `Stopped market data: ${pair}`
-      );
+        console.log(
+          `[${new Date().toISOString()}] Stopped market data: ${pair}`
+        );
+      }
     }
-  }
 
-  for (const nextMarket of nextMarkets) {
-    const pair = toTradingPair(nextMarket);
+    const startPromises: Promise<void>[] = [];
 
-    if (!previousPairs.has(pair)) {
-      await startMarketDataByMarket(
-        nextMarket,
-        '15m'
-      );
+    for (const nextMarket of nextMarkets) {
+      const pair = toTradingPair(nextMarket);
 
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `Started market data: ${pair}`
-      );
+      if (!previousPairs.has(pair)) {
+        const startPromise = startMarketDataByMarket(
+          nextMarket,
+          '15m'
+        ).then(() => {
+          console.log(
+            `[${new Date().toISOString()}] Started market data: ${pair}`
+          );
+        }).catch(error => {
+          console.error(
+            `[${new Date().toISOString()}] Failed to start market data for ${pair}:`,
+            error
+          );
+        });
+
+        startPromises.push(startPromise);
+      }
     }
+
+    await Promise.all(startPromises);
+
+    activeMarkets = nextMarkets;
+
+    await saveMarketsSnapshot(nextMarkets);
+
+    console.table(
+      nextMarkets.map((market, index) => ({
+        rank: index + 1,
+        symbol: market.symbol,
+        marketId: market.marketId,
+        volume24h:
+          market.dailyQuoteTokenVolume,
+        trades24h:
+          market.dailyTradesCount,
+        openInterest:
+          market.openInterest
+      }))
+    );
+  } finally {
+    refreshRunning = false;
   }
-
-  activeMarkets = nextMarkets;
-
-  await saveMarketsSnapshot(nextMarkets);
-
-  console.table(
-    nextMarkets.map((market, index) => ({
-      rank: index + 1,
-      symbol: market.symbol,
-      marketId: market.marketId,
-      volume24h:
-        market.dailyQuoteTokenVolume,
-      trades24h:
-        market.dailyTradesCount,
-      openInterest:
-        market.openInterest
-    }))
-  );
 }
 
 export function startMarketRefresh(): void {
@@ -128,8 +150,7 @@ export function startMarketRefresh(): void {
   marketRefreshInterval = setInterval(() => {
     void refreshTopMarkets().catch(error => {
       console.error(
-        `[${new Date().toISOString()}] ` +
-          `Failed to refresh Lighter markets:`,
+        `[${new Date().toISOString()}] Failed to refresh Lighter markets:`,
         error
       );
     });
