@@ -24,13 +24,6 @@ const PRICE_DECIMALS = 2;
 
 const ORDER_WAIT_TIMEOUT_MS = 15_000;
 
-type ApiResponse = {
-  code?: number;
-  message?: string;
-  tx_hash?: string;
-  txHash?: string;
-};
-
 type LighterOrder = {
   order_index?: number | string;
   order_id?: string;
@@ -333,8 +326,8 @@ export class LighterExecutionService
       this.readOrderId(
         order as Record<string, unknown> | null
       ) ??
-      (tx as Record<string, unknown>)?.tx_hash as string | undefined ??
-      (tx as Record<string, unknown>)?.txHash as string | undefined;
+      (tx as unknown as Record<string, unknown>)?.tx_hash as string | undefined ??
+      (tx as unknown as Record<string, unknown>)?.txHash as string | undefined;
 
     console.log(
       `[${new Date().toISOString()}] ` +
@@ -358,7 +351,7 @@ export class LighterExecutionService
     orderId: string | undefined,
     requestedQuantity: number
   ): Promise<ExecutionResult> {
-    return new Promise(resolve => {
+    return new Promise<ExecutionResult>(resolve => {
       const timer =
         setTimeout(() => {
           this.pendingOrders.delete(
@@ -400,7 +393,7 @@ export class LighterExecutionService
     this.ensureAccountWebSocket();
   }
 
-  private async ensureAccountWebSocket(): void {
+  private ensureAccountWebSocket(): void {
     if (
       this.accountWsConnecting ||
       this.accountWs?.readyState === WebSocket.OPEN
@@ -621,7 +614,7 @@ export class LighterExecutionService
                   unknown
                 >
               ),
-            clientOrderId: undefined,
+            clientOrderId: pending.resolve.name ? undefined : undefined,
             requestedQuantity:
               pending.requestedQuantity,
             filledQuantity: 0,
@@ -662,7 +655,8 @@ export class LighterExecutionService
               string,
               unknown
             >
-          ),
+          ) ?? undefined,
+        clientOrderId: undefined,
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -720,7 +714,8 @@ export class LighterExecutionService
         ok: true,
         status: 'filled',
         orderId:
-          this.readTradeId(trade),
+          this.readTradeId(trade) ?? undefined,
+        clientOrderId: undefined,
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -964,6 +959,7 @@ export class LighterExecutionService
       pending.resolve({
         ok: false,
         status: 'unknown',
+        clientOrderId: undefined,
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity: 0,
