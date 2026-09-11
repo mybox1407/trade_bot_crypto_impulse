@@ -12,7 +12,7 @@ import {
 
 import {
   startMarketDataByMarket,
-  stopMarketData
+  stopMarketDataByMarketId
 } from './exchange';
 
 import {
