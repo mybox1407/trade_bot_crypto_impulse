@@ -1,18 +1,55 @@
-import ccxt from 'ccxt';
+// src/services/exchange.ts
+import { LighterWsClient, Candle } from './lighterWs';
 
-const exchange = new ccxt.binance();
+const candlesByMarket = new Map<number, Candle[]>();
+const clients = new Map<number, LighterWsClient>();
 
-export async function getCandles(symbol: string, timeframe = '15m', limit = 250) {
-  await exchange.loadMarkets();
+export function startMarketData(
+  marketIndex: number,
+  timeframe = '15m',
+) {
+  if (clients.has(marketIndex)) return;
 
-  const raw = await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
+  candlesByMarket.set(marketIndex, []);
 
-  return raw.map(c => ({
-    time: c[0]!, open: c[1]!, high: c[2]!, low: c[3]!, close: c[4]!, volume: c[5]!
-  }));
+  const client = new LighterWsClient(
+    marketIndex,
+    timeframe,
+    candle => {
+      const candles = candlesByMarket.get(marketIndex)!;
+      const last = candles[candles.length - 1];
+
+      if (last?.time === candle.time) {
+        candles[candles.length - 1] = candle;
+      } else {
+        candles.push(candle);
+      }
+
+      if (candles.length > 250) {
+        candles.splice(0, candles.length - 250);
+      }
+    },
+  );
+
+  clients.set(marketIndex, client);
+  client.connect();
 }
 
-export async function getCurrentPrice(symbol: string) {
-  const ticker = await exchange.fetchTicker(symbol);
-  return ticker.last ?? ticker.close!;
+export function getCandles(
+  marketIndex: number,
+  limit = 250,
+): Candle[] {
+  const candles = candlesByMarket.get(marketIndex) ?? [];
+  return candles.slice(-limit);
+}
+
+export function getCurrentPrice(marketIndex: number): number | null {
+  const candles = candlesByMarket.get(marketIndex) ?? [];
+  return candles.at(-1)?.close ?? null;
+}
+
+export function stopMarketData(marketIndex: number) {
+  clients.get(marketIndex)?.stop();
+  clients.delete(marketIndex);
+  candlesByMarket.delete(marketIndex);
 }
