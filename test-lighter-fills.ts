@@ -1,11 +1,11 @@
-// src/scripts/test-lighter-fills.ts
+// test-lighter-fills.ts
 
 // Загружаем переменные окружения ДО всего остального
-import './config/env';
+import './src/config/env';
 
 import WebSocket from 'ws';
 import { SignerClient } from 'zklighter-sdk';
-import { env } from '../config/env';
+import { env } from './src/config/env';
 
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
