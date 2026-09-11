@@ -69,6 +69,7 @@ type AccountMessage = {
 type PendingOrder = {
   marketId: number;
   clientOrderIndex: number;
+  clientOrderId?: string;
   requestedQuantity: number;
   resolve: (
     result: ExecutionResult
@@ -377,6 +378,7 @@ export class LighterExecutionService
         {
           marketId,
           clientOrderIndex,
+          clientOrderId: req.clientOrderId,
           requestedQuantity,
           resolve,
           timer
@@ -613,7 +615,7 @@ export class LighterExecutionService
                   unknown
                 >
               ) ?? '',
-            clientOrderId: req.clientOrderId ?? '',
+            clientOrderId: pending.clientOrderId ?? '',
             requestedQuantity:
               pending.requestedQuantity,
             filledQuantity: 0,
@@ -655,7 +657,7 @@ export class LighterExecutionService
               unknown
             >
           ) ?? '',
-        clientOrderId: pending.requestedQuantity.toString(),
+        clientOrderId: pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -714,7 +716,7 @@ export class LighterExecutionService
         status: 'filled',
         orderId:
           this.readTradeId(trade) ?? '',
-        clientOrderId: String(clientOrderIndex),
+        clientOrderId: pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -958,7 +960,7 @@ export class LighterExecutionService
       pending.resolve({
         ok: false,
         status: 'unknown',
-        clientOrderId: '',
+        clientOrderId: pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity: 0,
