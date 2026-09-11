@@ -1,12 +1,12 @@
 services:
   trade_bot:
     build: .
-    container_name: trade_bot_crypto_impulse
+    container_name: trade_lighter
     restart: unless-stopped
     ports:
-      - "3002:3002"
+      - "3005:3005"
     environment:
-      - PORT=3002
+      - PORT=3005
       - NODE_ENV=production
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
