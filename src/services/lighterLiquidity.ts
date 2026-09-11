@@ -5,9 +5,6 @@ const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-const MIN_DAILY_VOLUME = 0;
-const MIN_DAILY_TRADES = 0;
-
 export interface LighterMarket {
   symbol: string;
   marketId: number;
@@ -21,11 +18,9 @@ export interface LighterMarket {
 }
 
 interface ApiMarketConfig {
-  market_margin_mode?: number;
   force_reduce_only?: boolean;
   trading_hours?: string;
   hidden?: boolean;
-  rfq_enabled?: boolean;
 }
 
 interface ApiMarket {
@@ -41,10 +36,6 @@ interface ApiMarket {
   daily_trades_count: string | number;
   open_interest: string | number;
   market_config?: ApiMarketConfig;
-  market_flags?: number;
-  strategy_index?: number;
-  base_asset_id?: number;
-  quote_asset_id?: number;
 }
 
 interface ApiResponse {
@@ -53,83 +44,64 @@ interface ApiResponse {
   order_book_details?: ApiMarket[];
 }
 
+const NON_CRYPTO_SYMBOLS = new Set([
+  'SAMSUNG',
+  'KIOXIA',
+  'CTR',
+  'WTI',
+  'AXS',
+  'INTC',
+  'SPCX',
+  'PONS',
+  'URA',
+  'IWM',
+  'ROBO',
+  'MINIMAX',
+  'CASHCAT',
+  'META',
+  'BOT',
+  'BB',
+  'KRCOMP',
+  'EURUSD',
+  'GBPUSD',
+  'NZDUSD',
+  'US500',
+  'US100',
+  'XAU',
+  'XAG',
+  'BRENT',
+  'BRENTOIL',
+  'SKHYNIXUSD',
+  'SNDK',
+  'MSFT',
+  'NVDA',
+  'MU',
+  'QQQ',
+  'SPY',
+  'USELESS',
+  'STRC',
+  'AAPL',
+  'HOOD',
+  'ORCL'
+]);
+
 function toNumber(
   value: string | number | undefined
 ): number {
   const result = Number(value);
 
-  return Number.isFinite(result) ? result : 0;
-}
-
-function isClearlyNonCrypto(
-  market: ApiMarket
-): boolean {
-  const symbol = market.symbol.toUpperCase();
-
-  /*
-   * Crypto markets normally trade 24/7.
-   * Non-empty trading_hours is a strong RWA indicator.
-   */
-  if (
-    market.market_config?.trading_hours &&
-    market.market_config.trading_hours.trim() !== ''
-  ) {
-    return true;
-  }
-
-  /*
-   * RWA and special markets may be forced into
-   * reduce-only mode. They should not be selected
-   * for new crypto strategy entries.
-   */
-  if (
-    market.market_config?.force_reduce_only === true
-  ) {
-    return true;
-  }
-
-  /*
-   * These symbols are obvious non-crypto instruments.
-   * This is only a safety fallback for symbols that
-   * expose incomplete classification metadata.
-   */
-  const obviousRwaName =
-    symbol.includes('USD') ||
-    symbol.includes('OIL') ||
-    symbol.includes('GOLD') ||
-    symbol.includes('SILVER') ||
-    symbol.includes('BRENT') ||
-    symbol.includes('WTI') ||
-    symbol === 'SPY' ||
-    symbol === 'QQQ' ||
-    symbol === 'IWM' ||
-    symbol === 'US500' ||
-    symbol === 'US100' ||
-    symbol === 'MSFT' ||
-    symbol === 'NVDA' ||
-    symbol === 'INTC' ||
-    symbol === 'META' ||
-    symbol === 'MU' ||
-    symbol === 'SNDK' ||
-    symbol === 'SAMSUNG' ||
-    symbol === 'KIOXIA' ||
-    symbol === 'SKHYNIX';
-
-  if (obviousRwaName) {
-    return true;
-  }
-
-  return false;
+  return Number.isFinite(result)
+    ? result
+    : 0;
 }
 
 function isEligibleMarket(
   market: ApiMarket
 ): boolean {
-  if (market.market_type !== 'perp') {
-    return false;
-  }
-
-  if (market.status !== 'active') {
+  if (
+    market.market_type !== 'perp' ||
+    market.status !== 'active'
+  ) {
     return false;
   }
 
@@ -139,23 +111,24 @@ function isEligibleMarket(
     return false;
   }
 
-  if (isClearlyNonCrypto(market)) {
+  if (
+    market.market_config?.force_reduce_only === true
+  ) {
     return false;
   }
 
-  const dailyVolume = toNumber(
-    market.daily_quote_token_volume
-  );
-
-  const dailyTrades = toNumber(
-    market.daily_trades_count
-  );
-
-  if (dailyVolume < MIN_DAILY_VOLUME) {
+  if (
+    market.market_config?.trading_hours &&
+    market.market_config.trading_hours.trim() !== ''
+  ) {
     return false;
   }
 
-  if (dailyTrades < MIN_DAILY_TRADES) {
+  if (
+    NON_CRYPTO_SYMBOLS.has(
+      market.symbol.toUpperCase()
+    )
+  ) {
     return false;
   }
 
@@ -188,23 +161,17 @@ export async function fetchTopLighterMarkets(
 
   if (!response.ok) {
     throw new Error(
-      `Lighter markets HTTP ${response.status}: ${body}`
+      `Lighter markets HTTP ` +
+        `${response.status}: ${body}`
     );
   }
 
-  let data: ApiResponse;
-
-  try {
-    data = JSON.parse(body) as ApiResponse;
-  } catch {
-    throw new Error(
-      `Invalid JSON from Lighter markets API: ${body}`
-    );
-  }
+  const data = JSON.parse(body) as ApiResponse;
 
   if (data.code !== 200) {
     throw new Error(
-      `Lighter markets API error ${data.code}: ` +
+      `Lighter markets API error ` +
+        `${data.code}: ` +
         `${data.message ?? 'unknown error'}`
     );
   }
@@ -258,13 +225,17 @@ export async function fetchTopLighterMarkets(
         );
       }
 
-      return b.openInterest - a.openInterest;
+      return (
+        b.openInterest -
+        a.openInterest
+      );
     })
     .slice(0, limit);
 
   console.log(
     `[${new Date().toISOString()}] ` +
-      `Lighter markets: total=${allMarkets.length}, ` +
+      `Lighter markets: ` +
+      `total=${allMarkets.length}, ` +
       `eligible=${eligibleMarkets.length}, ` +
       `selected=${markets.length}`
   );
