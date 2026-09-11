@@ -1,6 +1,8 @@
 import {
   SIGNAL_CHECK_INTERVAL_MS,
-  POSITION_CHECK_INTERVAL_MS
+  POSITION_CHECK_INTERVAL_MS,
+  TOP_MARKETS_LIMIT,
+  MARKET_REFRESH_INTERVAL_MS
 } from '../config/constants';
 import { runBotOnce } from './botRunner';
 import {
