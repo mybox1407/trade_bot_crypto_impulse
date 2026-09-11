@@ -23,7 +23,6 @@ const BASE_AMOUNT_DECIMALS = 8;
 const PRICE_DECIMALS = 2;
 
 const ORDER_WAIT_TIMEOUT_MS = 15_000;
-const ORDER_POLL_INTERVAL_MS = 100;
 
 type ApiResponse = {
   code?: number;
@@ -31,12 +30,6 @@ type ApiResponse = {
   tx_hash?: string;
   txHash?: string;
 };
-
-type CreateMarketOrderResult = [
-  unknown,
-  ApiResponse | null,
-  string | null
-];
 
 type LighterOrder = {
   order_index?: number | string;
@@ -72,12 +65,12 @@ type LighterTrade = {
   timestamp?: number;
 };
 
-type AccountMarketMessage = {
+type AccountMessage = {
   type?: string;
   channel?: string;
   account?: number;
   orders?: LighterOrder[];
-  trades?: LighterTrade[];
+  trades?: LighterTrade[] | Record<string, LighterTrade[]>;
 };
 
 type PendingOrder = {
@@ -100,6 +93,7 @@ export class LighterExecutionService
   private accountWsPingTimer?: NodeJS.Timeout;
   private accountWsStopped = false;
   private accountWsConnecting = false;
+  private authToken?: string;
 
   private readonly pendingOrders =
     new Map<number, PendingOrder>();
@@ -312,21 +306,22 @@ export class LighterExecutionService
     ok: false;
     message: string;
   }> {
-    const result =
+    // Передаём -1 для авто-управления nonce и apiKeyIndex [2]
+    const [
+      order,
+      tx,
+      sdkError
+    ] =
       await this.signerClient.create_market_order(
         marketId,
         clientOrderIndex,
         baseAmount,
         this.toPriceUnits(expectedPrice),
         isAsk,
-        reduceOnly
-      ) as CreateMarketOrderResult;
-
-    const [
-      order,
-      response,
-      sdkError
-    ] = result;
+        reduceOnly,
+        -1,    // nonce: auto
+        -1     // apiKeyIndex: auto
+      );
 
     if (sdkError) {
       return {
@@ -335,33 +330,13 @@ export class LighterExecutionService
       };
     }
 
-    if (!response) {
-      return {
-        ok: false,
-        message:
-          'Lighter returned no API response'
-      };
-    }
-
-    if (
-      response.code != null &&
-      response.code !== 200
-    ) {
-      return {
-        ok: false,
-        message:
-          response.message ??
-          `Lighter API error: ${response.code}`
-      };
-    }
-
-    const orderRecord =
-      order as Record<string, unknown> | null;
-
+    // tx — это объект транзакции, а не HTTP response [2]
     const orderId =
-      this.readOrderId(orderRecord) ??
-      response.tx_hash ??
-      response.txHash;
+      this.readOrderId(
+        order as Record<string, unknown> | null
+      ) ??
+      (tx as Record<string, unknown>)?.tx_hash as string | undefined ??
+      (tx as Record<string, unknown>)?.txHash as string | undefined;
 
     console.log(
       `[${new Date().toISOString()}] ` +
@@ -416,7 +391,7 @@ export class LighterExecutionService
           resolve,
           timer
         }
-      });
+      );
 
       this.ensureAccountWebSocket();
     });
@@ -427,7 +402,7 @@ export class LighterExecutionService
     this.ensureAccountWebSocket();
   }
 
-  private ensureAccountWebSocket(): void {
+  private async ensureAccountWebSocket(): void {
     if (
       this.accountWsConnecting ||
       this.accountWs?.readyState === WebSocket.OPEN
@@ -455,44 +430,41 @@ export class LighterExecutionService
       );
 
       try {
-        const [
-          auth,
-          authError
-        ] =
-          this.signerClient
-            .create_auth_token_with_expiry(
-              60 * 60,
-              undefined,
-              this.apiKeyIndex
-            );
+        // Создаём auth token один раз и кэшируем [4][8]
+        if (!this.authToken) {
+          const [
+            auth,
+            authError
+          ] =
+            this.signerClient
+              .create_auth_token_with_expiry(
+                60 * 60,
+                undefined,
+                this.apiKeyIndex
+              );
 
-        if (authError || !auth) {
-          throw new Error(
-            authError ??
-              'Failed to create auth token'
-          );
+          if (authError || !auth) {
+            throw new Error(
+              authError ??
+                'Failed to create auth token'
+            );
+          }
+
+          this.authToken = auth;
         }
 
+        // Правильный формат канала: account_all/{accountIndex} [3]
         ws.send(
           JSON.stringify({
             type: 'subscribe',
-            channel:
-              `account_all_orders/${this.accountIndex}`,
-            auth
-          })
-        );
-
-        ws.send(
-          JSON.stringify({
-            type: 'subscribe',
-            channel:
-              `account_all_trades/${this.accountIndex}`
+            channel: `account_all/${this.accountIndex}`,
+            auth: this.authToken
           })
         );
 
         console.log(
           `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Account channels subscribed`
+            `[LIGHTER] Account channel subscribed: account_all/${this.accountIndex}`
         );
       } catch (error) {
         console.error(
@@ -523,10 +495,7 @@ export class LighterExecutionService
         const message =
           JSON.parse(
             raw.toString()
-          ) as AccountMarketMessage & {
-            trades?: LighterTrade[] |
-              Record<string, LighterTrade[]>;
-          };
+          ) as AccountMessage;
 
         this.handleAccountMessage(
           message
@@ -577,10 +546,7 @@ export class LighterExecutionService
   }
 
   private handleAccountMessage(
-    message: AccountMarketMessage & {
-      trades?: LighterTrade[] |
-        Record<string, LighterTrade[]>;
-    }
+    message: AccountMessage
   ): void {
     const orders =
       Array.isArray(message.orders)
@@ -857,9 +823,6 @@ export class LighterExecutionService
     trade: LighterTrade
   ): string | undefined {
     return (
-      this.toString(
-        trade.trade_id_str
-      ) ??
       this.toString(
         trade.trade_id
       ) ??
