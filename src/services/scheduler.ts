@@ -1,5 +1,4 @@
 import {
-  TRADING_PAIRS,
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
 } from '../config/constants';
