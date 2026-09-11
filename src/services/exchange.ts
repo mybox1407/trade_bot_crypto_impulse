@@ -14,12 +14,24 @@ const LIGHTER_API_URL =
 
 const MAX_CANDLES = 250;
 
+type MarketReference = {
+  symbol: string;
+  marketId: number;
+};
+
 const candlesByMarket = new Map<number, Candle[]>();
 const pricesByMarket = new Map<number, MarketPrice>();
 const clients = new Map<number, LighterWsClient>();
 
-function timeframeToSeconds(timeframe: string): number {
-  const match = timeframe.match(/^(\d+)([mhd])$/);
+const dynamicMarketsBySymbol =
+  new Map<string, MarketReference>();
+
+function timeframeToSeconds(
+  timeframe: string
+): number {
+  const match = timeframe.match(
+    /^(\d+)([mhd])$/
+  );
 
   if (!match) {
     throw new Error(
@@ -59,13 +71,69 @@ function normalizeCandle(raw: {
   };
 }
 
+function normalizeSymbol(
+  symbol: string
+): string {
+  const value = symbol.trim().toUpperCase();
+
+  return value.endsWith('/USDT')
+    ? value
+    : `${value}/USDT`;
+}
+
+function resolveMarket(
+  symbol: string
+): MarketReference {
+  const normalizedSymbol =
+    normalizeSymbol(symbol);
+
+  const dynamicMarket =
+    dynamicMarketsBySymbol.get(
+      normalizedSymbol
+    );
+
+  if (dynamicMarket) {
+    return dynamicMarket;
+  }
+
+  return getLighterMarket(normalizedSymbol);
+}
+
+export function registerDynamicMarket(
+  market: MarketReference
+): void {
+  const pair = normalizeSymbol(market.symbol);
+
+  dynamicMarketsBySymbol.set(pair, {
+    symbol: pair,
+    marketId: market.marketId
+  });
+}
+
+export function unregisterDynamicMarket(
+  marketId: number
+): void {
+  for (
+    const [symbol, market]
+    of dynamicMarketsBySymbol
+  ) {
+    if (market.marketId === marketId) {
+      dynamicMarketsBySymbol.delete(symbol);
+    }
+  }
+}
+
 async function loadHistoricalCandles(
   marketId: number,
   timeframe: string,
   limit: number
 ): Promise<Candle[]> {
-  const now = Math.floor(Date.now() / 1000);
-  const candleSeconds = timeframeToSeconds(timeframe);
+  const now = Math.floor(
+    Date.now() / 1000
+  );
+
+  const candleSeconds =
+    timeframeToSeconds(timeframe);
 
   const startTimestamp =
     now - limit * candleSeconds;
@@ -73,16 +141,20 @@ async function loadHistoricalCandles(
   const params = new URLSearchParams({
     market_id: String(marketId),
     resolution: timeframe,
-    start_timestamp: String(startTimestamp),
+    start_timestamp: String(
+      startTimestamp
+    ),
     end_timestamp: String(now),
     count_back: String(limit)
   });
 
   const url =
-    `${LIGHTER_API_URL}/api/v1/candles?${params.toString()}`;
+    `${LIGHTER_API_URL}/api/v1/candles?` +
+    params.toString();
 
   console.log(
-    `[${new Date().toISOString()}] Loading historical candles: ${url}`
+    `[${new Date().toISOString()}] ` +
+      `Loading historical candles: ${url}`
   );
 
   const response = await fetch(url);
@@ -90,7 +162,8 @@ async function loadHistoricalCandles(
 
   if (!response.ok) {
     throw new Error(
-      `Lighter candles HTTP ${response.status}: ${body}`
+      `Lighter candles HTTP ` +
+        `${response.status}: ${body}`
     );
   }
 
@@ -110,12 +183,13 @@ async function loadHistoricalCandles(
 
   if (data.code !== 200) {
     throw new Error(
-      `Lighter candles API error ${data.code}: ` +
+      `Lighter candles API error ` +
+        `${data.code}: ` +
         `${data.message ?? 'unknown error'}`
     );
   }
 
-  const candles = (data.c ?? [])
+  return (data.c ?? [])
     .map(normalizeCandle)
     .filter(candle =>
       Number.isFinite(candle.time) &&
@@ -125,55 +199,49 @@ async function loadHistoricalCandles(
       Number.isFinite(candle.close) &&
       Number.isFinite(candle.volume)
     )
-    .sort((a, b) => a.time - b.time);
-
-  return candles.slice(-limit);
+    .sort((a, b) =>
+      a.time - b.time
+    )
+    .slice(-limit);
 }
 
-export async function startMarketData(
-  symbol: string,
-  timeframe = '15m'
-): Promise<void> {
-  const market = getLighterMarket(symbol);
-
-  if (clients.has(market.marketId)) {
-    return;
-  }
-
-  const historicalCandles = await loadHistoricalCandles(
-    market.marketId,
-    timeframe,
-    MAX_CANDLES
-  );
-
-  if (historicalCandles.length === 0) {
-    throw new Error(
-      `No historical candles received for ${symbol}`
-    );
-  }
+function attachClient(
+  market: MarketReference,
+  timeframe: string,
+  historicalCandles: Candle[]
+): void {
+  const marketId = market.marketId;
 
   candlesByMarket.set(
-    market.marketId,
+    marketId,
     historicalCandles
   );
 
   const client = new LighterWsClient(
-    market.marketId,
+    marketId,
     timeframe,
     candle => {
       const candles =
-        candlesByMarket.get(market.marketId) ?? [];
+        candlesByMarket.get(marketId) ?? [];
 
       const last =
         candles[candles.length - 1];
 
-      if (!last || candle.time > last.time) {
+      if (
+        !last ||
+        candle.time > last.time
+      ) {
         candles.push(candle);
-      } else if (candle.time === last.time) {
-        candles[candles.length - 1] = candle;
+      } else if (
+        candle.time === last.time
+      ) {
+        candles[candles.length - 1] =
+          candle;
       }
 
-      candles.sort((a, b) => a.time - b.time);
+      candles.sort((a, b) =>
+        a.time - b.time
+      );
 
       if (candles.length > MAX_CANDLES) {
         candles.splice(
@@ -183,24 +251,98 @@ export async function startMarketData(
       }
 
       candlesByMarket.set(
-        market.marketId,
+        marketId,
         candles
       );
     },
     price => {
       pricesByMarket.set(
-        market.marketId,
+        marketId,
         price
       );
     }
   );
 
-  clients.set(market.marketId, client);
+  clients.set(marketId, client);
   client.connect();
+}
+
+export async function startMarketData(
+  symbol: string,
+  timeframe = '15m'
+): Promise<void> {
+  const market = resolveMarket(symbol);
+
+  if (clients.has(market.marketId)) {
+    return;
+  }
+
+  const historicalCandles =
+    await loadHistoricalCandles(
+      market.marketId,
+      timeframe,
+      MAX_CANDLES
+    );
+
+  if (historicalCandles.length === 0) {
+    throw new Error(
+      `No historical candles received ` +
+        `for ${symbol}`
+    );
+  }
+
+  attachClient(
+    market,
+    timeframe,
+    historicalCandles
+  );
 
   console.log(
-    `[${new Date().toISOString()}] Market data started: ` +
-      `${symbol}, marketId=${market.marketId}, ` +
+    `[${new Date().toISOString()}] ` +
+      `Market data started: ${symbol}, ` +
+      `marketId=${market.marketId}, ` +
+      `candles=${historicalCandles.length}`
+  );
+}
+
+export async function startMarketDataByMarket(
+  market: MarketReference,
+  timeframe = '15m'
+): Promise<void> {
+  registerDynamicMarket(market);
+
+  if (clients.has(market.marketId)) {
+    return;
+  }
+
+  const historicalCandles =
+    await loadHistoricalCandles(
+      market.marketId,
+      timeframe,
+      MAX_CANDLES
+    );
+
+  if (historicalCandles.length === 0) {
+    throw new Error(
+      `No historical candles received ` +
+        `for ${market.symbol}`
+    );
+  }
+
+  attachClient(
+    {
+      symbol: normalizeSymbol(market.symbol),
+      marketId: market.marketId
+    },
+    timeframe,
+    historicalCandles
+  );
+
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Market data started: ` +
+      `${normalizeSymbol(market.symbol)}, ` +
+      `marketId=${market.marketId}, ` +
       `candles=${historicalCandles.length}`
   );
 }
@@ -210,7 +352,7 @@ export function getCandles(
   _timeframe = '15m',
   limit = MAX_CANDLES
 ): Candle[] {
-  const market = getLighterMarket(symbol);
+  const market = resolveMarket(symbol);
 
   const candles =
     candlesByMarket.get(market.marketId) ?? [];
@@ -221,7 +363,7 @@ export function getCandles(
 export function getCurrentPrice(
   symbol: string
 ): number | null {
-  const market = getLighterMarket(symbol);
+  const market = resolveMarket(symbol);
 
   const price =
     pricesByMarket.get(market.marketId);
@@ -246,87 +388,11 @@ export function getCurrentPrice(
 export function getMarketPrice(
   symbol: string
 ): MarketPrice | null {
-  const market = getLighterMarket(symbol);
+  const market = resolveMarket(symbol);
 
   return (
     pricesByMarket.get(market.marketId) ??
     null
-  );
-}
-
-export async function startMarketDataByMarket(
-  market: {
-    symbol: string;
-    marketId: number;
-  },
-  timeframe = '15m'
-): Promise<void> {
-  const marketId = market.marketId;
-
-  if (clients.has(marketId)) {
-    return;
-  }
-
-  const historicalCandles =
-    await loadHistoricalCandles(
-      marketId,
-      timeframe,
-      MAX_CANDLES
-    );
-
-  if (historicalCandles.length === 0) {
-    throw new Error(
-      `No historical candles received for ${market.symbol}`
-    );
-  }
-
-  candlesByMarket.set(
-    marketId,
-    historicalCandles
-  );
-
-  const client = new LighterWsClient(
-    marketId,
-    timeframe,
-    candle => {
-      const candles =
-        candlesByMarket.get(marketId) ?? [];
-
-      const last =
-        candles[candles.length - 1];
-
-      if (!last || candle.time > last.time) {
-        candles.push(candle);
-      } else if (candle.time === last.time) {
-        candles[candles.length - 1] = candle;
-      }
-
-      candles.sort((a, b) => a.time - b.time);
-
-      if (candles.length > MAX_CANDLES) {
-        candles.splice(
-          0,
-          candles.length - MAX_CANDLES
-        );
-      }
-
-      candlesByMarket.set(
-        marketId,
-        candles
-      );
-    },
-    price => {
-      pricesByMarket.set(marketId, price);
-    }
-  );
-
-  clients.set(marketId, client);
-  client.connect();
-
-  console.log(
-    `[${new Date().toISOString()}] Market data started: ` +
-      `${market.symbol}/USDT, marketId=${marketId}, ` +
-      `candles=${historicalCandles.length}`
   );
 }
 
@@ -338,16 +404,16 @@ export function stopMarketDataByMarketId(
   clients.delete(marketId);
   candlesByMarket.delete(marketId);
   pricesByMarket.delete(marketId);
+
+  unregisterDynamicMarket(marketId);
 }
 
 export function stopMarketData(
   symbol: string
 ): void {
-  const market = getLighterMarket(symbol);
+  const market = resolveMarket(symbol);
 
-  clients.get(market.marketId)?.stop();
-
-  clients.delete(market.marketId);
-  candlesByMarket.delete(market.marketId);
-  pricesByMarket.delete(market.marketId);
+  stopMarketDataByMarketId(
+    market.marketId
+  );
 }
