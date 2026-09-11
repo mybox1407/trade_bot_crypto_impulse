@@ -87,7 +87,10 @@ export async function refreshTopMarkets(): Promise<void> {
     const pair = toTradingPair(nextMarket);
 
     if (!previousPairs.has(pair)) {
-      await startMarketData(pair, '15m');
+      await startMarketDataByMarket(
+        nextMarket,
+        '15m'
+      );
 
       console.log(
         `[${new Date().toISOString()}] ` +
