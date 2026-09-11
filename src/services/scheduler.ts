@@ -11,7 +11,8 @@ import {
   startMarketData,
   stopMarketData,
   getCurrentPrice,
-  getMarketPrice
+  getMarketPrice,
+  resolveMarket
 } from './exchange';
 
 import {
@@ -610,11 +611,10 @@ async function checkSignals(): Promise<void> {
 
           const clientOrderId =
             `${symbol}-${Date.now()}-open`;
-
-          const marketPrice = getMarketPrice(symbol);
-          const marketId =
-            marketPrice?.marketId ?? 0;
-
+          
+          const marketRef = resolveMarket(symbol);
+          const marketId = marketRef.marketId;
+          
           const executionResult =
             await executionService.openPosition({
               symbol,
