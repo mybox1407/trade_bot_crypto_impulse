@@ -11,7 +11,7 @@ import {
 } from './lighterLiquidity';
 
 import {
-  startMarketData,
+  startMarketDataByMarket,
   stopMarketData
 } from './exchange';
 
