@@ -179,7 +179,7 @@ export function getLastClosedTrade() {
 }
 
 export function getPositionNotional() {
-  return balance * POSITION_PERCENT;
+  return getAvailableBalance() * POSITION_PERCENT;
 }
 
 export function getRiskCapital() {
@@ -487,11 +487,6 @@ export function closePosition(
     openPosition => openPosition.id !== positionId
   );
 
-  reservedCapital = Math.max(
-    0,
-    reservedCapital - position.reservedCapital
-  );
-
   reservedCapital = calculateReservedCapital();
 
   balance += netPnL;
@@ -618,20 +613,16 @@ export function partialClosePosition(
   const oldQuantity = position.quantity;
   const oldNotional = position.notional;
 
-  position.quantity -= quantityToClose;
-
-  position.notional = position.quantity * position.entryPrice;
-  position.reservedCapital = position.notional;
-
-  position.entryFee -= proportionalEntryFee;
+  const newQuantity = position.quantity - quantityToClose;
+  const newNotional = newQuantity * position.entryPrice;
 
   const closedNotional =
     (quantityToClose / oldQuantity) * oldNotional;
 
-  reservedCapital = Math.max(
-    0,
-    reservedCapital - closedNotional
-  );
+  position.quantity = newQuantity;
+  position.notional = newNotional;
+  position.reservedCapital = newNotional;
+  position.entryFee -= proportionalEntryFee;
 
   reservedCapital = calculateReservedCapital();
 
@@ -689,7 +680,16 @@ export function updatePositionStopLoss(
     return false;
   }
 
-  currentPositions[index].stopLossPrice = newStopLossPrice;
+  currentPositions = currentPositions.map(position => {
+    if (position.id !== positionId) {
+      return position;
+    }
+
+    return {
+      ...position,
+      stopLossPrice: newStopLossPrice
+    };
+  });
 
   return true;
 }
