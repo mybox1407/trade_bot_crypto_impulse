@@ -779,6 +779,16 @@ export class LighterExecutionService
       return;
     }
 
+    if (pending.marketId !== trade.market_id) {
+      console.warn(
+        `[${new Date().toISOString()}] Trade market_id mismatch: ` +
+          `pending=${pending.marketId}, trade=${trade.market_id}, ` +
+          `clientOrderIndex=${clientOrderIndex}`
+      );
+
+      return;
+    }
+
     const filledQuantityRaw =
       this.toNumber(trade.size);
 
