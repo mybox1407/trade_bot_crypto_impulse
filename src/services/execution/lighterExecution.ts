@@ -1,3 +1,5 @@
+import WebSocket from 'ws';
+
 import {
   ExecutionService,
   OpenExecutionRequest,
@@ -13,46 +15,94 @@ const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-const DEFAULT_SIZE_DECIMALS = 8;
+const LIGHTER_WS_URL =
+  process.env.LIGHTER_WS_URL ??
+  'wss://mainnet.zklighter.elliot.ai/stream';
+
+const BASE_AMOUNT_DECIMALS = 8;
 const PRICE_DECIMALS = 2;
 
-interface LighterFill {
-  fill_id?: string;
-  order_index?: number;
-  price?: string | number;
-  quantity?: string | number;
-  fee?: string | number;
-  timestamp?: number;
-  is_ask?: number;
-}
+const ORDER_WAIT_TIMEOUT_MS = 15_000;
+const ORDER_POLL_INTERVAL_MS = 100;
 
-interface FillsResponse {
-  code: number;
+type ApiResponse = {
+  code?: number;
   message?: string;
-  fills?: LighterFill[];
-}
-
-type FillStats = {
-  totalQuantity: number;
-  averageFillPrice: number;
-  totalFee: number;
+  tx_hash?: string;
+  txHash?: string;
 };
 
 type CreateMarketOrderResult = [
   unknown,
-  {
-    code?: number;
-    message?: string;
-    tx_hash?: string;
-    txHash?: string;
-  } | null,
+  ApiResponse | null,
   string | null
 ];
+
+type LighterOrder = {
+  order_index?: number | string;
+  order_id?: string;
+  client_order_index?: number | string;
+  client_order_id?: string;
+  market_index?: number;
+  initial_base_amount?: string;
+  remaining_base_amount?: string;
+  filled_base_amount?: string;
+  filled_quote_amount?: string;
+  status?: string;
+  type?: string;
+  is_ask?: boolean;
+  reduce_only?: boolean;
+};
+
+type LighterTrade = {
+  trade_id?: number | string;
+  tx_hash?: string;
+  market_id?: number;
+  size?: string;
+  price?: string;
+  usd_amount?: string;
+  ask_id?: number | string;
+  bid_id?: number | string;
+  ask_client_id?: number | string;
+  bid_client_id?: number | string;
+  ask_account_id?: number;
+  bid_account_id?: number;
+  taker_fee?: number;
+  maker_fee?: number;
+  timestamp?: number;
+};
+
+type AccountMarketMessage = {
+  type?: string;
+  channel?: string;
+  account?: number;
+  orders?: LighterOrder[];
+  trades?: LighterTrade[];
+};
+
+type PendingOrder = {
+  marketId: number;
+  clientOrderIndex: number;
+  requestedQuantity: number;
+  resolve: (
+    result: ExecutionResult
+  ) => void;
+  timer: NodeJS.Timeout;
+};
 
 export class LighterExecutionService
   implements ExecutionService
 {
   private readonly signerClient: SignerClient;
+
+  private accountWs?: WebSocket;
+  private accountWsReconnectTimer?: NodeJS.Timeout;
+  private accountWsPingTimer?: NodeJS.Timeout;
+  private accountWsStopped = false;
+  private accountWsConnecting = false;
+
+  private readonly pendingOrders =
+    new Map<number, PendingOrder>();
 
   constructor(
     apiKeyPrivateKey: string,
@@ -62,7 +112,7 @@ export class LighterExecutionService
     if (!apiKeyPrivateKey) {
       throw new Error(
         'LighterExecutionService: ' +
-          'LIGHTER_API_KEY is required'
+          'LIGHTER_API_KEY (private key) is required'
       );
     }
 
@@ -97,6 +147,8 @@ export class LighterExecutionService
       apiKeyIndex,
       accountIndex
     );
+
+    this.startAccountWebSocket();
   }
 
   async openPosition(
@@ -113,20 +165,15 @@ export class LighterExecutionService
     );
 
     try {
-      const roundedQuantity =
-        this.roundQuantity(req.quantity);
+      const baseAmount =
+        this.toBaseAmount(req.quantity);
 
-      if (roundedQuantity <= 0) {
-        return {
-          ok: false,
-          status: 'rejected',
-          clientOrderId: req.clientOrderId,
-          requestedQuantity: req.quantity,
-          filledQuantity: 0,
-          message:
-            `Quantity is too small after rounding: ` +
+      if (baseAmount <= 0) {
+        return this.rejectedResult(
+          req,
+          `Quantity is too small after conversion: ` +
             `${req.quantity}`
-        };
+        );
       }
 
       const clientOrderIndex =
@@ -137,20 +184,29 @@ export class LighterExecutionService
           ? false
           : true;
 
-      const result =
-        await this.signerClient.create_market_order(
+      const submitted =
+        await this.submitMarketOrder(
           req.marketId,
           clientOrderIndex,
-          roundedQuantity,
-          this.encodePrice(req.expectedPrice),
+          baseAmount,
+          req.expectedPrice,
           isAsk,
           false
-        ) as CreateMarketOrderResult;
+        );
 
-      return this.parseExecutionResult(
-        result,
+      if (!submitted.ok) {
+        return this.rejectedResult(
+          req,
+          submitted.message
+        );
+      }
+
+      return await this.waitForOrderExecution(
         req,
-        roundedQuantity
+        req.marketId,
+        clientOrderIndex,
+        submitted.orderId,
+        req.quantity
       );
     } catch (error) {
       console.error(
@@ -159,17 +215,12 @@ export class LighterExecutionService
         error
       );
 
-      return {
-        ok: false,
-        status: 'unknown',
-        clientOrderId: req.clientOrderId,
-        requestedQuantity: req.quantity,
-        filledQuantity: 0,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unknown error'
-      };
+      return this.unknownResult(
+        req,
+        error instanceof Error
+          ? error.message
+          : 'Unknown error'
+      );
     }
   }
 
@@ -188,20 +239,15 @@ export class LighterExecutionService
     );
 
     try {
-      const roundedQuantity =
-        this.roundQuantity(req.quantity);
+      const baseAmount =
+        this.toBaseAmount(req.quantity);
 
-      if (roundedQuantity <= 0) {
-        return {
-          ok: false,
-          status: 'rejected',
-          clientOrderId: req.clientOrderId,
-          requestedQuantity: req.quantity,
-          filledQuantity: 0,
-          message:
-            `Quantity is too small after rounding: ` +
+      if (baseAmount <= 0) {
+        return this.rejectedResult(
+          req,
+          `Quantity is too small after conversion: ` +
             `${req.quantity}`
-        };
+        );
       }
 
       const clientOrderIndex =
@@ -212,20 +258,29 @@ export class LighterExecutionService
           ? true
           : false;
 
-      const result =
-        await this.signerClient.create_market_order(
+      const submitted =
+        await this.submitMarketOrder(
           req.marketId,
           clientOrderIndex,
-          roundedQuantity,
-          this.encodePrice(req.expectedPrice),
+          baseAmount,
+          req.expectedPrice,
           isAsk,
           true
-        ) as CreateMarketOrderResult;
+        );
 
-      return this.parseExecutionResult(
-        result,
+      if (!submitted.ok) {
+        return this.rejectedResult(
+          req,
+          submitted.message
+        );
+      }
+
+      return await this.waitForOrderExecution(
         req,
-        roundedQuantity
+        req.marketId,
+        clientOrderIndex,
+        submitted.orderId,
+        req.quantity
       );
     } catch (error) {
       console.error(
@@ -234,142 +289,551 @@ export class LighterExecutionService
         error
       );
 
-      return {
-        ok: false,
-        status: 'unknown',
-        clientOrderId: req.clientOrderId,
-        requestedQuantity: req.quantity,
-        filledQuantity: 0,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unknown error'
-      };
+      return this.unknownResult(
+        req,
+        error instanceof Error
+          ? error.message
+          : 'Unknown error'
+      );
     }
   }
 
-  private parseExecutionResult(
-    result: CreateMarketOrderResult,
-    req:
-      | OpenExecutionRequest
-      | CloseExecutionRequest,
-    roundedQuantity: number
-  ): ExecutionResult {
+  private async submitMarketOrder(
+    marketId: number,
+    clientOrderIndex: number,
+    baseAmount: number,
+    expectedPrice: number,
+    isAsk: boolean,
+    reduceOnly: boolean
+  ): Promise<{
+    ok: true;
+    orderId?: string;
+  } | {
+    ok: false;
+    message: string;
+  }> {
+    const result =
+      await this.signerClient.create_market_order(
+        marketId,
+        clientOrderIndex,
+        baseAmount,
+        this.toPriceUnits(expectedPrice),
+        isAsk,
+        reduceOnly
+      ) as CreateMarketOrderResult;
+
     const [
       order,
-      apiResponse,
+      response,
       sdkError
     ] = result;
 
     if (sdkError) {
       return {
         ok: false,
-        status: 'rejected',
-        clientOrderId: req.clientOrderId,
-        requestedQuantity: req.quantity,
-        filledQuantity: 0,
         message: sdkError
       };
     }
 
-    const response =
-      apiResponse ?? {};
-
-    const responseCode =
-      response.code;
-
-    if (
-      responseCode != null &&
-      responseCode !== 200
-    ) {
+    if (!response) {
       return {
         ok: false,
-        status: 'rejected',
-        clientOrderId: req.clientOrderId,
-        requestedQuantity: req.quantity,
-        filledQuantity: 0,
         message:
-          response.message ??
-          `Lighter API error: ${responseCode}`
+          'Lighter returned no API response'
       };
     }
 
-    const txHash =
-      response.tx_hash ??
-      response.txHash;
+    if (
+      response.code != null &&
+      response.code !== 200
+    ) {
+      return {
+        ok: false,
+        message:
+          response.message ??
+          `Lighter API error: ${response.code}`
+      };
+    }
 
     const orderRecord =
       order as Record<string, unknown> | null;
 
     const orderId =
-      this.readString(
-        orderRecord,
-        'order_index',
-        'orderIndex',
-        'id'
-      ) ??
-      txHash ??
-      `order-${Date.now()}`;
+      this.readOrderId(orderRecord) ??
+      response.tx_hash ??
+      response.txHash;
+
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `[LIGHTER] ORDER ACCEPTED ` +
+        `clientOrderIndex=${clientOrderIndex} ` +
+        `orderId=${orderId ?? 'n/a'}`
+    );
 
     return {
       ok: true,
-      status: 'submitted',
-      orderId,
-      clientOrderId: req.clientOrderId,
-      requestedQuantity: req.quantity,
-      filledQuantity: 0,
-      message:
-        'Order submitted; fill confirmation pending'
+      orderId
     };
   }
 
-  private roundQuantity(
-    quantity: number
-  ): number {
+  private async waitForOrderExecution(
+    req:
+      | OpenExecutionRequest
+      | CloseExecutionRequest,
+    marketId: number,
+    clientOrderIndex: number,
+    orderId: string | undefined,
+    requestedQuantity: number
+  ): Promise<ExecutionResult> {
+    return new Promise(resolve => {
+      const timer =
+        setTimeout(() => {
+          this.pendingOrders.delete(
+            clientOrderIndex
+          );
+
+          resolve({
+            ok: false,
+            status: 'unknown',
+            orderId,
+            clientOrderId:
+              req.clientOrderId,
+            requestedQuantity,
+            filledQuantity: 0,
+            message:
+              `Order accepted but execution ` +
+              `was not confirmed within ` +
+              `${ORDER_WAIT_TIMEOUT_MS}ms`
+          });
+        }, ORDER_WAIT_TIMEOUT_MS);
+
+      this.pendingOrders.set(
+        clientOrderIndex,
+        {
+          marketId,
+          clientOrderIndex,
+          requestedQuantity,
+          resolve,
+          timer
+        }
+      });
+
+      this.ensureAccountWebSocket();
+    });
+  }
+
+  private startAccountWebSocket(): void {
+    this.accountWsStopped = false;
+    this.ensureAccountWebSocket();
+  }
+
+  private ensureAccountWebSocket(): void {
     if (
-      !Number.isFinite(quantity) ||
-      quantity <= 0
+      this.accountWsConnecting ||
+      this.accountWs?.readyState === WebSocket.OPEN
     ) {
-      return 0;
+      return;
     }
 
-    const multiplier =
-      Math.pow(10, DEFAULT_SIZE_DECIMALS);
+    if (this.accountWsStopped) {
+      return;
+    }
 
-    return Math.floor(
-      quantity * multiplier
+    this.accountWsConnecting = true;
+
+    const ws =
+      new WebSocket(LIGHTER_WS_URL);
+
+    this.accountWs = ws;
+
+    ws.on('open', async () => {
+      this.accountWsConnecting = false;
+
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Account WebSocket connected`
+      );
+
+      try {
+        const [
+          auth,
+          authError
+        ] =
+          this.signerClient
+            .create_auth_token_with_expiry(
+              60 * 60,
+              undefined,
+              this.apiKeyIndex
+            );
+
+        if (authError || !auth) {
+          throw new Error(
+            authError ??
+              'Failed to create auth token'
+          );
+        }
+
+        ws.send(
+          JSON.stringify({
+            type: 'subscribe',
+            channel:
+              `account_all_orders/${this.accountIndex}`,
+            auth
+          })
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: 'subscribe',
+            channel:
+              `account_all_trades/${this.accountIndex}`
+          })
+        );
+
+        console.log(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Account channels subscribed`
+        );
+      } catch (error) {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Account WebSocket auth error`,
+          error
+        );
+
+        ws.close();
+      }
+
+      this.accountWsPingTimer =
+        setInterval(() => {
+          if (
+            ws.readyState === WebSocket.OPEN
+          ) {
+            ws.send(
+              JSON.stringify({
+                type: 'ping'
+              })
+            );
+          }
+        }, 30_000);
+    });
+
+    ws.on('message', raw => {
+      try {
+        const message =
+          JSON.parse(
+            raw.toString()
+          ) as AccountMarketMessage & {
+            trades?: LighterTrade[] |
+              Record<string, LighterTrade[]>;
+          };
+
+        this.handleAccountMessage(
+          message
+        );
+      } catch (error) {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Invalid account WS message`,
+          error
+        );
+      }
+    });
+
+    ws.on('error', error => {
+      console.error(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Account WebSocket error`,
+        error
+      );
+    });
+
+    ws.on('close', (code, reason) => {
+      this.accountWsConnecting = false;
+
+      if (this.accountWsPingTimer) {
+        clearInterval(
+          this.accountWsPingTimer
+        );
+
+        this.accountWsPingTimer =
+          undefined;
+      }
+
+      console.warn(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Account WebSocket closed ` +
+          `code=${code} ` +
+          `reason=${reason.toString()}`
+      );
+
+      if (!this.accountWsStopped) {
+        this.accountWsReconnectTimer =
+          setTimeout(() => {
+            this.ensureAccountWebSocket();
+          }, 3_000);
+      }
+    });
+  }
+
+  private handleAccountMessage(
+    message: AccountMarketMessage & {
+      trades?: LighterTrade[] |
+        Record<string, LighterTrade[]>;
+    }
+  ): void {
+    const orders =
+      Array.isArray(message.orders)
+        ? message.orders
+        : [];
+
+    for (const order of orders) {
+      this.handleOrderUpdate(order);
+    }
+
+    const trades =
+      this.flattenTrades(message.trades);
+
+    for (const trade of trades) {
+      this.handleTradeUpdate(trade);
+    }
+  }
+
+  private handleOrderUpdate(
+    order: LighterOrder
+  ): void {
+    const clientOrderIndex =
+      this.toNumber(
+        order.client_order_index
+      );
+
+    if (clientOrderIndex == null) {
+      return;
+    }
+
+    const pending =
+      this.pendingOrders.get(
+        clientOrderIndex
+      );
+
+    if (!pending) {
+      return;
+    }
+
+    const filledBaseAmount =
+      this.toNumber(
+        order.filled_base_amount
+      ) ?? 0;
+
+    const filledQuoteAmount =
+      this.toNumber(
+        order.filled_quote_amount
+      ) ?? 0;
+
+    const filledQuantity =
+      filledBaseAmount /
+      Math.pow(10, BASE_AMOUNT_DECIMALS);
+
+    if (
+      filledQuantity <= 0
+    ) {
+      const status =
+        order.status ?? '';
+
+      if (
+        status.startsWith('canceled') ||
+        status === 'filled'
+      ) {
+        this.resolvePendingOrder(
+          clientOrderIndex,
+          {
+            ok: false,
+            status:
+              status === 'filled'
+                ? 'unknown'
+                : 'rejected',
+            orderId:
+              this.readOrderId(
+                order as Record<
+                  string,
+                  unknown
+                >
+              ),
+            clientOrderId: undefined,
+            requestedQuantity:
+              pending.requestedQuantity,
+            filledQuantity: 0,
+            message:
+              `Order status: ${status}`
+          }
+        );
+      }
+
+      return;
+    }
+
+    const averageFillPrice =
+      filledQuoteAmount > 0
+        ? (
+            filledQuoteAmount /
+            filledBaseAmount
+          )
+        : 0;
+
+    if (
+      !Number.isFinite(
+        averageFillPrice
+      ) ||
+      averageFillPrice <= 0
+    ) {
+      return;
+    }
+
+    this.resolvePendingOrder(
+      clientOrderIndex,
+      {
+        ok: true,
+        status: 'filled',
+        orderId:
+          this.readOrderId(
+            order as Record<
+              string,
+              unknown
+            >
+          ),
+        requestedQuantity:
+          pending.requestedQuantity,
+        filledQuantity,
+        averageFillPrice,
+        message:
+          order.status ?? 'filled'
+      }
     );
   }
 
-  private encodePrice(price: number): number {
+  private handleTradeUpdate(
+    trade: LighterTrade
+  ): void {
+    const clientOrderIndex =
+      this.toNumber(
+        trade.ask_client_id
+      ) ??
+      this.toNumber(
+        trade.bid_client_id
+      );
+
     if (
-      !Number.isFinite(price) ||
+      clientOrderIndex == null
+    ) {
+      return;
+    }
+
+    const pending =
+      this.pendingOrders.get(
+        clientOrderIndex
+      );
+
+    if (!pending) {
+      return;
+    }
+
+    const filledQuantity =
+      this.toNumber(trade.size);
+
+    const price =
+      this.toNumber(trade.price);
+
+    if (
+      filledQuantity == null ||
+      filledQuantity <= 0 ||
+      price == null ||
       price <= 0
     ) {
-      throw new Error(
-        `Invalid order price: ${price}`
-      );
+      return;
     }
 
-    return Math.round(
-      price * Math.pow(10, PRICE_DECIMALS)
+    this.resolvePendingOrder(
+      clientOrderIndex,
+      {
+        ok: true,
+        status: 'filled',
+        orderId:
+          this.readTradeId(trade),
+        requestedQuantity:
+          pending.requestedQuantity,
+        filledQuantity,
+        averageFillPrice: price,
+        fee:
+          this.toNumber(
+            trade.taker_fee
+          ) ??
+          this.toNumber(
+            trade.maker_fee
+          ) ??
+          0,
+        message: 'Trade received'
+      }
     );
   }
 
-  private createClientOrderIndex(): number {
-    return Date.now();
+  private resolvePendingOrder(
+    clientOrderIndex: number,
+    result: ExecutionResult
+  ): void {
+    const pending =
+      this.pendingOrders.get(
+        clientOrderIndex
+      );
+
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+
+    this.pendingOrders.delete(
+      clientOrderIndex
+    );
+
+    pending.resolve(result);
   }
 
-  private readString(
-    object: Record<string, unknown> | null,
-    ...keys: string[]
+  private flattenTrades(
+    trades:
+      | LighterTrade[]
+      | Record<string, LighterTrade[]>
+      | undefined
+  ): LighterTrade[] {
+    if (!trades) {
+      return [];
+    }
+
+    if (Array.isArray(trades)) {
+      return trades;
+    }
+
+    return Object.values(trades)
+      .flat()
+      .filter(
+        trade => trade != null
+      );
+  }
+
+  private readOrderId(
+    order: Record<string, unknown> | null
   ): string | undefined {
-    if (!object) {
+    if (!order) {
       return undefined;
     }
 
-    for (const key of keys) {
-      const value = object[key];
+    for (const key of [
+      'order_id',
+      'order_index',
+      'client_order_id',
+      'client_order_index'
+    ]) {
+      const value =
+        order[key];
 
       if (
         typeof value === 'string' &&
@@ -389,142 +853,166 @@ export class LighterExecutionService
     return undefined;
   }
 
-  private async fetchFills(
-    marketId: number,
-    accountIndex: number
-  ): Promise<LighterFill[]> {
-    const params =
-      new URLSearchParams({
-        market_id: String(marketId),
-        account_index: String(accountIndex)
-      });
-
-    const response =
-      await fetch(
-        `${LIGHTER_API_URL}/api/v1/fills?` +
-          params.toString()
-      );
-
-    if (!response.ok) {
-      const body =
-        await response.text();
-
-      throw new Error(
-        `Lighter fills request failed: ` +
-          `HTTP ${response.status}: ${body}`
-      );
-    }
-
-    const data =
-      await response.json() as FillsResponse;
-
-    if (data.code !== 200) {
-      throw new Error(
-        `Lighter fills API error: ` +
-          `${data.code}: ` +
-          `${data.message ?? 'unknown error'}`
-      );
-    }
-
-    return data.fills ?? [];
+  private readTradeId(
+    trade: LighterTrade
+  ): string | undefined {
+    return (
+      this.toString(
+        trade.trade_id_str
+      ) ??
+      this.toString(
+        trade.trade_id
+      ) ??
+      trade.tx_hash
+    );
   }
 
-  private async waitForFills(
-    marketId: number,
-    accountIndex: number,
-    startedAt: number,
-    maxAttempts: number,
-    intervalMs: number
-  ): Promise<LighterFill[]> {
-    for (
-      let attempt = 0;
-      attempt < maxAttempts;
-      attempt++
+  private toBaseAmount(
+    quantity: number
+  ): number {
+    if (
+      !Number.isFinite(quantity) ||
+      quantity <= 0
     ) {
-      await this.sleep(intervalMs);
-
-      const fills =
-        await this.fetchFills(
-          marketId,
-          accountIndex
-        );
-
-      const newFills =
-        fills.filter(fill => {
-          const rawTimestamp =
-            Number(fill.timestamp);
-
-          if (
-            !Number.isFinite(rawTimestamp)
-          ) {
-            return false;
-          }
-
-          const timestampMs =
-            rawTimestamp < 10_000_000_000
-              ? rawTimestamp * 1000
-              : rawTimestamp;
-
-          return timestampMs >= startedAt;
-        });
-
-      if (newFills.length > 0) {
-        return newFills;
-      }
+      return 0;
     }
 
-    return [];
+    return Math.floor(
+      quantity *
+        Math.pow(
+          10,
+          BASE_AMOUNT_DECIMALS
+        )
+    );
   }
 
-  private calculateFillStats(
-    fills: LighterFill[]
-  ): FillStats {
-    let totalQuantity = 0;
-    let totalValue = 0;
-    let totalFee = 0;
-
-    for (const fill of fills) {
-      const quantity =
-        Number(fill.quantity);
-
-      const price =
-        Number(fill.price);
-
-      const fee =
-        Number(fill.fee);
-
-      if (
-        !Number.isFinite(quantity) ||
-        quantity <= 0 ||
-        !Number.isFinite(price) ||
-        price <= 0
-      ) {
-        continue;
-      }
-
-      totalQuantity += quantity;
-      totalValue += quantity * price;
-
-      if (Number.isFinite(fee)) {
-        totalFee += fee;
-      }
+  private toPriceUnits(
+    price: number
+  ): number {
+    if (
+      !Number.isFinite(price) ||
+      price <= 0
+    ) {
+      throw new Error(
+        `Invalid order price: ${price}`
+      );
     }
 
+    return Math.round(
+      price *
+        Math.pow(
+          10,
+          PRICE_DECIMALS
+        )
+    );
+  }
+
+  private createClientOrderIndex(): number {
+    return Date.now();
+  }
+
+  private toNumber(
+    value: unknown
+  ): number | null {
+    const number =
+      Number(value);
+
+    return Number.isFinite(number)
+      ? number
+      : null;
+  }
+
+  private toString(
+    value: unknown
+  ): string | undefined {
+    if (
+      typeof value === 'string' &&
+      value.length > 0
+    ) {
+      return value;
+    }
+
+    if (
+      typeof value === 'number' &&
+      Number.isFinite(value)
+    ) {
+      return String(value);
+    }
+
+    return undefined;
+  }
+
+  private rejectedResult(
+    req:
+      | OpenExecutionRequest
+      | CloseExecutionRequest,
+    message: string
+  ): ExecutionResult {
     return {
-      totalQuantity,
-      averageFillPrice:
-        totalQuantity > 0
-          ? totalValue / totalQuantity
-          : 0,
-      totalFee
+      ok: false,
+      status: 'rejected',
+      clientOrderId: req.clientOrderId,
+      requestedQuantity: req.quantity,
+      filledQuantity: 0,
+      message
     };
   }
 
-  private sleep(
-    ms: number
-  ): Promise<void> {
-    return new Promise(resolve => {
-      setTimeout(resolve, ms);
-    });
+  private unknownResult(
+    req:
+      | OpenExecutionRequest
+      | CloseExecutionRequest,
+    message: string
+  ): ExecutionResult {
+    return {
+      ok: false,
+      status: 'unknown',
+      clientOrderId: req.clientOrderId,
+      requestedQuantity: req.quantity,
+      filledQuantity: 0,
+      message
+    };
+  }
+
+  stop(): void {
+    this.accountWsStopped = true;
+
+    if (this.accountWsReconnectTimer) {
+      clearTimeout(
+        this.accountWsReconnectTimer
+      );
+
+      this.accountWsReconnectTimer =
+        undefined;
+    }
+
+    if (this.accountWsPingTimer) {
+      clearInterval(
+        this.accountWsPingTimer
+      );
+
+      this.accountWsPingTimer =
+        undefined;
+    }
+
+    this.accountWs?.close();
+    this.accountWs = undefined;
+
+    for (const pending of
+      this.pendingOrders.values()) {
+      clearTimeout(pending.timer);
+
+      pending.resolve({
+        ok: false,
+        status: 'unknown',
+        requestedQuantity:
+          pending.requestedQuantity,
+        filledQuantity: 0,
+        message:
+          'Execution service stopped'
+      });
+    }
+
+    this.pendingOrders.clear();
   }
 }
