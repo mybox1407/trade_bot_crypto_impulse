@@ -974,6 +974,27 @@ export class LighterExecutionService
     };
   }
 
+  public testAccountMessage(
+    rawMessage: unknown
+  ): void {
+    if (
+      rawMessage == null ||
+      typeof rawMessage !== 'object'
+    ) {
+      throw new Error(
+        'Test message must be an object'
+      );
+    }
+  
+    this.handleAccountMessage(
+      rawMessage as AccountMarketMessage & {
+        trades?:
+          | LighterTrade[]
+          | Record<string, LighterTrade[]>;
+      }
+    );
+  }
+
   stop(): void {
     this.accountWsStopped = true;
 
