@@ -99,14 +99,14 @@ export class LighterExecutionService
     new Map<number, PendingOrder>();
 
   constructor(
-    apiKeyPrivateKey: string,
+    apiKeySecret: string,
     private readonly apiKeyIndex: number,
     private readonly accountIndex: number
   ) {
-    if (!apiKeyPrivateKey) {
+    if (!apiKeySecret) {
       throw new Error(
         'LighterExecutionService: ' +
-          'LIGHTER_API_KEY (private key) is required'
+          'LIGHTER_API_SECRET (private key) is required'
       );
     }
 
@@ -131,9 +131,9 @@ export class LighterExecutionService
     }
 
     const normalizedKey =
-      apiKeyPrivateKey.startsWith('0x')
-        ? apiKeyPrivateKey.slice(2)
-        : apiKeyPrivateKey;
+      apiKeySecret.startsWith('0x')
+        ? apiKeySecret.slice(2)
+        : apiKeySecret;
 
     this.signerClient = new SignerClient(
       LIGHTER_API_URL,
@@ -306,7 +306,6 @@ export class LighterExecutionService
     ok: false;
     message: string;
   }> {
-    // Передаём -1 для авто-управления nonce и apiKeyIndex [2]
     const [
       order,
       tx,
@@ -319,8 +318,8 @@ export class LighterExecutionService
         this.toPriceUnits(expectedPrice),
         isAsk,
         reduceOnly,
-        -1,    // nonce: auto
-        -1     // apiKeyIndex: auto
+        -1,
+        -1
       );
 
     if (sdkError) {
@@ -330,7 +329,6 @@ export class LighterExecutionService
       };
     }
 
-    // tx — это объект транзакции, а не HTTP response [2]
     const orderId =
       this.readOrderId(
         order as Record<string, unknown> | null
@@ -430,7 +428,6 @@ export class LighterExecutionService
       );
 
       try {
-        // Создаём auth token один раз и кэшируем [4][8]
         if (!this.authToken) {
           const [
             auth,
@@ -453,7 +450,6 @@ export class LighterExecutionService
           this.authToken = auth;
         }
 
-        // Правильный формат канала: account_all/{accountIndex} [3]
         ws.send(
           JSON.stringify({
             type: 'subscribe',
