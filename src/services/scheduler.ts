@@ -1,18 +1,15 @@
 import {
   SIGNAL_CHECK_INTERVAL_MS,
-  POSITION_CHECK_INTERVAL_MS,
-  TOP_MARKETS_LIMIT,
-  MARKET_REFRESH_INTERVAL_MS
+  POSITION_CHECK_INTERVAL_MS
 } from '../config/constants';
 
 import { runBotOnce } from './botRunner';
 
 import {
-  startMarketData,
   stopMarketData,
   getCurrentPrice,
-  getMarketPrice,
-  resolveMarket
+  resolveMarket,
+  normalizeSymbol
 } from './exchange';
 
 import {
@@ -56,9 +53,7 @@ import {
 
 import {
   PaperExecutionService,
-  ExecutionService,
-  OpenExecutionRequest,
-  CloseExecutionRequest
+  ExecutionService
 } from './execution';
 
 const executionService: ExecutionService =
@@ -90,8 +85,6 @@ const TIME_STOP_MAX_LOSS_PERCENT = -0.5;
 const DEAD_TRADE_ENABLED = true;
 const DEAD_TRADE_CHECK_AFTER_SEC = 240;
 const DEAD_TRADE_MIN_MFE_ATR = 0.3;
-const ROUND_TRIP_FEE_PERCENT = TRADE_FEE_RATE * 2 * 100;
-const BE_SLIPPAGE_BUFFER_PERCENT = 0.05;
 const MIN_LOCKED_PERCENT = 0.25;
 
 let signalCheckInterval: NodeJS.Timeout | null = null;
@@ -101,13 +94,45 @@ let signalCheckRunning = false;
 let positionCheckRunning = false;
 let schedulerStopping = false;
 let schedulerStarted = false;
-
-let marketRefreshRunning = false;
+let schedulerFatalError: string | null = null;
 
 function formatPrice(price: number): string {
   return Number.isFinite(price)
     ? price.toFixed(4)
     : 'n/a';
+}
+
+function requireMarketId(
+  marketId: number | undefined,
+  context: string
+): number {
+  if (
+    marketId == null ||
+    !Number.isInteger(marketId) ||
+    marketId < 0
+  ) {
+    throw new Error(
+      `Missing or invalid marketId for ${context}: ${marketId}`
+    );
+  }
+
+  return marketId;
+}
+
+function markFatalError(message: string): void {
+  schedulerFatalError = message;
+
+  console.error(
+    `[${new Date().toISOString()}] FATAL SCHEDULER STATE ERROR: ${message}`
+  );
+}
+
+function ensureSchedulerHealthy(): void {
+  if (schedulerFatalError) {
+    throw new Error(
+      `Scheduler is blocked after fatal state error: ${schedulerFatalError}`
+    );
+  }
 }
 
 function formatOpenPositionsForTelegram(): string {
@@ -119,8 +144,17 @@ function formatOpenPositionsForTelegram(): string {
 
   return positions
     .map(position => {
-      const sideEmoji = position.side === 'long' ? '🟢' : '🔴';
-      return `${sideEmoji} ${position.symbol} ${position.side.toUpperCase()} | Entry: ${formatPrice(position.entryPrice)} | TP: ${formatPrice(position.takeProfitPrice)} | SL: ${formatPrice(position.stopLossPrice)} | Notional: ${position.notional.toFixed(2)}`;
+      const sideEmoji =
+        position.side === 'long' ? '🟢' : '🔴';
+
+      return (
+        `${sideEmoji} ${position.symbol} ` +
+        `${position.side.toUpperCase()} | ` +
+        `Entry: ${formatPrice(position.entryPrice)} | ` +
+        `TP: ${formatPrice(position.takeProfitPrice)} | ` +
+        `SL: ${formatPrice(position.stopLossPrice)} | ` +
+        `Notional: ${position.notional.toFixed(2)}`
+      );
     })
     .join('\n');
 }
@@ -146,7 +180,9 @@ async function sendTelegramSummary(
       result.status === 'not-ready'
   ).length;
 
-  const openPositionsCount = getOpenPositionsCount();
+  const openPositionsCount =
+    getOpenPositionsCount();
+
   const errorCount = signalResults.filter(
     result => result.status === 'error'
   ).length;
@@ -156,68 +192,88 @@ async function sendTelegramSummary(
       ? activeResults
           .map(result => {
             if (result.status === 'error') {
-              return `❌ ${result.symbol}: ERROR - ${result.reason}`;
+              return (
+                `❌ ${result.symbol}: ERROR - ` +
+                `${result.reason}`
+              );
             }
 
             if (result.status === 'not-ready') {
-              return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
+              return (
+                `⏳ ${result.symbol}: NOT READY - ` +
+                `${result.reason}`
+              );
             }
 
             if (result.status === 'signal') {
-              const emoji = result.side === 'long' ? '🟢' : '🔴';
-              const side = result.side?.toUpperCase() ?? 'SIGNAL';
-              const price = result.price != null ? `@ ${formatPrice(result.price)}` : '';
-              return `${emoji} ${result.symbol} [${result.regime}]: ${side} ${price} - ${result.reason}`;
+              const emoji =
+                result.side === 'long'
+                  ? '🟢'
+                  : '🔴';
+
+              const side =
+                result.side?.toUpperCase() ??
+                'SIGNAL';
+
+              const price =
+                result.price != null
+                  ? `@ ${formatPrice(result.price)}`
+                  : '';
+
+              return (
+                `${emoji} ${result.symbol} ` +
+                `[${result.regime}]: ${side} ` +
+                `${price} - ${result.reason}`
+              );
             }
 
-            return `${result.symbol} [${result.regime}]: No signal - ${result.reason}`;
+            return (
+              `${result.symbol} ` +
+              `[${result.regime}]: No signal - ` +
+              `${result.reason}`
+            );
           })
           .join('\n')
       : 'No free symbols to analyze';
 
   const summaryMessage =
-`📊 Signal Check Summary
+    `📊 Signal Check Summary\n\n` +
+    `📈 Open positions: ` +
+    `${openPositionsCount}/${MAX_PARALLEL_POSITIONS}\n` +
+    `${formatOpenPositionsForTelegram()}\n\n` +
+    `💰 Equity: ${getBalance().toFixed(2)}\n` +
+    `🔒 Reserved: ${getReservedCapital().toFixed(2)}\n` +
+    `💵 Available: ${getAvailableBalance().toFixed(2)}\n\n` +
+    `🔍 Signal scan:\n${signalText}\n\n` +
+    `📊 Signals: ${signalsCount} | ` +
+    `No signals: ${noSignalCount}\n` +
+    `📈 Open: ${openPositionsCount}/` +
+    `${MAX_PARALLEL_POSITIONS}\n` +
+    `⚠️ Errors: ${errorCount}\n\n` +
+    `${new Date().toISOString()}`;
 
-📈 Open positions: ${openPositionsCount}/${MAX_PARALLEL_POSITIONS}
-${formatOpenPositionsForTelegram()}
-
-💰 Equity: ${getBalance().toFixed(2)}
-🔒 Reserved: ${getReservedCapital().toFixed(2)}
-💵 Available: ${getAvailableBalance().toFixed(2)}
-
-🔍 Signal scan:
-${signalText}
-
-📊 Signals: ${signalsCount} | No signals: ${noSignalCount}
-📈 Open: ${openPositionsCount}/${MAX_PARALLEL_POSITIONS}
-⚠️ Errors: ${errorCount}
-
-${new Date().toISOString()}`;
-
-  const shouldSendSummary =
-    signalsCount > 0 ||
-    errorCount > 0 ||
-    activeResults.length > 0;
-
-  if (!shouldSendSummary) {
-    console.log(
-      `[${new Date().toISOString()}] Telegram summary skipped: all positions are already open`
-    );
+  if (
+    signalsCount === 0 &&
+    errorCount === 0 &&
+    activeResults.length === 0
+  ) {
     return;
   }
 
   try {
-    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+    const telegramToken =
+      process.env.TELEGRAM_BOT_TOKEN;
+
+    const telegramChatId =
+      process.env.TELEGRAM_CHAT_ID;
 
     if (!telegramToken || !telegramChatId) {
-      console.warn(
-        `[${new Date().toISOString()}] Telegram summary skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing`
-      );
       return;
     }
 
-    const url = `https://api.telegram.org/bot${telegramToken}/sendMessage`;
+    const url =
+      `https://api.telegram.org/bot` +
+      `${telegramToken}/sendMessage`;
 
     await axios.post(
       url,
@@ -232,52 +288,69 @@ ${new Date().toISOString()}`;
         timeout: 5000
       }
     );
-
-    console.log(
-      `[${new Date().toISOString()}] Telegram summary sent`
-    );
   } catch (error) {
     console.error(
       `[${new Date().toISOString()}] Failed to send summary:`,
-      error instanceof Error ? error.message : 'Unknown'
+      error instanceof Error
+        ? error.message
+        : 'Unknown'
     );
   }
 }
 
+function validateSignalPrice(
+  price: number | undefined
+): number {
+  if (
+    price == null ||
+    !Number.isFinite(price) ||
+    price <= 0
+  ) {
+    throw new Error(
+      `Invalid signal price: ${price}`
+    );
+  }
+
+  return price;
+}
+
+function validateQuantity(
+  quantity: number
+): number {
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+    throw new Error(
+      `Invalid order quantity: ${quantity}`
+    );
+  }
+
+  return quantity;
+}
+
 async function checkSignals(): Promise<void> {
   if (signalCheckRunning) {
-    console.warn(
-      `[${new Date().toISOString()}] SIGNAL CHECK SKIPPED: previous check is still running`
-    );
     return;
   }
+
+  ensureSchedulerHealthy();
 
   signalCheckRunning = true;
 
   try {
-    console.log(
-      `[${new Date().toISOString()}] SIGNAL CHECK START`
-    );
-
-    const activeTradingPairs = getActiveTradingPairs();
-
-    console.log(
-      `[${new Date().toISOString()}] Pairs: ${activeTradingPairs.length}, ` +
-        `Open positions: ${getOpenPositionsCount()}/${MAX_PARALLEL_POSITIONS}, ` +
-        `Equity: ${getBalance().toFixed(2)}, ` +
-        `Reserved: ${getReservedCapital().toFixed(2)}, ` +
-        `Available: ${getAvailableBalance().toFixed(2)}`
-    );
+    const activeTradingPairs =
+      getActiveTradingPairs();
 
     const signalResults: SignalResult[] = [];
 
-    for (const symbol of activeTradingPairs) {
-      try {
-        if (hasOpenPosition(symbol)) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} SIGNAL CHECK SKIPPED: open position exists`
-          );
+    for (const rawSymbol of activeTradingPairs) {
+      const symbol = normalizeSymbol(rawSymbol);
 
+      try {
+        ensureSchedulerHealthy();
+
+        if (hasOpenPosition(symbol)) {
           signalResults.push({
             symbol,
             status: 'position-open',
@@ -289,36 +362,35 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        if (getOpenPositionsCount() >= MAX_PARALLEL_POSITIONS) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} SIGNAL CHECK SKIPPED: max positions reached (${getOpenPositionsCount()}/${MAX_PARALLEL_POSITIONS})`
-          );
-
+        if (
+          getOpenPositionsCount() >=
+          MAX_PARALLEL_POSITIONS
+        ) {
           signalResults.push({
             symbol,
             status: 'max-positions',
             regime: 'max-positions',
             hasSignal: false,
-            reason: `Max positions reached: ${MAX_PARALLEL_POSITIONS}`
+            reason:
+              `Max positions reached: ` +
+              `${MAX_PARALLEL_POSITIONS}`
           });
 
           continue;
         }
 
-        const result = await runBotOnce(symbol, '15m');
+        const result =
+          await runBotOnce(symbol, '15m');
 
         if (!result.ready) {
-          const reason = result.reason ?? 'Strategy result is not ready';
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} NOT READY - ${reason}`
-          );
-
           signalResults.push({
             symbol,
             status: 'not-ready',
             regime: 'unknown',
             hasSignal: false,
-            reason
+            reason:
+              result.reason ??
+              'Strategy result is not ready'
           });
 
           continue;
@@ -326,37 +398,42 @@ async function checkSignals(): Promise<void> {
 
         const buy = (result as any).buy as boolean;
         const sell = (result as any).sell as boolean;
-        const side = (result as any).side as 'long' | 'short' | 'none';
-        const price = (result as any).price as number;
-        const takeProfitPrice = (result as any).takeProfitPrice as number | null;
-        const stopLossPrice = (result as any).stopLossPrice as number | null;
-        const positionSize = (result as any).positionSize as number | null;
-        const regime = (result as any).regime as string;
-        const indicators = (result as any).indicators as any;
-        const skipReason = (result as any).skipReason as string | null;
+        const side =
+          (result as any).side as
+            | 'long'
+            | 'short'
+            | 'none';
 
-        console.log(
-          `[${new Date().toISOString()}] ${symbol} ANALYSIS:`,
-          `Price: ${formatPrice(price)}`,
-          `Regime: ${regime}`,
-          `MACD Cross Up: ${indicators?.macdCrossUp}, Down: ${indicators?.macdCrossDown}`,
-          `RSI: ${indicators?.lastRsi?.toFixed(2)}`,
-          `ATR: ${indicators?.lastAtr?.toFixed(4)}`,
-          `ADX: ${indicators?.regimeIndicators?.adx?.toFixed(2)}`,
-          `BB Width: ${indicators?.regimeIndicators?.bbWidth?.toFixed(4)}`
-        );
+        const price =
+          (result as any).price as number;
 
-        if (indicators?.entryExtensionAtr != null) {
-          console.log(
-            `Entry extension: ${indicators.entryExtensionAtr.toFixed(2)} ATR (limit: ${indicators.maxEntryExtensionAtr?.toFixed(2) ?? 'n/a'} ATR, filtered: ${indicators.entryTooExtended})`
-          );
-        }
+        const takeProfitPrice =
+          (result as any).takeProfitPrice as
+            | number
+            | null;
 
-        const signalReason = buy ? 'BUY' : sell ? 'SELL' : 'NONE';
+        const stopLossPrice =
+          (result as any).stopLossPrice as
+            | number
+            | null;
+
+        const positionSize =
+          (result as any).positionSize as
+            | number
+            | null;
+
+        const regime =
+          (result as any).regime as string;
+
+        const indicators =
+          (result as any).indicators as any;
+
+        const skipReason =
+          (result as any).skipReason as
+            | string
+            | null;
 
         if (skipReason) {
-          console.log(`Signal skipped: ${skipReason}`);
-
           signalResults.push({
             symbol,
             status: 'no-signal',
@@ -375,8 +452,10 @@ async function checkSignals(): Promise<void> {
             takeProfitPrice: null,
             stopLossPrice: null,
             positionSize: null,
-            macdCrossUp: indicators?.macdCrossUp ?? false,
-            macdCrossDown: indicators?.macdCrossDown ?? false,
+            macdCrossUp:
+              indicators?.macdCrossUp ?? false,
+            macdCrossDown:
+              indicators?.macdCrossDown ?? false,
             lastRsi: indicators?.lastRsi ?? 0,
             lastAtr: indicators?.lastAtr ?? 0,
             rsiBull: indicators?.rsiBull ?? false,
@@ -384,13 +463,27 @@ async function checkSignals(): Promise<void> {
             bbUpper: indicators?.bbUpper ?? 0,
             bbMiddle: indicators?.bbMiddle ?? 0,
             bbLower: indicators?.bbLower ?? 0,
-            adx: indicators?.regimeIndicators?.adx ?? 0,
-            adxRising: indicators?.regimeIndicators?.adxRising ?? false,
-            ema20: indicators?.regimeIndicators?.ema20 ?? 0,
-            ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-            ema200: indicators?.regimeIndicators?.ema200 ?? 0,
-            bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
-            atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
+            adx:
+              indicators?.regimeIndicators?.adx ??
+              0,
+            adxRising:
+              indicators?.regimeIndicators?.adxRising ??
+              false,
+            ema20:
+              indicators?.regimeIndicators?.ema20 ??
+              0,
+            ema50:
+              indicators?.regimeIndicators?.ema50 ??
+              0,
+            ema200:
+              indicators?.regimeIndicators?.ema200 ??
+              0,
+            bbWidth:
+              indicators?.regimeIndicators?.bbWidth ??
+              0,
+            atrPct:
+              indicators?.regimeIndicators?.atrPct ??
+              0,
             signalTriggered: false,
             positionOpened: false
           });
@@ -399,76 +492,31 @@ async function checkSignals(): Promise<void> {
         }
 
         if (!buy && !sell) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} NO SIGNAL`
-          );
-
-          let signalReason = '';
-
-          if (regime === 'high-volatility') {
-            signalReason = `High volatility (ATR: ${indicators?.regimeIndicators?.atrPct?.toFixed(4)})`;
-          } else if (regime === 'range') {
-            signalReason = `Range (ADX: ${indicators?.regimeIndicators?.adx?.toFixed(2)})`;
-          } else if (regime === 'trend-up') {
-            const reasons: string[] = [];
-
-            if (!indicators?.macdCrossUp && !indicators?.macdCrossDown) {
-              reasons.push('No MACD cross');
-            }
-
-            if (!indicators?.rsiBull) {
-              reasons.push(`RSI not bull (${indicators?.lastRsi?.toFixed(2)})`);
-            }
-
-            if (price < (indicators?.regimeIndicators?.ema200 ?? 0)) {
-              reasons.push('Price below EMA200');
-            }
-
-            signalReason = reasons.join(', ') || 'Trend up - trades disabled';
-          } else if (regime === 'trend-down') {
-            const reasons: string[] = [];
-
-            if (!indicators?.macdCrossUp && !indicators?.macdCrossDown) {
-              reasons.push('No MACD cross');
-            }
-
-            if (!indicators?.rsiBear) {
-              reasons.push(`RSI not bear (${indicators?.lastRsi?.toFixed(2)})`);
-            }
-
-            if (price > (indicators?.regimeIndicators?.ema200 ?? 0)) {
-              reasons.push('Price above EMA200');
-            }
-
-            signalReason = reasons.join(', ') || 'No MACD cross down';
-          } else if (regime === 'breakout-watch') {
-            signalReason = 'Waiting for BB breakout';
-          } else {
-            signalReason = 'Unknown regime';
-          }
-
-          console.log(`Reason: ${signalReason}`);
-
           signalResults.push({
             symbol,
             status: 'no-signal',
             regime,
             hasSignal: false,
-            reason: signalReason
+            reason: 'No signal'
           });
 
           logSignalCheck({
             timestamp: new Date().toISOString(),
             symbol,
             timeframe: '15m',
-            side: buy || sell ? side : 'none',
+            side: 'none',
             price: price ?? 0,
             regime: regime ?? 'unknown',
-            takeProfitPrice: takeProfitPrice ?? null,
-            stopLossPrice: stopLossPrice ?? null,
-            positionSize: positionSize ?? null,
-            macdCrossUp: indicators?.macdCrossUp ?? false,
-            macdCrossDown: indicators?.macdCrossDown ?? false,
+            takeProfitPrice:
+              takeProfitPrice ?? null,
+            stopLossPrice:
+              stopLossPrice ?? null,
+            positionSize:
+              positionSize ?? null,
+            macdCrossUp:
+              indicators?.macdCrossUp ?? false,
+            macdCrossDown:
+              indicators?.macdCrossDown ?? false,
             lastRsi: indicators?.lastRsi ?? 0,
             lastAtr: indicators?.lastAtr ?? 0,
             rsiBull: indicators?.rsiBull ?? false,
@@ -476,118 +524,139 @@ async function checkSignals(): Promise<void> {
             bbUpper: indicators?.bbUpper ?? 0,
             bbMiddle: indicators?.bbMiddle ?? 0,
             bbLower: indicators?.bbLower ?? 0,
-            adx: indicators?.regimeIndicators?.adx ?? 0,
-            adxRising: indicators?.regimeIndicators?.adxRising ?? false,
-            ema20: indicators?.regimeIndicators?.ema20 ?? 0,
-            ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-            ema200: indicators?.regimeIndicators?.ema200 ?? 0,
-            bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
-            atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
-            signalTriggered: buy || sell,
+            adx:
+              indicators?.regimeIndicators?.adx ??
+              0,
+            adxRising:
+              indicators?.regimeIndicators?.adxRising ??
+              false,
+            ema20:
+              indicators?.regimeIndicators?.ema20 ??
+              0,
+            ema50:
+              indicators?.regimeIndicators?.ema50 ??
+              0,
+            ema200:
+              indicators?.regimeIndicators?.ema200 ??
+              0,
+            bbWidth:
+              indicators?.regimeIndicators?.bbWidth ??
+              0,
+            atrPct:
+              indicators?.regimeIndicators?.atrPct ??
+              0,
+            signalTriggered: false,
             positionOpened: false
           });
 
           continue;
         }
 
-        if (side === 'none') {
-          const reason = 'Signal side is none';
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} FAILED TO OPEN - ${reason}`
-          );
-
+        if (
+          side !== 'long' &&
+          side !== 'short'
+        ) {
           signalResults.push({
             symbol,
             status: 'signal',
             regime,
             hasSignal: true,
-            side,
+            side: 'none',
             price,
-            reason
+            reason: 'Signal side is invalid'
           });
 
           continue;
         }
 
-        if (takeProfitPrice == null || stopLossPrice == null) {
-          const reason = 'Take profit or stop loss is missing';
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} FAILED TO OPEN - ${reason}`
+        const expectedPrice =
+          validateSignalPrice(price);
+
+        if (
+          takeProfitPrice == null ||
+          stopLossPrice == null
+        ) {
+          throw new Error(
+            'Take profit or stop loss is missing'
+          );
+        }
+
+        const marketRef =
+          resolveMarket(symbol);
+
+        const marketId =
+          requireMarketId(
+            marketRef.marketId,
+            `open ${symbol}`
           );
 
-          signalResults.push({
-            symbol,
-            status: 'signal',
-            regime,
-            hasSignal: true,
-            side,
-            price,
-            reason
-          });
+        const stopDistance =
+          Math.abs(
+            expectedPrice - stopLossPrice
+          );
 
-          continue;
+        const worstCaseFeePerUnit =
+          Math.abs(
+            expectedPrice - stopLossPrice
+          ) * TRADE_FEE_RATE;
+
+        const totalRiskPerUnit =
+          stopDistance +
+          worstCaseFeePerUnit;
+
+        if (
+          !Number.isFinite(totalRiskPerUnit) ||
+          totalRiskPerUnit <= 0
+        ) {
+          throw new Error(
+            `Invalid total risk per unit: ${totalRiskPerUnit}`
+          );
         }
 
         const riskCapital = getRiskCapital();
-        const maxNotionalByPercent = getPositionNotional();
+        const maxNotionalByPercent =
+          getPositionNotional();
 
-        const stopDistance = Math.abs(price - stopLossPrice);
-        const worstCaseFeePerUnit = Math.abs(price - stopLossPrice) * TRADE_FEE_RATE;
-        const totalRiskPerUnit = stopDistance + worstCaseFeePerUnit;
+        const calculatedQuantity =
+          riskCapital / totalRiskPerUnit;
 
-        const calculatedQuantity = riskCapital / totalRiskPerUnit;
-        const maxQuantityByPercent = maxNotionalByPercent / price;
+        const maxQuantityByPercent =
+          maxNotionalByPercent /
+          expectedPrice;
 
-        const quantity = Math.min(calculatedQuantity, maxQuantityByPercent);
+        const quantity = validateQuantity(
+          Math.min(
+            calculatedQuantity,
+            maxQuantityByPercent
+          )
+        );
 
-        if (quantity <= 0) {
-          const reason = 'Calculated quantity is invalid';
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} FAILED TO OPEN - ${reason}`
-          );
+        const clientOrderId =
+          `${symbol}-${Date.now()}-open`;
 
-          signalResults.push({
+        const executionResult =
+          await executionService.openPosition({
             symbol,
-            status: 'signal',
-            regime,
-            hasSignal: true,
+            marketId,
             side,
-            price,
-            reason
+            quantity,
+            expectedPrice,
+            clientOrderId,
+            priceDecimals: 2,
+            sizeDecimals: 8
           });
 
-          continue;
-        }
-
-        const marketRef = resolveMarket(symbol);
-        const marketId = marketRef.marketId;
-
-        const clientOrderId = `${symbol}-${Date.now()}-open`;
-
-        const executionResult = await executionService.openPosition({
-          symbol,
-          marketId,
-          side,
-          quantity,
-          expectedPrice: price,
-          clientOrderId,
-          priceDecimals: 2,
-          sizeDecimals: 8
-        });
-
         if (!executionResult.ok) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} EXECUTION FAILED - ${executionResult.message}`
-          );
-
           signalResults.push({
             symbol,
             status: 'signal',
             regime,
             hasSignal: true,
             side,
-            price,
-            reason: executionResult.message ?? 'Execution failed'
+            price: expectedPrice,
+            reason:
+              executionResult.message ??
+              'Execution failed'
           });
 
           continue;
@@ -597,102 +666,102 @@ async function checkSignals(): Promise<void> {
           executionResult.filledQuantity <= 0 ||
           executionResult.averageFillPrice == null
         ) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} NO FILL CONFIRMED`
+          throw new Error(
+            `Execution returned no confirmed fill for ${symbol}`
           );
-
-          signalResults.push({
-            symbol,
-            status: 'signal',
-            regime,
-            hasSignal: true,
-            side,
-            price,
-            reason: 'No fill confirmed'
-          });
-
-          continue;
         }
 
         const openResult = openPosition({
           symbol,
           marketId,
           side,
-          entryPrice: executionResult.averageFillPrice,
-          quantity: executionResult.filledQuantity,
+          entryPrice:
+            executionResult.averageFillPrice,
+          quantity:
+            executionResult.filledQuantity,
           takeProfitPrice,
           stopLossPrice,
           metadata: {
             regime,
-            macdCrossUp: indicators?.macdCrossUp ?? false,
-            macdCrossDown: indicators?.macdCrossDown ?? false,
-            lastRsi: indicators?.lastRsi ?? 0,
-            lastAtr: indicators?.lastAtr ?? 0,
-            adx: indicators?.regimeIndicators?.adx ?? 0,
-            bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
-            atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
-            ema20: indicators?.regimeIndicators?.ema20 ?? 0,
-            ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-            ema200: indicators?.regimeIndicators?.ema200 ?? 0,
-            entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
-            maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
-            entryTooExtended: indicators?.entryTooExtended ?? false
+            macdCrossUp:
+              indicators?.macdCrossUp ?? false,
+            macdCrossDown:
+              indicators?.macdCrossDown ?? false,
+            lastRsi:
+              indicators?.lastRsi ?? 0,
+            lastAtr:
+              indicators?.lastAtr ?? 0,
+            adx:
+              indicators?.regimeIndicators?.adx ??
+              0,
+            bbWidth:
+              indicators?.regimeIndicators?.bbWidth ??
+              0,
+            atrPct:
+              indicators?.regimeIndicators?.atrPct ??
+              0,
+            ema20:
+              indicators?.regimeIndicators?.ema20 ??
+              0,
+            ema50:
+              indicators?.regimeIndicators?.ema50 ??
+              0,
+            ema200:
+              indicators?.regimeIndicators?.ema200 ??
+              0,
+            entryExtensionAtr:
+              indicators?.entryExtensionAtr ?? 0,
+            maxEntryExtensionAtr:
+              indicators?.maxEntryExtensionAtr ?? 0,
+            entryTooExtended:
+              indicators?.entryTooExtended ?? false
           },
-          executionOrderId: executionResult.orderId,
+          executionOrderId:
+            executionResult.orderId,
           clientOrderId
         });
 
-        if (openResult.ok && openResult.position) {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} POSITION OPENED!`,
-            `Position ID: ${openResult.position.id}`,
-            `Quantity: ${openResult.position.quantity.toFixed(8)}`,
-            `Notional: ${openResult.position.notional.toFixed(2)}`,
-            `Entry: ${openResult.position.entryPrice.toFixed(4)}`,
-            `TP: ${openResult.position.takeProfitPrice.toFixed(4)}`,
-            `SL: ${openResult.position.stopLossPrice.toFixed(4)}`,
-            `Equity: ${openResult.balance.toFixed(2)}`,
-            `Reserved: ${openResult.reservedCapitalAfter.toFixed(2)}`,
-            `Available: ${openResult.availableBalanceAfter.toFixed(2)}`
+        if (!openResult.ok) {
+          markFatalError(
+            `${symbol}: execution fill confirmed ` +
+            `but local position state failed: ` +
+            `${openResult.message ?? 'unknown error'}`
           );
 
           signalResults.push({
             symbol,
-            status: 'signal',
+            status: 'error',
             regime,
             hasSignal: true,
             side,
-            price,
-            reason: 'Position opened'
+            price: expectedPrice,
+            reason:
+              'Execution filled but local position state failed'
           });
-        } else {
-          console.log(
-            `[${new Date().toISOString()}] ${symbol} FAILED TO OPEN - ${openResult.message}`
-          );
 
-          signalResults.push({
-            symbol,
-            status: 'signal',
-            regime,
-            hasSignal: true,
-            side,
-            price,
-            reason: openResult.message ?? 'Unknown error'
-          });
+          continue;
         }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
 
-        console.error(
-          `[${new Date().toISOString()}] ${symbol} ERROR - ${errorMsg}`
-        );
+        signalResults.push({
+          symbol,
+          status: 'signal',
+          regime,
+          hasSignal: true,
+          side,
+          price: expectedPrice,
+          reason: 'Position opened'
+        });
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error
+            ? error.message
+            : 'Unknown error';
 
         logError({
           timestamp: new Date().toISOString(),
           context: 'signal-check',
           symbol,
-          error: String(errorMsg),
-          stack: undefined
+          error: errorMsg
         });
 
         notifyError({
@@ -712,22 +781,103 @@ async function checkSignals(): Promise<void> {
     }
 
     await sendTelegramSummary(signalResults);
-
-    console.log(
-      `[${new Date().toISOString()}] SIGNAL CHECK END`
-    );
   } finally {
     signalCheckRunning = false;
   }
 }
 
+async function executeClose(
+  position: ReturnType<typeof getPositions>[number],
+  currentPrice: number,
+  reason:
+    | 'take_profit'
+    | 'stop_loss'
+    | 'time_stop'
+    | 'breakeven_stop'
+    | 'dead_trade_mfe'
+): Promise<boolean> {
+  const marketId = requireMarketId(
+    position.marketId,
+    `close ${position.symbol}`
+  );
+
+  const clientOrderId =
+    `${position.symbol}-${Date.now()}-${reason}`;
+
+  const executionResult =
+    await executionService.closePosition({
+      symbol: position.symbol,
+      marketId,
+      positionSide: position.side,
+      quantity: position.quantity,
+      expectedPrice: currentPrice,
+      reason,
+      clientOrderId,
+      priceDecimals: 2,
+      sizeDecimals: 8
+    });
+
+  if (!executionResult.ok) {
+    throw new Error(
+      `Close execution failed for ${position.symbol}: ` +
+      `${executionResult.message ?? 'unknown error'}`
+    );
+  }
+
+  if (
+    executionResult.filledQuantity <= 0 ||
+    executionResult.averageFillPrice == null
+  ) {
+    throw new Error(
+      `Close execution returned no confirmed fill for ` +
+      `${position.symbol}`
+    );
+  }
+
+  if (
+    executionResult.filledQuantity >
+    position.quantity * 1.000001
+  ) {
+    throw new Error(
+      `Close fill exceeds local position quantity for ` +
+      `${position.symbol}: filled=${executionResult.filledQuantity}, ` +
+      `local=${position.quantity}`
+    );
+  }
+
+  const result = closePosition(
+    position.id,
+    executionResult.averageFillPrice,
+    reason,
+    {
+      executionOrderId:
+        executionResult.orderId,
+      clientOrderId,
+      fee: executionResult.fee
+    }
+  );
+
+  if (!result.ok) {
+    markFatalError(
+      `${position.symbol}: close fill confirmed but ` +
+      `local close state failed: ${result.message}`
+    );
+
+    throw new Error(
+      `Close state update failed for ${position.symbol}: ` +
+      `${result.message}`
+    );
+  }
+
+  return true;
+}
+
 async function checkPositions(): Promise<void> {
   if (positionCheckRunning) {
-    console.warn(
-      `[${new Date().toISOString()}] POSITION CHECK SKIPPED: previous check is still running`
-    );
     return;
   }
+
+  ensureSchedulerHealthy();
 
   positionCheckRunning = true;
 
@@ -738,154 +888,288 @@ async function checkPositions(): Promise<void> {
       return;
     }
 
-    console.log(
-      `[${new Date().toISOString()}] POSITION CHECK START`
-    );
-
-    console.log(
-      `[${new Date().toISOString()}] Checking ${positions.length} positions...`
-    );
-
-    for (const position of positions) {
+    for (const snapshotPosition of positions) {
       try {
-        if (!hasOpenPosition(position.symbol)) {
+        ensureSchedulerHealthy();
+
+        const position =
+          getPositions().find(
+            item => item.id === snapshotPosition.id
+          );
+
+        if (!position) {
           continue;
         }
 
-        const currentPrice = getCurrentPrice(position.symbol);
+        const symbol = normalizeSymbol(
+          position.symbol
+        );
 
-        if (currentPrice == null || !Number.isFinite(currentPrice)) {
-          console.warn(
-            `[${new Date().toISOString()}] ${position.symbol}: current price unavailable`
-          );
+        if (!hasOpenPosition(symbol)) {
           continue;
+        }
+
+        const currentPrice =
+          getCurrentPrice(symbol);
+
+        if (
+          currentPrice == null ||
+          !Number.isFinite(currentPrice) ||
+          currentPrice <= 0
+        ) {
+          throw new Error(
+            `Current price unavailable for ${symbol}`
+          );
         }
 
         const unrealizedPnL =
           position.side === 'long'
-            ? (currentPrice - position.entryPrice) * position.quantity
-            : (position.entryPrice - currentPrice) * position.quantity;
+            ? (currentPrice - position.entryPrice) *
+              position.quantity
+            : (position.entryPrice - currentPrice) *
+              position.quantity;
 
         const unrealizedPnLPercent =
           position.notional > 0
-            ? (unrealizedPnL / position.notional) * 100
+            ? (unrealizedPnL / position.notional) *
+              100
             : 0;
 
-        const previousMaxPnL = position.metadata?.maxUnrealizedPnL ?? Number.NEGATIVE_INFINITY;
-        const previousMaxPnLPercent = position.metadata?.maxUnrealizedPnLPercent ?? Number.NEGATIVE_INFINITY;
-        const previousWorstPnL = position.metadata?.worstUnrealizedPnL ?? Number.POSITIVE_INFINITY;
-        const previousWorstPnLPercent = position.metadata?.worstUnrealizedPnLPercent ?? Number.POSITIVE_INFINITY;
+        const previousMaxPnL =
+          position.metadata?.maxUnrealizedPnL ??
+          Number.NEGATIVE_INFINITY;
 
-        const maxUnrealizedPnL = Math.max(previousMaxPnL, unrealizedPnL);
-        const maxUnrealizedPnLPercent = Math.max(previousMaxPnLPercent, unrealizedPnLPercent);
+        const previousMaxPnLPercent =
+          position.metadata
+            ?.maxUnrealizedPnLPercent ??
+          Number.NEGATIVE_INFINITY;
 
-        updatePositionMetadata(position.id, {
-          maxUnrealizedPnL,
-          maxUnrealizedPnLPercent,
-          worstUnrealizedPnL: Math.min(previousWorstPnL, unrealizedPnL),
-          worstUnrealizedPnLPercent: Math.min(previousWorstPnLPercent, unrealizedPnLPercent)
-        });
+        const previousWorstPnL =
+          position.metadata?.worstUnrealizedPnL ??
+          Number.POSITIVE_INFINITY;
 
-        const openedAt = new Date(position.openedAt).getTime();
-        const positionAgeSeconds = Math.floor((Date.now() - openedAt) / 1000);
+        const previousWorstPnLPercent =
+          position.metadata
+            ?.worstUnrealizedPnLPercent ??
+          Number.POSITIVE_INFINITY;
 
-        const partialClosed = position.metadata?.partialClosed ?? false;
-        const trailingActive = position.metadata?.trailingActive ?? false;
-        const beTriggered = position.metadata?.beTriggered ?? false;
-
-        if (!beTriggered && maxUnrealizedPnLPercent >= BE_THRESHOLD_PERCENT) {
-          const lockedPercent = Math.max(
-            MIN_LOCKED_PERCENT,
-            (maxUnrealizedPnLPercent - BE_THRESHOLD_PERCENT) * LOCK_RATIO
+        const maxUnrealizedPnL =
+          Math.max(
+            previousMaxPnL,
+            unrealizedPnL
           );
+
+        const maxUnrealizedPnLPercent =
+          Math.max(
+            previousMaxPnLPercent,
+            unrealizedPnLPercent
+          );
+
+        updatePositionMetadata(
+          position.id,
+          {
+            maxUnrealizedPnL,
+            maxUnrealizedPnLPercent,
+            worstUnrealizedPnL:
+              Math.min(
+                previousWorstPnL,
+                unrealizedPnL
+              ),
+            worstUnrealizedPnLPercent:
+              Math.min(
+                previousWorstPnLPercent,
+                unrealizedPnLPercent
+              )
+          }
+        );
+
+        const openedAt =
+          new Date(position.openedAt).getTime();
+
+        const positionAgeSeconds =
+          Math.max(
+            0,
+            Math.floor(
+              (Date.now() - openedAt) / 1000
+            )
+          );
+
+        const partialClosed =
+          position.metadata?.partialClosed ??
+          false;
+
+        const trailingActive =
+          position.metadata?.trailingActive ??
+          false;
+
+        const beTriggered =
+          position.metadata?.beTriggered ??
+          false;
+
+        if (
+          !beTriggered &&
+          maxUnrealizedPnLPercent >=
+            BE_THRESHOLD_PERCENT
+        ) {
+          const lockedPercent =
+            Math.max(
+              MIN_LOCKED_PERCENT,
+              (maxUnrealizedPnLPercent -
+                BE_THRESHOLD_PERCENT) *
+                LOCK_RATIO
+            );
 
           const ratchetStop =
             position.side === 'long'
-              ? position.entryPrice * (1 + lockedPercent / 100)
-              : position.entryPrice * (1 - lockedPercent / 100);
+              ? position.entryPrice *
+                (1 + lockedPercent / 100)
+              : position.entryPrice *
+                (1 - lockedPercent / 100);
 
           const nextStop =
             position.side === 'long'
-              ? Math.max(position.stopLossPrice, ratchetStop)
-              : Math.min(position.stopLossPrice, ratchetStop);
+              ? Math.max(
+                  position.stopLossPrice,
+                  ratchetStop
+                )
+              : Math.min(
+                  position.stopLossPrice,
+                  ratchetStop
+                );
 
-          if (nextStop !== position.stopLossPrice) {
-            const updated = updatePositionStopLoss(position.id, nextStop);
-
-            if (!updated) {
-              throw new Error(`Failed to update ratchet stop for ${position.id}`);
+          if (
+            nextStop !==
+            position.stopLossPrice
+          ) {
+            if (
+              !updatePositionStopLoss(
+                position.id,
+                nextStop
+              )
+            ) {
+              throw new Error(
+                `Failed to update ratchet stop for ${position.id}`
+              );
             }
 
-            position.stopLossPrice = nextStop;
-
-            updatePositionMetadata(position.id, {
-              beTriggered: true,
-              trailingStopPrice: nextStop
-            });
-
-            console.log(
-              `[${new Date().toISOString()}] ${position.symbol}: RATCHET SL -> ${formatPrice(nextStop)} | MFE: ${maxUnrealizedPnLPercent.toFixed(2)}% | Lock: ${lockedPercent.toFixed(2)}%`
+            updatePositionMetadata(
+              position.id,
+              {
+                beTriggered: true,
+                trailingStopPrice: nextStop
+              }
             );
           }
         }
 
-        if (!partialClosed && maxUnrealizedPnLPercent >= PARTIAL_THRESHOLD_PERCENT) {
-          const quantityBeforePartial = position.quantity;
-          const closeQuantity = quantityBeforePartial * 0.5;
+        if (
+          !partialClosed &&
+          maxUnrealizedPnLPercent >=
+            PARTIAL_THRESHOLD_PERCENT
+        ) {
+          const currentPosition =
+            getPositions().find(
+              item => item.id === position.id
+            );
 
-          const clientOrderId = `${position.symbol}-${Date.now()}-partial`;
+          if (!currentPosition) {
+            throw new Error(
+              `Position disappeared before partial close: ${symbol}`
+            );
+          }
 
-          const partialExecution = await executionService.closePosition({
-            symbol: position.symbol,
-            marketId: position.marketId ?? 0,
-            positionSide: position.side,
-            quantity: closeQuantity,
-            expectedPrice: currentPrice,
-            reason: 'partial-close',
-            clientOrderId,
-            priceDecimals: 2,
-            sizeDecimals: 8
-          });
+          const closeQuantity =
+            currentPosition.quantity * 0.5;
+
+          const marketId =
+            requireMarketId(
+              currentPosition.marketId,
+              `partial close ${symbol}`
+            );
+
+          const clientOrderId =
+            `${symbol}-${Date.now()}-partial`;
+
+          const partialExecution =
+            await executionService.closePosition({
+              symbol,
+              marketId,
+              positionSide:
+                currentPosition.side,
+              quantity: closeQuantity,
+              expectedPrice: currentPrice,
+              reason: 'partial_close',
+              clientOrderId,
+              priceDecimals: 2,
+              sizeDecimals: 8
+            });
 
           if (!partialExecution.ok) {
             throw new Error(
-              `Partial close failed for ${position.symbol}: ${partialExecution.message}`
+              `Partial close failed for ${symbol}: ` +
+              `${partialExecution.message ?? 'unknown error'}`
             );
           }
 
           if (
             partialExecution.filledQuantity <= 0 ||
-            partialExecution.averageFillPrice == null
+            partialExecution.averageFillPrice ==
+              null
           ) {
             throw new Error(
-              `Partial close has no confirmed fill: ${position.symbol}`
+              `Partial close has no confirmed fill: ${symbol}`
             );
           }
 
-          const partialResult = partialClosePosition(
-            position.id,
-            partialExecution.filledQuantity,
-            partialExecution.averageFillPrice,
-            {
-              executionOrderId: partialExecution.orderId,
-              clientOrderId,
-              fee: partialExecution.fee
-            }
-          );
+          if (
+            partialExecution.filledQuantity >=
+            currentPosition.quantity
+          ) {
+            throw new Error(
+              `Partial close filled entire position unexpectedly: ${symbol}`
+            );
+          }
+
+          const partialResult =
+            partialClosePosition(
+              currentPosition.id,
+              partialExecution.filledQuantity,
+              partialExecution.averageFillPrice,
+              {
+                executionOrderId:
+                  partialExecution.orderId,
+                clientOrderId,
+                fee: partialExecution.fee
+              }
+            );
 
           if (!partialResult.ok) {
+            markFatalError(
+              `${symbol}: partial close filled but local state failed: ` +
+              `${partialResult.message}`
+            );
+
             throw new Error(
-              `Partial close state update failed for ${position.symbol}: ${partialResult.message}`
+              `Partial close state update failed for ${symbol}: ` +
+              `${partialResult.message}`
             );
           }
 
-          const remainingPosition = getPositions().find(item => item.id === position.id);
+          const remainingPosition =
+            getPositions().find(
+              item =>
+                item.id === currentPosition.id
+            );
 
           if (!remainingPosition) {
-            throw new Error(`Position ${position.id} not found after partial close`);
+            throw new Error(
+              `Position ${currentPosition.id} not found after partial close`
+            );
           }
 
-          const trailDistance = currentPrice * (TRAILING_DISTANCE_PERCENT / 100);
+          const trailDistance =
+            currentPrice *
+            (TRAILING_DISTANCE_PERCENT / 100);
 
           const proposedInitialTrail =
             remainingPosition.side === 'long'
@@ -894,96 +1178,82 @@ async function checkPositions(): Promise<void> {
 
           const initialTrailingStop =
             remainingPosition.side === 'long'
-              ? Math.max(remainingPosition.stopLossPrice, proposedInitialTrail)
-              : Math.min(remainingPosition.stopLossPrice, proposedInitialTrail);
+              ? Math.max(
+                  remainingPosition.stopLossPrice,
+                  proposedInitialTrail
+                )
+              : Math.min(
+                  remainingPosition.stopLossPrice,
+                  proposedInitialTrail
+                );
 
-          const updated = updatePositionStopLoss(remainingPosition.id, initialTrailingStop);
-
-          if (!updated) {
-            throw new Error(`Failed to initialize trailing stop for ${position.id}`);
+          if (
+            !updatePositionStopLoss(
+              remainingPosition.id,
+              initialTrailingStop
+            )
+          ) {
+            throw new Error(
+              `Failed to initialize trailing stop for ${symbol}`
+            );
           }
 
-          position.quantity = remainingPosition.quantity;
-          position.notional = remainingPosition.notional;
-          position.reservedCapital = remainingPosition.reservedCapital;
-          position.stopLossPrice = initialTrailingStop;
-
-          updatePositionMetadata(position.id, {
-            partialClosed: true,
-            trailingActive: true,
-            trailingStopPrice: initialTrailingStop
-          });
-
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: PARTIAL CLOSE 50% (${partialExecution.filledQuantity.toFixed(8)} @ ${formatPrice(partialExecution.averageFillPrice)})`
-          );
-
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: TRAILING ON @ ${formatPrice(initialTrailingStop)}`
+          updatePositionMetadata(
+            remainingPosition.id,
+            {
+              partialClosed: true,
+              trailingActive: true,
+              trailingStopPrice:
+                initialTrailingStop
+            }
           );
         }
 
+        const statePosition =
+          getPositions().find(
+            item => item.id === position.id
+          );
+
+        if (!statePosition) {
+          continue;
+        }
+
+        const currentStatePosition =
+          statePosition;
+
+        const activePartialClosed =
+          currentStatePosition.metadata
+            ?.partialClosed ?? false;
+
+        const activeTrailing =
+          currentStatePosition.metadata
+            ?.trailingActive ?? false;
+
         if (
           DEAD_TRADE_ENABLED &&
-          !partialClosed &&
+          !activePartialClosed &&
           !beTriggered &&
-          positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
+          positionAgeSeconds >=
+            DEAD_TRADE_CHECK_AFTER_SEC
         ) {
-          const entryAtr = position.metadata?.lastAtr ?? 0;
+          const entryAtr =
+            currentStatePosition.metadata
+              ?.lastAtr ?? 0;
+
           const mfeAtr =
             entryAtr > 0
-              ? maxUnrealizedPnL / (entryAtr * position.quantity)
+              ? maxUnrealizedPnL /
+                (entryAtr *
+                  currentStatePosition.quantity)
               : 0;
 
-          if (mfeAtr >= DEAD_TRADE_MIN_MFE_ATR) {
-            const clientOrderId = `${position.symbol}-${Date.now()}-dead`;
-
-            const closeExecution = await executionService.closePosition({
-              symbol: position.symbol,
-              marketId: position.marketId ?? 0,
-              positionSide: position.side,
-              quantity: position.quantity,
-              expectedPrice: currentPrice,
-              reason: 'dead-trade-mfe',
-              clientOrderId,
-              priceDecimals: 2,
-              sizeDecimals: 8
-            });
-
-            if (!closeExecution.ok) {
-              throw new Error(
-                `Dead trade close failed for ${position.symbol}: ${closeExecution.message}`
-              );
-            }
-
-            if (
-              closeExecution.filledQuantity <= 0 ||
-              closeExecution.averageFillPrice == null
-            ) {
-              throw new Error(
-                `Dead trade close has no confirmed fill: ${position.symbol}`
-              );
-            }
-
-            const result = closePosition(
-              position.id,
-              closeExecution.averageFillPrice,
-              'dead-trade-mfe',
-              {
-                executionOrderId: closeExecution.orderId,
-                clientOrderId,
-                fee: closeExecution.fee
-              }
-            );
-
-            if (!result.ok) {
-              throw new Error(
-                `Dead trade state update failed for ${position.symbol}: ${result.message}`
-              );
-            }
-
-            console.log(
-              `[${new Date().toISOString()}] ${position.symbol}: DEAD TRADE (MFE: ${mfeAtr.toFixed(2)} ATR, after ${positionAgeSeconds}s) | Net: ${result.lastClosedTrade?.netPnL.toFixed(2)}`
+          if (
+            mfeAtr >= DEAD_TRADE_MIN_MFE_ATR
+          ) {
+            await executeClose(
+              currentStatePosition,
+              currentPrice,
+              'dead_trade_mfe'
             );
 
             continue;
@@ -991,297 +1261,193 @@ async function checkPositions(): Promise<void> {
         }
 
         if (
-          !partialClosed &&
+          !activePartialClosed &&
           !beTriggered &&
-          positionAgeSeconds >= TIME_STOP_SECONDS &&
+          positionAgeSeconds >=
+            TIME_STOP_SECONDS &&
           (
-            maxUnrealizedPnLPercent < TIME_STOP_MFE_PERCENT ||
-            unrealizedPnLPercent < TIME_STOP_MAX_LOSS_PERCENT
+            maxUnrealizedPnLPercent <
+              TIME_STOP_MFE_PERCENT ||
+            unrealizedPnLPercent <
+              TIME_STOP_MAX_LOSS_PERCENT
           )
         ) {
-          const clientOrderId = `${position.symbol}-${Date.now()}-timestop`;
-
-          const closeExecution = await executionService.closePosition({
-            symbol: position.symbol,
-            marketId: position.marketId ?? 0,
-            positionSide: position.side,
-            quantity: position.quantity,
-            expectedPrice: currentPrice,
-            reason: 'time-stop',
-            clientOrderId,
-            priceDecimals: 2,
-            sizeDecimals: 8
-          });
-
-          if (!closeExecution.ok) {
-            throw new Error(
-              `Time stop failed for ${position.symbol}: ${closeExecution.message}`
-            );
-          }
-
-          if (
-            closeExecution.filledQuantity <= 0 ||
-            closeExecution.averageFillPrice == null
-          ) {
-            throw new Error(
-              `Time stop has no confirmed fill: ${position.symbol}`
-            );
-          }
-
-          const result = closePosition(
-            position.id,
-            closeExecution.averageFillPrice,
-            'time-stop',
-            {
-              executionOrderId: closeExecution.orderId,
-              clientOrderId,
-              fee: closeExecution.fee
-            }
-          );
-
-          if (!result.ok) {
-            throw new Error(
-              `Time stop state update failed for ${position.symbol}: ${result.message}`
-            );
-          }
-
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: TIME STOP (MFE: ${maxUnrealizedPnLPercent.toFixed(2)}%, after ${positionAgeSeconds}s) | Net: ${result.lastClosedTrade?.netPnL.toFixed(2)}`
+          await executeClose(
+            currentStatePosition,
+            currentPrice,
+            'time_stop'
           );
 
           continue;
         }
 
-        if (trailingActive && partialClosed) {
-          const statePosition = getPositions().find(item => item.id === position.id);
-
-          if (!statePosition) {
-            continue;
-          }
-
+        if (
+          activeTrailing &&
+          activePartialClosed
+        ) {
           const priorTrailingStop =
-            statePosition.metadata?.trailingStopPrice ?? statePosition.stopLossPrice;
+            currentStatePosition.metadata
+              ?.trailingStopPrice ??
+            currentStatePosition.stopLossPrice;
 
-          const trailDistance = currentPrice * (TRAILING_DISTANCE_PERCENT / 100);
+          const trailDistance =
+            currentPrice *
+            (TRAILING_DISTANCE_PERCENT / 100);
 
           const candidateTrailingStop =
-            statePosition.side === 'long'
+            currentStatePosition.side === 'long'
               ? currentPrice - trailDistance
               : currentPrice + trailDistance;
 
           const nextTrailingStop =
-            statePosition.side === 'long'
-              ? Math.max(statePosition.stopLossPrice, priorTrailingStop, candidateTrailingStop)
-              : Math.min(statePosition.stopLossPrice, priorTrailingStop, candidateTrailingStop);
+            currentStatePosition.side === 'long'
+              ? Math.max(
+                  currentStatePosition.stopLossPrice,
+                  priorTrailingStop,
+                  candidateTrailingStop
+                )
+              : Math.min(
+                  currentStatePosition.stopLossPrice,
+                  priorTrailingStop,
+                  candidateTrailingStop
+                );
 
-          if (nextTrailingStop !== statePosition.stopLossPrice) {
-            const updated = updatePositionStopLoss(statePosition.id, nextTrailingStop);
-
-            if (!updated) {
-              throw new Error(`Failed to update trailing stop for ${statePosition.id}`);
+          if (
+            nextTrailingStop !==
+            currentStatePosition.stopLossPrice
+          ) {
+            if (
+              !updatePositionStopLoss(
+                currentStatePosition.id,
+                nextTrailingStop
+              )
+            ) {
+              throw new Error(
+                `Failed to update trailing stop for ${symbol}`
+              );
             }
 
-            position.stopLossPrice = nextTrailingStop;
-
-            updatePositionMetadata(position.id, {
-              trailingActive: true,
-              trailingStopPrice: nextTrailingStop
-            });
-
-            console.log(
-              `[${new Date().toISOString()}] ${position.symbol}: TRAILING SL -> ${formatPrice(nextTrailingStop)}`
+            updatePositionMetadata(
+              currentStatePosition.id,
+              {
+                trailingStopPrice:
+                  nextTrailingStop
+              }
             );
           }
         }
 
-        const activePosition = getPositions().find(item => item.id === position.id);
+        const finalPosition =
+          getPositions().find(
+            item => item.id === position.id
+          );
 
-        if (!activePosition) {
+        if (!finalPosition) {
           continue;
         }
 
-        position.stopLossPrice = activePosition.stopLossPrice;
-        position.quantity = activePosition.quantity;
-        position.notional = activePosition.notional;
-        position.reservedCapital = activePosition.reservedCapital;
-
-        const distanceToTP =
-          position.side === 'long'
-            ? position.takeProfitPrice - currentPrice
-            : currentPrice - position.takeProfitPrice;
-
-        const distanceToTPPercent = (distanceToTP / currentPrice) * 100;
-
-        const distanceToSL =
-          position.side === 'long'
-            ? currentPrice - position.stopLossPrice
-            : position.stopLossPrice - currentPrice;
-
-        const distanceToSLPercent = (distanceToSL / currentPrice) * 100;
-
         const hitTakeProfit =
-          position.side === 'long'
-            ? currentPrice >= position.takeProfitPrice
-            : currentPrice <= position.takeProfitPrice;
+          finalPosition.side === 'long'
+            ? currentPrice >=
+              finalPosition.takeProfitPrice
+            : currentPrice <=
+              finalPosition.takeProfitPrice;
 
         const hitStopLoss =
-          position.side === 'long'
-            ? currentPrice <= position.stopLossPrice
-            : currentPrice >= position.stopLossPrice;
+          finalPosition.side === 'long'
+            ? currentPrice <=
+              finalPosition.stopLossPrice
+            : currentPrice >=
+              finalPosition.stopLossPrice;
+
+        if (hitTakeProfit && hitStopLoss) {
+          throw new Error(
+            `TP and SL triggered simultaneously for ${symbol}`
+          );
+        }
 
         if (hitTakeProfit) {
-          const clientOrderId = `${position.symbol}-${Date.now()}-tp`;
-
-          const closeExecution = await executionService.closePosition({
-            symbol: position.symbol,
-            marketId: position.marketId ?? 0,
-            positionSide: position.side,
-            quantity: position.quantity,
-            expectedPrice: currentPrice,
-            reason: 'take-profit',
-            clientOrderId,
-            priceDecimals: 2,
-            sizeDecimals: 8
-          });
-
-          if (!closeExecution.ok) {
-            throw new Error(
-              `TP close failed for ${position.symbol}: ${closeExecution.message}`
-            );
-          }
-
-          if (
-            closeExecution.filledQuantity <= 0 ||
-            closeExecution.averageFillPrice == null
-          ) {
-            throw new Error(
-              `TP close has no confirmed fill: ${position.symbol}`
-            );
-          }
-
-          const result = closePosition(
-            position.id,
-            closeExecution.averageFillPrice,
-            'take-profit',
-            {
-              executionOrderId: closeExecution.orderId,
-              clientOrderId,
-              fee: closeExecution.fee
-            }
-          );
-
-          if (!result.ok) {
-            throw new Error(
-              `TP state update failed for ${position.symbol}: ${result.message}`
-            );
-          }
-
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: CLOSED AT TP | Net: ${result.lastClosedTrade?.netPnL.toFixed(2)}`
-          );
-        } else if (hitStopLoss) {
-          const clientOrderId = `${position.symbol}-${Date.now()}-sl`;
-
-          const closeExecution = await executionService.closePosition({
-            symbol: position.symbol,
-            marketId: position.marketId ?? 0,
-            positionSide: position.side,
-            quantity: position.quantity,
-            expectedPrice: currentPrice,
-            reason: beTriggered ? 'breakeven-stop' : 'stop-loss',
-            clientOrderId,
-            priceDecimals: 2,
-            sizeDecimals: 8
-          });
-
-          if (!closeExecution.ok) {
-            throw new Error(
-              `SL close failed for ${position.symbol}: ${closeExecution.message}`
-            );
-          }
-
-          if (
-            closeExecution.filledQuantity <= 0 ||
-            closeExecution.averageFillPrice == null
-          ) {
-            throw new Error(
-              `SL close has no confirmed fill: ${position.symbol}`
-            );
-          }
-
-          const result = closePosition(
-            position.id,
-            closeExecution.averageFillPrice,
-            beTriggered ? 'breakeven-stop' : 'stop-loss',
-            {
-              executionOrderId: closeExecution.orderId,
-              clientOrderId,
-              fee: closeExecution.fee
-            }
-          );
-
-          if (!result.ok) {
-            throw new Error(
-              `SL state update failed for ${position.symbol}: ${result.message}`
-            );
-          }
-
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: CLOSED AT ${beTriggered ? 'BE STOP' : 'SL'} | Net: ${result.lastClosedTrade?.netPnL.toFixed(2)}`
-          );
-        } else {
-          console.log(
-            `[${new Date().toISOString()}] ${position.symbol}: HOLDING`
-          );
-
-          logPositionCheck({
-            timestamp: new Date().toISOString(),
-            positionId: position.id,
-            symbol: position.symbol,
-            side: position.side,
-            entryPrice: position.entryPrice,
+          await executeClose(
+            finalPosition,
             currentPrice,
-            takeProfitPrice: position.takeProfitPrice,
-            stopLossPrice: position.stopLossPrice,
-            unrealizedPnL,
-            unrealizedPnLPercent,
-            distanceToTP,
-            distanceToTPPercent,
-            distanceToSL,
-            distanceToSLPercent,
-            hitTakeProfit,
-            hitStopLoss,
-            action: hitTakeProfit ? 'close-tp' : hitStopLoss ? (beTriggered ? 'close-be' : 'close-sl') : 'hold',
-            positionAgeSeconds
-          });
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            'take_profit'
+          );
 
-        console.error(
-          `[${new Date().toISOString()}] ${position.symbol} ERROR - ${errorMsg}`
-        );
+          continue;
+        }
+
+        if (hitStopLoss) {
+          await executeClose(
+            finalPosition,
+            currentPrice,
+            finalPosition.metadata
+              ?.beTriggered
+              ? 'breakeven_stop'
+              : 'stop_loss'
+          );
+
+          continue;
+        }
+
+        const distanceToTP =
+          finalPosition.side === 'long'
+            ? finalPosition.takeProfitPrice -
+              currentPrice
+            : currentPrice -
+              finalPosition.takeProfitPrice;
+
+        const distanceToSL =
+          finalPosition.side === 'long'
+            ? currentPrice -
+              finalPosition.stopLossPrice
+            : finalPosition.stopLossPrice -
+              currentPrice;
+
+        logPositionCheck({
+          timestamp: new Date().toISOString(),
+          positionId: finalPosition.id,
+          symbol: finalPosition.symbol,
+          side: finalPosition.side,
+          entryPrice: finalPosition.entryPrice,
+          currentPrice,
+          takeProfitPrice:
+            finalPosition.takeProfitPrice,
+          stopLossPrice:
+            finalPosition.stopLossPrice,
+          unrealizedPnL,
+          unrealizedPnLPercent,
+          distanceToTP,
+          distanceToTPPercent:
+            (distanceToTP / currentPrice) * 100,
+          distanceToSL,
+          distanceToSLPercent:
+            (distanceToSL / currentPrice) * 100,
+          hitTakeProfit,
+          hitStopLoss,
+          action: 'hold',
+          positionAgeSeconds
+        });
+      } catch (error) {
+        const errorMsg =
+          error instanceof Error
+            ? error.message
+            : 'Unknown error';
 
         logError({
           timestamp: new Date().toISOString(),
           context: 'position-check',
-          symbol: position.symbol,
-          positionId: position.id,
-          error: String(errorMsg),
-          stack: undefined
+          symbol: snapshotPosition.symbol,
+          positionId: snapshotPosition.id,
+          error: errorMsg
         });
 
         notifyError({
           context: 'position-check',
-          symbol: position.symbol,
+          symbol: snapshotPosition.symbol,
           error: errorMsg
         });
       }
     }
-
-    console.log(
-      `[${new Date().toISOString()}] POSITION CHECK END`
-    );
   } finally {
     positionCheckRunning = false;
   }
@@ -1289,94 +1455,65 @@ async function checkPositions(): Promise<void> {
 
 export async function startScheduler(): Promise<void> {
   if (schedulerStarted) {
-    console.warn(
-      `[${new Date().toISOString()}] Scheduler already started, ignoring duplicate start`
-    );
     return;
   }
 
   schedulerStarted = true;
+  schedulerStopping = false;
+  schedulerFatalError = null;
 
-  console.log(
-    `[${new Date().toISOString()}] TRADING BOT STARTING...`
-  );
+  try {
+    await refreshTopMarkets();
 
-  console.log(
-    `[${new Date().toISOString()}] Loading Lighter top markets...`
-  );
+    startMarketRefresh();
 
-  await refreshTopMarkets();
+    await checkSignals();
+    await checkPositions();
 
-  startMarketRefresh();
+    signalCheckInterval = setInterval(
+      () => {
+        void checkSignals().catch(error => {
+          console.error(
+            `[${new Date().toISOString()}] Signal interval error:`,
+            error
+          );
+        });
+      },
+      SIGNAL_CHECK_INTERVAL_MS
+    );
 
-  const activeTradingPairs = getActiveTradingPairs();
+    positionCheckInterval = setInterval(
+      () => {
+        void checkPositions().catch(error => {
+          console.error(
+            `[${new Date().toISOString()}] Position interval error:`,
+            error
+          );
+        });
+      },
+      POSITION_CHECK_INTERVAL_MS
+    );
 
-  console.log(
-    `[${new Date().toISOString()}] Active markets: ${activeTradingPairs.length}`
-  );
+    const activeTradingPairs =
+      getActiveTradingPairs();
 
-  console.log(
-    `[${new Date().toISOString()}] Trading pairs: ${activeTradingPairs.join(', ')}`
-  );
+    notifyStartup({
+      port: Number(process.env.PORT) || 3002,
+      tradingPairs: activeTradingPairs,
+      signalInterval:
+        SIGNAL_CHECK_INTERVAL_MS / 1000,
+      positionInterval:
+        POSITION_CHECK_INTERVAL_MS / 1000
+    });
+  } catch (error) {
+    schedulerStarted = false;
+    stopMarketRefresh();
 
-  console.log(
-    `[${new Date().toISOString()}] Port: ${Number(process.env.PORT) || 3002}`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Signal check interval: ${SIGNAL_CHECK_INTERVAL_MS / 1000}s`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Position check interval: ${POSITION_CHECK_INTERVAL_MS / 1000}s`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Max positions: ${MAX_PARALLEL_POSITIONS}`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Exit management: BE ${BE_THRESHOLD_PERCENT}%, lock ${LOCK_RATIO * 100}%, Partial ${PARTIAL_THRESHOLD_PERCENT}%, Trailing ${TRAILING_DISTANCE_PERCENT}%, Time-stop ${TIME_STOP_SECONDS / 60}min, MFE time-stop ${TIME_STOP_MFE_PERCENT}% (!BE), Dead-trade ${DEAD_TRADE_CHECK_AFTER_SEC / 60}min, MFE ${DEAD_TRADE_MIN_MFE_ATR} ATR`
-  );
-
-  const positionPercent = getBalance() > 0
-    ? (getPositionNotional() / getBalance()) * 100
-    : 0;
-
-  console.log(
-    `[${new Date().toISOString()}] Position size: ${positionPercent.toFixed(0)}% of equity`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Starting equity: ${getBalance().toFixed(2)}`
-  );
-
-  notifyStartup({
-    port: Number(process.env.PORT) || 3002,
-    tradingPairs: activeTradingPairs,
-    signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
-    positionInterval: POSITION_CHECK_INTERVAL_MS / 1000
-  });
-
-  await checkSignals();
-  await checkPositions();
-
-  signalCheckInterval = setInterval(
-    () => void checkSignals(),
-    SIGNAL_CHECK_INTERVAL_MS
-  );
-
-  positionCheckInterval = setInterval(
-    () => void checkPositions(),
-    POSITION_CHECK_INTERVAL_MS
-  );
+    throw error;
+  }
 }
 
 export function stopScheduler(): void {
-  console.log(
-    `[${new Date().toISOString()}] Stopping scheduler...`
-  );
-
   stopMarketRefresh();
 
   if (signalCheckInterval) {
@@ -1392,30 +1529,25 @@ export function stopScheduler(): void {
   if (!schedulerStopping) {
     schedulerStopping = true;
 
-    for (const position of getPositions()) {
-      try {
-        stopMarketData(position.symbol);
-      } catch (error) {
-        console.error(
-          `[${new Date().toISOString()}] Failed to stop position market data for ${position.symbol}:`,
-          error
-        );
-      }
-    }
+    const symbols = new Set([
+      ...getPositions().map(
+        position => normalizeSymbol(position.symbol)
+      ),
+      ...getActiveTradingPairs().map(normalizeSymbol)
+    ]);
 
-    for (const symbol of getActiveTradingPairs()) {
+    for (const symbol of symbols) {
       try {
         stopMarketData(symbol);
       } catch (error) {
         console.error(
-          `[${new Date().toISOString()}] Failed to stop Lighter data for ${symbol}:`,
+          `[${new Date().toISOString()}] ` +
+          `Failed to stop market data for ${symbol}:`,
           error
         );
       }
     }
   }
 
-  console.log(
-    `[${new Date().toISOString()}] Scheduler stopped`
-  );
+  schedulerStarted = false;
 }
