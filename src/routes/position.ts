@@ -10,7 +10,8 @@ import {
   getPositions,
   hasOpenPosition,
   MAX_PARALLEL_POSITIONS,
-  openPosition
+  openPosition,
+  getPositionNotional
 } from '../services/positionState';
 
 const router = Router();
@@ -109,10 +110,14 @@ router.post('/open', async (req, res) => {
       });
     }
 
+    const positionNotional = getPositionNotional();
+    const quantity = positionNotional / entryPrice;
+
     const result = openPosition({
       symbol,
       side,
       entryPrice,
+      quantity,
       takeProfitPrice,
       stopLossPrice
     });
