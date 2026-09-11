@@ -74,7 +74,8 @@ async function loadHistoricalCandles(
     market_id: String(marketId),
     resolution: timeframe,
     start_timestamp: String(startTimestamp),
-    end_timestamp: String(now)
+    end_timestamp: String(now),
+    count_back: String(limit)
   });
 
   const url =
