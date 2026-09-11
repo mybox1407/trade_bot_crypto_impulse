@@ -3,22 +3,32 @@ import path from 'path';
 
 const LOG_DIR = '/app/logs';
 
-function ensureDirExists() {
+function ensureDirExists(): void {
   if (!fs.existsSync(LOG_DIR)) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
   }
 }
 
-function ensureFileExists(filePath: string, headers: string[]) {
+function ensureFileExists(
+  filePath: string,
+  headers: string[]
+): void {
   if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, headers.join(',') + '\n');
+    fs.writeFileSync(
+      filePath,
+      `${headers.join(',')}\n`,
+      'utf8'
+    );
   }
 }
 
 function writeRow(
   fileName: string,
-  row: Record<string, string | number | boolean | null | undefined>
-) {
+  row: Record<
+    string,
+    string | number | boolean | null | undefined
+  >
+): void {
   ensureDirExists();
 
   const filePath = path.join(LOG_DIR, fileName);
@@ -46,7 +56,11 @@ function writeRow(
     return stringValue;
   });
 
-  fs.appendFileSync(filePath, `${values.join(',')}\n`);
+  fs.appendFileSync(
+    filePath,
+    `${values.join(',')}\n`,
+    'utf8'
+  );
 }
 
 export function logSignalCheck(row: {
@@ -78,7 +92,7 @@ export function logSignalCheck(row: {
   signalTriggered: boolean;
   positionOpened: boolean;
   openPositionError?: string;
-}) {
+}): void {
   writeRow('signal_log.csv', row);
 }
 
@@ -108,32 +122,14 @@ export function logPositionOpen(row: {
   adx: number;
   bbWidth: number;
   atrPct: number;
-
-  // Индикаторы на момент фактического входа.
-  // Нужны для анализа качества входа и симуляции фильтров.
   ema20: number;
   ema50: number;
   ema200: number;
-
-  // Для long: entryPrice - EMA20.
-  // Для short: EMA20 - entryPrice.
-  // Положительное значение означает, что вход сделан
-  // в направлении импульса относительно EMA20.
   entryDistanceFromEma20: number;
-
-  // То же отклонение, но в процентах от EMA20.
   entryDistanceFromEma20Percent: number;
-
-  // Главный аналитический показатель:
-  // entryDistanceFromEma20 / lastAtr.
-  // Например, 1.20 означает, что entry расположен
-  // на 1.2 ATR выше EMA20 для long.
   entryDistanceFromEma20Atr: number;
-
-  // true, когда вход расположен дальше допустимого
-  // расстояния от EMA20 и должен быть отфильтрован.
   entryTooExtended: boolean;
-}) {
+}): void {
   writeRow('position_open_log.csv', row);
 }
 
@@ -156,7 +152,7 @@ export function logPositionCheck(row: {
   hitStopLoss: boolean;
   action: string;
   positionAgeSeconds: number;
-}) {
+}): void {
   writeRow('position_check_log.csv', row);
 }
 
@@ -186,14 +182,38 @@ export function logPositionClose(row: {
   maxUnrealizedPnLPercent?: number;
   worstUnrealizedPnL?: number;
   worstUnrealizedPnLPercent?: number;
-
-  // Необязательные поля для будущего анализа управления выходом.
   beTriggered?: boolean;
   partialClosed?: boolean;
   trailingActive?: boolean;
   trailingStopPrice?: number;
-}) {
+}): void {
   writeRow('trade_log.csv', row);
+}
+
+export function logPartialClose(row: {
+  timestamp: string;
+  positionId: string;
+  symbol: string;
+  side: string;
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  remainingQuantity: number;
+  originalNotional: number;
+  remainingNotional: number;
+  realizedPnL: number;
+  realizedPnLPercent: number;
+  entryFee: number;
+  exitFee: number;
+  totalFee: number;
+  netPnL: number;
+  netPnLPercent: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  executionOrderId?: string;
+  clientOrderId?: string;
+}): void {
+  writeRow('partial_close_log.csv', row);
 }
 
 export function logError(row: {
@@ -203,6 +223,6 @@ export function logError(row: {
   positionId?: string;
   error: string;
   stack?: string;
-}) {
+}): void {
   writeRow('error_log.csv', row);
 }
