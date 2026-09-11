@@ -74,7 +74,9 @@ export async function refreshTopMarkets(): Promise<void> {
       !nextPairs.has(pair) &&
       !hasPositionForPair(pair)
     ) {
-      stopMarketData(pair);
+      stopMarketDataByMarketId(
+        previousMarket.marketId
+      );
 
       console.log(
         `[${new Date().toISOString()}] ` +
