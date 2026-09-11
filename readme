@@ -3,13 +3,12 @@ docker compose down
 cd ~
 rm -rf trade_bot_crypto_impulse
 git clone -b etalon_lighter_11_09_2026 https://github.com/mybox1407/trade_bot_crypto_impulse.git
+cd trade_bot_crypto_impulse
 npm install protobufjs
 npm install -D @types/protobufjs
-npm install ws
-npm install --save-dev @types/ws
-cd trade_bot_crypto_impulse
-docker compose up -d --build
 npm install
+docker compose up -d --build
+
 
 docker compose logs -f trade_bot
 
