@@ -330,6 +330,16 @@ export async function startMarketDataByMarket(
   );
 }
 
+export function stopMarketDataByMarketId(
+  marketId: number
+): void {
+  clients.get(marketId)?.stop();
+
+  clients.delete(marketId);
+  candlesByMarket.delete(marketId);
+  pricesByMarket.delete(marketId);
+}
+
 export function stopMarketData(
   symbol: string
 ): void {
