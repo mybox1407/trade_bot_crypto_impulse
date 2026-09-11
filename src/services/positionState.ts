@@ -3,6 +3,7 @@ import {
   STARTING_BALANCE,
   TRADE_FEE_RATE
 } from './strategy';
+
 import { logPositionOpen, logPositionClose } from './logger';
 import { notifyPositionOpen, notifyPositionClose } from './telegram';
 
@@ -12,6 +13,7 @@ export const MAX_PARALLEL_POSITIONS = 3;
 export interface VirtualPosition {
   id: string;
   symbol: string;
+  marketId?: number;
   side: 'long' | 'short';
   entryPrice: number;
   quantity: number;
@@ -21,6 +23,8 @@ export interface VirtualPosition {
   stopLossPrice: number;
   entryFee: number;
   openedAt: string;
+  executionOrderId?: string;
+  clientOrderId?: string;
   metadata?: {
     regime: string;
     macdCrossUp: boolean;
@@ -31,17 +35,14 @@ export interface VirtualPosition {
     bbWidth: number;
     atrPct: number;
 
-    // Indicators at the exact moment of entry.
     ema20?: number;
     ema50?: number;
     ema200?: number;
 
-    // Entry-quality metrics.
     entryExtensionAtr?: number;
     maxEntryExtensionAtr?: number;
     entryTooExtended?: boolean;
 
-    // Position management metrics.
     maxUnrealizedPnL?: number;
     maxUnrealizedPnLPercent?: number;
     worstUnrealizedPnL?: number;
@@ -68,7 +69,15 @@ export interface ClosedTrade {
   netPnL: number;
   openedAt: string;
   closedAt: string;
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe';
+  reason:
+    | 'take_profit'
+    | 'stop_loss'
+    | 'manual'
+    | 'time_stop'
+    | 'breakeven_stop'
+    | 'dead_trade_mfe';
+  executionOrderId?: string;
+  clientOrderId?: string;
 }
 
 let balance = STARTING_BALANCE;
@@ -183,16 +192,15 @@ export function getOpenPositionsCount() {
 
 export function openPosition(data: {
   symbol: string;
+  marketId?: number;
   side: 'long' | 'short';
   entryPrice: number;
+  quantity: number;
   takeProfitPrice: number;
   stopLossPrice: number;
   metadata?: VirtualPosition['metadata'];
-  riskCapital?: number;
-  maxNotionalByPercent?: number;
-  stopDistance?: number;
-  totalRiskPerUnit?: number;
-  calculatedQuantity?: number;
+  executionOrderId?: string;
+  clientOrderId?: string;
 }) {
   const balanceBefore = balance;
   const reservedCapitalBefore = reservedCapital;
@@ -226,7 +234,12 @@ export function openPosition(data: {
     };
   }
 
-  if (!isValidLevels(data)) {
+  if (!isValidLevels({
+    side: data.side,
+    entryPrice: data.entryPrice,
+    takeProfitPrice: data.takeProfitPrice,
+    stopLossPrice: data.stopLossPrice
+  })) {
     return {
       ok: false,
       message: 'Invalid entry / stop / take-profit levels',
@@ -239,14 +252,10 @@ export function openPosition(data: {
     };
   }
 
-  const stopDistance =
-    data.stopDistance ??
-    Math.abs(data.entryPrice - data.stopLossPrice);
-
-  if (!isFinitePositive(stopDistance)) {
+  if (!isFinitePositive(data.quantity)) {
     return {
       ok: false,
-      message: 'Invalid stop distance',
+      message: 'Invalid quantity',
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
@@ -256,68 +265,13 @@ export function openPosition(data: {
     };
   }
 
-  if (!isFinitePositive(availableBalanceBefore)) {
-    return {
-      ok: false,
-      message: 'Insufficient available balance for a new position',
-      balanceBefore,
-      balanceAfter: balance,
-      reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
-  }
-
-  const requestedNotionalByPercent =
-    data.maxNotionalByPercent ?? getPositionNotional();
-
-  const maxNotionalByAvailableBalance = Math.min(
-    requestedNotionalByPercent,
-    availableBalanceBefore
-  );
-
-  if (!isFinitePositive(maxNotionalByAvailableBalance)) {
-    return {
-      ok: false,
-      message: 'Calculated available notional is invalid',
-      balanceBefore,
-      balanceAfter: balance,
-      reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
-  }
-
-  const maxQuantityByPercent =
-    maxNotionalByAvailableBalance / data.entryPrice;
-
-  const riskCapital = data.riskCapital ?? getRiskCapital();
-
-  const worstCaseFeePerUnit =
-    (data.entryPrice + data.stopLossPrice) * TRADE_FEE_RATE;
-
-  const totalRiskPerUnit =
-    data.totalRiskPerUnit ??
-    stopDistance + worstCaseFeePerUnit;
-
-  const riskQuantity =
-    data.calculatedQuantity ??
-    riskCapital / totalRiskPerUnit;
-
-  const quantity = Math.min(riskQuantity, maxQuantityByPercent);
-  const notional = quantity * data.entryPrice;
+  const notional = data.quantity * data.entryPrice;
   const entryFee = notional * TRADE_FEE_RATE;
 
-  if (
-    !isFinitePositive(quantity) ||
-    !isFinitePositive(notional) ||
-    !Number.isFinite(entryFee)
-  ) {
+  if (!isFinitePositive(notional) || !Number.isFinite(entryFee)) {
     return {
       ok: false,
-      message: 'Calculated position size is invalid',
+      message: 'Calculated notional or fee is invalid',
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
@@ -340,33 +294,23 @@ export function openPosition(data: {
     };
   }
 
-  if (balance < entryFee) {
-    return {
-      ok: false,
-      message: 'Insufficient balance to pay entry fee',
-      balanceBefore,
-      balanceAfter: balance,
-      reservedCapitalBefore,
-      reservedCapitalAfter: reservedCapital,
-      availableBalanceBefore,
-      availableBalanceAfter: getAvailableBalance()
-    };
-  }
-
   reservedCapital += notional;
 
   const position: VirtualPosition = {
     id: createPositionId(),
     symbol: data.symbol,
+    marketId: data.marketId,
     side: data.side,
     entryPrice: data.entryPrice,
-    quantity,
+    quantity: data.quantity,
     notional,
     reservedCapital: notional,
     takeProfitPrice: data.takeProfitPrice,
     stopLossPrice: data.stopLossPrice,
     entryFee,
     openedAt: new Date().toISOString(),
+    executionOrderId: data.executionOrderId,
+    clientOrderId: data.clientOrderId,
     metadata: data.metadata
   };
 
@@ -403,11 +347,14 @@ export function openPosition(data: {
     entryFee: position.entryFee,
     balanceBefore,
     balanceAfter: balance,
-    riskCapital,
-    maxNotionalByPercent: requestedNotionalByPercent,
-    stopDistance,
-    totalRiskPerUnit,
-    calculatedQuantity: riskQuantity,
+    riskCapital: getRiskCapital(),
+    maxNotionalByPercent: getPositionNotional(),
+    stopDistance:
+      data.side === 'long'
+        ? data.entryPrice - data.stopLossPrice
+        : data.stopLossPrice - data.entryPrice,
+    totalRiskPerUnit: 0,
+    calculatedQuantity: data.quantity,
     regime: data.metadata?.regime ?? '',
     macdCrossUp: data.metadata?.macdCrossUp ?? false,
     macdCrossDown: data.metadata?.macdCrossDown ?? false,
@@ -456,7 +403,18 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: 'take_profit' | 'stop_loss' | 'manual' | 'time_stop' | 'breakeven_stop' | 'dead_trade_mfe'
+  reason:
+    | 'take_profit'
+    | 'stop_loss'
+    | 'manual'
+    | 'time_stop'
+    | 'breakeven_stop'
+    | 'dead_trade_mfe',
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
 ) {
   const index = currentPositions.findIndex(
     position => position.id === positionId
@@ -486,8 +444,9 @@ export function closePosition(
       ? (realizedPnL / position.notional) * 100
       : 0;
 
-  const exitFee =
-    exitPrice * position.quantity * TRADE_FEE_RATE;
+  const exitFee = options?.fee ?? (
+    exitPrice * position.quantity * TRADE_FEE_RATE
+  );
 
   const netPnL = realizedPnL - exitFee - position.entryFee;
 
@@ -519,7 +478,9 @@ export function closePosition(
     netPnL,
     openedAt: position.openedAt,
     closedAt,
-    reason
+    reason,
+    executionOrderId: options?.executionOrderId ?? position.executionOrderId,
+    clientOrderId: options?.clientOrderId ?? position.clientOrderId
   };
 
   currentPositions = currentPositions.filter(
@@ -606,7 +567,12 @@ export function closePosition(
 export function partialClosePosition(
   positionId: string,
   quantityToClose: number,
-  exitPrice: number
+  exitPrice: number,
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
 ): { ok: true; realizedPnL: number; position: VirtualPosition } | {
   ok: false;
   message: string;
@@ -640,8 +606,9 @@ export function partialClosePosition(
       ? (exitPrice - position.entryPrice) * quantityToClose
       : (position.entryPrice - exitPrice) * quantityToClose;
 
-  const exitFee =
-    exitPrice * quantityToClose * TRADE_FEE_RATE;
+  const exitFee = options?.fee ?? (
+    exitPrice * quantityToClose * TRADE_FEE_RATE
+  );
 
   const proportionalEntryFee =
     position.entryFee * (quantityToClose / position.quantity);
