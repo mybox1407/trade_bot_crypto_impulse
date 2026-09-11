@@ -34,6 +34,12 @@ import {
 } from './logger';
 import { notifyStartup, notifyError } from './telegram';
 import axios from 'axios';
+import {
+  refreshTopMarkets,
+  startMarketRefresh,
+  stopMarketRefresh,
+  getActiveTradingPairs
+} from './scheduler.dynamic.parts';
 
 type SignalResult = {
   symbol: string;
@@ -250,8 +256,11 @@ async function checkSignals(): Promise<void> {
       `========== SIGNAL CHECK START ==========`
     );
 
+    const activeTradingPairs =
+      getActiveTradingPairs();
+    
     console.log(
-      `[${new Date().toISOString()}] Pairs: ${TRADING_PAIRS.length}, ` +
+      `[${new Date().toISOString()}] Pairs: ${activeTradingPairs.length}, ` +
       `Open positions: ${getOpenPositionsCount()}/` +
       `${MAX_PARALLEL_POSITIONS}, ` +
       `Equity: $${getBalance().toFixed(2)}, ` +
@@ -261,7 +270,7 @@ async function checkSignals(): Promise<void> {
 
     const signalResults: SignalResult[] = [];
 
-    for (const symbol of TRADING_PAIRS) {
+    for (const symbol of activeTradingPairs) {
       try {
         if (hasOpenPosition(symbol)) {
           console.log(
