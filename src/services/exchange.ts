@@ -254,6 +254,82 @@ export function getMarketPrice(
   );
 }
 
+export async function startMarketDataByMarket(
+  market: {
+    symbol: string;
+    marketId: number;
+  },
+  timeframe = '15m'
+): Promise<void> {
+  const marketId = market.marketId;
+
+  if (clients.has(marketId)) {
+    return;
+  }
+
+  const historicalCandles =
+    await loadHistoricalCandles(
+      marketId,
+      timeframe,
+      MAX_CANDLES
+    );
+
+  if (historicalCandles.length === 0) {
+    throw new Error(
+      `No historical candles received for ${market.symbol}`
+    );
+  }
+
+  candlesByMarket.set(
+    marketId,
+    historicalCandles
+  );
+
+  const client = new LighterWsClient(
+    marketId,
+    timeframe,
+    candle => {
+      const candles =
+        candlesByMarket.get(marketId) ?? [];
+
+      const last =
+        candles[candles.length - 1];
+
+      if (!last || candle.time > last.time) {
+        candles.push(candle);
+      } else if (candle.time === last.time) {
+        candles[candles.length - 1] = candle;
+      }
+
+      candles.sort((a, b) => a.time - b.time);
+
+      if (candles.length > MAX_CANDLES) {
+        candles.splice(
+          0,
+          candles.length - MAX_CANDLES
+        );
+      }
+
+      candlesByMarket.set(
+        marketId,
+        candles
+      );
+    },
+    price => {
+      pricesByMarket.set(marketId, price);
+    }
+  );
+
+  clients.set(marketId, client);
+  client.connect();
+
+  console.log(
+    `[${new Date().toISOString()}] Market data started: ` +
+      `${market.symbol}/USDT, marketId=${marketId}, ` +
+      `candles=${historicalCandles.length}`
+  );
+}
+
 export function stopMarketData(
   symbol: string
 ): void {
