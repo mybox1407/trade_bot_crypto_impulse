@@ -9,12 +9,12 @@ import {
   EMA
 } from 'technicalindicators';
 
-export const STARTING_BALANCE = 500;
+export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 
 // Paper-trading комиссия MEXC: 0% (USDC/USDT пары с 0% комиссией).
 // Применяется отдельно при входе и при выходе позиции.
-export const TRADE_FEE_RATE = 0.0;  //ВАЖНО <<< БЫЛО 0.0004
+export const TRADE_FEE_RATE = 0.00064;  //ВАЖНО <<< БЫЛО 0.0004
 
 export const ENABLE_TREND_UP_TRADES = true;
 
