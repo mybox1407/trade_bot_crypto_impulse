@@ -86,7 +86,6 @@ async function loadHistoricalCandles(
   );
 
   const response = await fetch(url);
-
   const body = await response.text();
 
   if (!response.ok) {
@@ -165,7 +164,8 @@ export async function startMarketData(
       const candles =
         candlesByMarket.get(market.marketId) ?? [];
 
-      const last = candles.at(-1);
+      const last =
+        candles[candles.length - 1];
 
       if (!last || candle.time > last.time) {
         candles.push(candle);
@@ -211,6 +211,7 @@ export function getCandles(
   limit = MAX_CANDLES
 ): Candle[] {
   const market = getLighterMarket(symbol);
+
   const candles =
     candlesByMarket.get(market.marketId) ?? [];
 
@@ -221,8 +222,15 @@ export function getCurrentPrice(
   symbol: string
 ): number | null {
   const market = getLighterMarket(symbol);
+
   const price =
     pricesByMarket.get(market.marketId);
+
+  const candles =
+    candlesByMarket.get(market.marketId) ?? [];
+
+  const lastCandle =
+    candles[candles.length - 1];
 
   return (
     price?.lastTradePrice ??
@@ -230,10 +238,7 @@ export function getCurrentPrice(
     price?.midPrice ??
     price?.bestBid ??
     price?.bestAsk ??
-    candlesByMarket
-      .get(market.marketId)
-      ?.at(-1)
-      ?.close ??
+    lastCandle?.close ??
     null
   );
 }
