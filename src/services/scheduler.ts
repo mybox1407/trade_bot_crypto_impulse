@@ -4,12 +4,16 @@ import {
   TOP_MARKETS_LIMIT,
   MARKET_REFRESH_INTERVAL_MS
 } from '../config/constants';
+
 import { runBotOnce } from './botRunner';
+
 import {
   startMarketData,
   stopMarketData,
-  getCurrentPrice
+  getCurrentPrice,
+  getMarketPrice
 } from './exchange';
+
 import {
   getPositions,
   openPosition,
@@ -26,20 +30,35 @@ import {
   partialClosePosition,
   updatePositionStopLoss
 } from './positionState';
+
 import { TRADE_FEE_RATE } from './strategy';
+
 import {
   logSignalCheck,
   logPositionCheck,
   logError
 } from './logger';
+
 import { notifyStartup, notifyError } from './telegram';
+
 import axios from 'axios';
+
 import {
   refreshTopMarkets,
   startMarketRefresh,
   stopMarketRefresh,
   getActiveTradingPairs
 } from './scheduler.dynamic.parts';
+
+import {
+  PaperExecutionService,
+  ExecutionService,
+  OpenExecutionRequest,
+  CloseExecutionRequest
+} from './execution';
+
+const executionService: ExecutionService =
+  new PaperExecutionService();
 
 type SignalResult = {
   symbol: string;
@@ -560,10 +579,99 @@ async function checkSignals(): Promise<void> {
           const calculatedQuantity =
             riskCapital / totalRiskPerUnit;
 
+          const maxQuantityByPercent =
+            maxNotionalByPercent / price;
+
+          const quantity = Math.min(
+            calculatedQuantity,
+            maxQuantityByPercent
+          );
+
+          if (quantity <= 0) {
+            const reason = 'Calculated quantity is invalid';
+
+            console.log(
+              `[${new Date().toISOString()}] ❌ ${symbol}: ` +
+              `FAILED TO OPEN - ${reason}`
+            );
+
+            signalResults.push({
+              symbol,
+              status: 'signal',
+              regime,
+              hasSignal: true,
+              side,
+              price,
+              reason
+            });
+
+            continue;
+          }
+
+          const clientOrderId =
+            `${symbol}-${Date.now()}-open`;
+
+          const marketPrice = getMarketPrice(symbol);
+          const marketId =
+            marketPrice?.marketId ?? 0;
+
+          const executionResult =
+            await executionService.openPosition({
+              symbol,
+              marketId,
+              side,
+              quantity,
+              expectedPrice: price,
+              clientOrderId
+            });
+
+          if (!executionResult.ok) {
+            console.log(
+              `[${new Date().toISOString()}] ❌ ${symbol}: ` +
+              `EXECUTION FAILED - ${executionResult.message}`
+            );
+
+            signalResults.push({
+              symbol,
+              status: 'signal',
+              regime,
+              hasSignal: true,
+              side,
+              price,
+              reason: executionResult.message ?? 'Execution failed'
+            });
+
+            continue;
+          }
+
+          if (
+            executionResult.filledQuantity <= 0 ||
+            executionResult.averageFillPrice == null
+          ) {
+            console.log(
+              `[${new Date().toISOString()}] ❌ ${symbol}: ` +
+              `NO FILL CONFIRMED`
+            );
+
+            signalResults.push({
+              symbol,
+              status: 'signal',
+              regime,
+              hasSignal: true,
+              side,
+              price,
+              reason: 'No fill confirmed'
+            });
+
+            continue;
+          }
+
           const openResult = openPosition({
             symbol,
+            marketId,
             side,
-            entryPrice: price,
+            entryPrice: executionResult.averageFillPrice,
+            quantity: executionResult.filledQuantity,
             takeProfitPrice,
             stopLossPrice,
             metadata: {
@@ -595,11 +703,8 @@ async function checkSignals(): Promise<void> {
               entryTooExtended:
                 indicators?.entryTooExtended ?? false
             } as any,
-            riskCapital,
-            maxNotionalByPercent,
-            stopDistance,
-            totalRiskPerUnit,
-            calculatedQuantity
+            executionOrderId: executionResult.orderId,
+            clientOrderId
           });
 
           if (
@@ -1033,16 +1138,52 @@ async function checkPositions(): Promise<void> {
           const closeQuantity =
             quantityBeforePartial * 0.5;
 
+          const clientOrderId =
+            `${position.symbol}-${Date.now()}-partial`;
+
+          const partialExecution =
+            await executionService.closePosition({
+              symbol: position.symbol,
+              marketId: position.marketId ?? 0,
+              positionSide: position.side,
+              quantity: closeQuantity,
+              expectedPrice: currentPrice,
+              reason: 'partial_close',
+              clientOrderId
+            });
+
+          if (!partialExecution.ok) {
+            throw new Error(
+              `Partial close failed for ${position.symbol}: ` +
+              `${partialExecution.message}`
+            );
+          }
+
+          if (
+            partialExecution.filledQuantity <= 0 ||
+            partialExecution.averageFillPrice == null
+          ) {
+            throw new Error(
+              `Partial close has no confirmed fill: ` +
+              `${position.symbol}`
+            );
+          }
+
           const partialResult =
             partialClosePosition(
               position.id,
-              closeQuantity,
-              currentPrice
+              partialExecution.filledQuantity,
+              partialExecution.averageFillPrice,
+              {
+                executionOrderId: partialExecution.orderId,
+                clientOrderId,
+                fee: partialExecution.fee
+              }
             );
 
           if (!partialResult.ok) {
             throw new Error(
-              `Partial close failed for ${position.symbol}: ` +
+              `Partial close state update failed for ${position.symbol}: ` +
               `${partialResult.message}`
             );
           }
@@ -1112,8 +1253,8 @@ async function checkPositions(): Promise<void> {
           console.log(
             `[${new Date().toISOString()}] 📉 ` +
             `${position.symbol}: PARTIAL CLOSE 50% ` +
-            `(${closeQuantity.toFixed(8)}) @ ` +
-            `${formatPrice(currentPrice)}`
+            `(${partialExecution.filledQuantity.toFixed(8)}) @ ` +
+            `${formatPrice(partialExecution.averageFillPrice)}`
           );
 
           console.log(
@@ -1140,15 +1281,51 @@ async function checkPositions(): Promise<void> {
               : 0;
 
           if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
+            const clientOrderId =
+              `${position.symbol}-${Date.now()}-dead`;
+
+            const closeExecution =
+              await executionService.closePosition({
+                symbol: position.symbol,
+                marketId: position.marketId ?? 0,
+                positionSide: position.side,
+                quantity: position.quantity,
+                expectedPrice: currentPrice,
+                reason: 'dead_trade_mfe',
+                clientOrderId
+              });
+
+            if (!closeExecution.ok) {
+              throw new Error(
+                `Dead trade close failed for ${position.symbol}: ` +
+                `${closeExecution.message}`
+              );
+            }
+
+            if (
+              closeExecution.filledQuantity <= 0 ||
+              closeExecution.averageFillPrice == null
+            ) {
+              throw new Error(
+                `Dead trade close has no confirmed fill: ` +
+                `${position.symbol}`
+              );
+            }
+
             const result = closePosition(
               position.id,
-              currentPrice,
-              'dead_trade_mfe'
+              closeExecution.averageFillPrice,
+              'dead_trade_mfe',
+              {
+                executionOrderId: closeExecution.orderId,
+                clientOrderId,
+                fee: closeExecution.fee
+              }
             );
 
             if (!result.ok) {
               throw new Error(
-                `Failed to dead-trade-close ${position.symbol}: ` +
+                `Dead trade state update failed for ${position.symbol}: ` +
                 `${result.message}`
               );
             }
@@ -1174,15 +1351,51 @@ async function checkPositions(): Promise<void> {
           unrealizedPnLPercent >
             TIME_STOP_MAX_LOSS_PERCENT
         ) {
+          const clientOrderId =
+            `${position.symbol}-${Date.now()}-timestop`;
+
+          const closeExecution =
+            await executionService.closePosition({
+              symbol: position.symbol,
+              marketId: position.marketId ?? 0,
+              positionSide: position.side,
+              quantity: position.quantity,
+              expectedPrice: currentPrice,
+              reason: 'time_stop',
+              clientOrderId
+            });
+
+          if (!closeExecution.ok) {
+            throw new Error(
+              `Time stop failed for ${position.symbol}: ` +
+              `${closeExecution.message}`
+            );
+          }
+
+          if (
+            closeExecution.filledQuantity <= 0 ||
+            closeExecution.averageFillPrice == null
+          ) {
+            throw new Error(
+              `Time stop has no confirmed fill: ` +
+              `${position.symbol}`
+            );
+          }
+
           const result = closePosition(
             position.id,
-            currentPrice,
-            'time_stop'
+            closeExecution.averageFillPrice,
+            'time_stop',
+            {
+              executionOrderId: closeExecution.orderId,
+              clientOrderId,
+              fee: closeExecution.fee
+            }
           );
 
           if (!result.ok) {
             throw new Error(
-              `Failed to time-stop ${position.symbol}: ` +
+              `Time stop state update failed for ${position.symbol}: ` +
               `${result.message}`
             );
           }
@@ -1314,38 +1527,52 @@ async function checkPositions(): Promise<void> {
             ? currentPrice <= position.stopLossPrice
             : currentPrice >= position.stopLossPrice;
 
-        console.log(
-          `\n[${new Date().toISOString()}] 📊 ` +
-          `${position.symbol} ` +
-          `(${position.side.toUpperCase()}):`
-        );
-
-        console.log(
-          `   Entry: ${formatPrice(position.entryPrice)}, ` +
-          `Current: ${formatPrice(currentPrice)}`
-        );
-
-        console.log(
-          `   TP: ${formatPrice(position.takeProfitPrice)}, ` +
-          `SL: ${formatPrice(position.stopLossPrice)}`
-        );
-
-        console.log(
-          `   Unrealized: $${unrealizedPnL.toFixed(2)} ` +
-          `(${unrealizedPnLPercent.toFixed(2)}%) | ` +
-          `MFE: ${maxUnrealizedPnLPercent.toFixed(2)}%`
-        );
-
         if (hitTakeProfit) {
+          const clientOrderId =
+            `${position.symbol}-${Date.now()}-tp`;
+
+          const closeExecution =
+            await executionService.closePosition({
+              symbol: position.symbol,
+              marketId: position.marketId ?? 0,
+              positionSide: position.side,
+              quantity: position.quantity,
+              expectedPrice: currentPrice,
+              reason: 'take_profit',
+              clientOrderId
+            });
+
+          if (!closeExecution.ok) {
+            throw new Error(
+              `TP close failed for ${position.symbol}: ` +
+              `${closeExecution.message}`
+            );
+          }
+
+          if (
+            closeExecution.filledQuantity <= 0 ||
+            closeExecution.averageFillPrice == null
+          ) {
+            throw new Error(
+              `TP close has no confirmed fill: ` +
+              `${position.symbol}`
+            );
+          }
+
           const result = closePosition(
             position.id,
-            currentPrice,
-            'take_profit'
+            closeExecution.averageFillPrice,
+            'take_profit',
+            {
+              executionOrderId: closeExecution.orderId,
+              clientOrderId,
+              fee: closeExecution.fee
+            }
           );
 
           if (!result.ok) {
             throw new Error(
-              `Failed to close TP for ${position.symbol}: ` +
+              `TP state update failed for ${position.symbol}: ` +
               `${result.message}`
             );
           }
@@ -1356,17 +1583,51 @@ async function checkPositions(): Promise<void> {
             `${result.lastClosedTrade?.netPnL.toFixed(2)}`
           );
         } else if (hitStopLoss) {
+          const clientOrderId =
+            `${position.symbol}-${Date.now()}-sl`;
+
+          const closeExecution =
+            await executionService.closePosition({
+              symbol: position.symbol,
+              marketId: position.marketId ?? 0,
+              positionSide: position.side,
+              quantity: position.quantity,
+              expectedPrice: currentPrice,
+              reason: beTriggered ? 'breakeven_stop' : 'stop_loss',
+              clientOrderId
+            });
+
+          if (!closeExecution.ok) {
+            throw new Error(
+              `SL close failed for ${position.symbol}: ` +
+              `${closeExecution.message}`
+            );
+          }
+
+          if (
+            closeExecution.filledQuantity <= 0 ||
+            closeExecution.averageFillPrice == null
+          ) {
+            throw new Error(
+              `SL close has no confirmed fill: ` +
+              `${position.symbol}`
+            );
+          }
+
           const result = closePosition(
             position.id,
-            currentPrice,
-            beTriggered
-              ? 'breakeven_stop'
-              : 'stop_loss'
+            closeExecution.averageFillPrice,
+            beTriggered ? 'breakeven_stop' : 'stop_loss',
+            {
+              executionOrderId: closeExecution.orderId,
+              clientOrderId,
+              fee: closeExecution.fee
+            }
           );
 
           if (!result.ok) {
             throw new Error(
-              `Failed to close SL for ${position.symbol}: ` +
+              `SL state update failed for ${position.symbol}: ` +
               `${result.message}`
             );
           }
