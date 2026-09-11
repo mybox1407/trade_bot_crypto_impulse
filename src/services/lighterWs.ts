@@ -63,6 +63,8 @@ export class LighterWsClient {
   private reconnectTimer?: NodeJS.Timeout;
   private pingTimer?: NodeJS.Timeout;
   private stopped = false;
+  private lastMessageTime = 0;
+  private staleDataTimeout?: NodeJS.Timeout;
 
   constructor(
     private readonly marketId: number,
@@ -73,6 +75,7 @@ export class LighterWsClient {
 
   connect(): void {
     this.stopped = false;
+    this.lastMessageTime = Date.now();
     this.open();
   }
 
@@ -87,6 +90,11 @@ export class LighterWsClient {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = undefined;
+    }
+
+    if (this.staleDataTimeout) {
+      clearTimeout(this.staleDataTimeout);
+      this.staleDataTimeout = undefined;
     }
 
     this.ws?.close();
@@ -112,6 +120,8 @@ export class LighterWsClient {
           `market=${this.marketId}`
       );
 
+      this.lastMessageTime = Date.now();
+
       ws.send(
         JSON.stringify({
           type: 'subscribe',
@@ -131,10 +141,14 @@ export class LighterWsClient {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, 30_000);
+
+      this.scheduleStaleDataCheck();
     });
 
     ws.on('message', raw => {
       try {
+        this.lastMessageTime = Date.now();
+
         const message = JSON.parse(
           raw.toString()
         ) as CandleMessage | MarketStatsMessage;
@@ -216,6 +230,11 @@ export class LighterWsClient {
         this.pingTimer = undefined;
       }
 
+      if (this.staleDataTimeout) {
+        clearTimeout(this.staleDataTimeout);
+        this.staleDataTimeout = undefined;
+      }
+
       console.warn(
         `[${new Date().toISOString()}] Lighter WebSocket closed ` +
           `code=${code} reason=${reason.toString()}`
@@ -227,5 +246,27 @@ export class LighterWsClient {
         }, 3_000);
       }
     });
+  }
+
+  private scheduleStaleDataCheck(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    this.staleDataTimeout = setTimeout(() => {
+      const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+      const staleThreshold = 90_000;
+
+      if (timeSinceLastMessage > staleThreshold) {
+        console.warn(
+          `[${new Date().toISOString()}] Lighter WebSocket stale data detected ` +
+            `market=${this.marketId}, last message ${Math.floor(timeSinceLastMessage / 1000)}s ago`
+        );
+
+        this.ws?.close();
+      } else {
+        this.scheduleStaleDataCheck();
+      }
+    }, 60_000);
   }
 }
