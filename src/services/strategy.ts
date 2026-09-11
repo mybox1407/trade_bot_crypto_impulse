@@ -1,4 +1,4 @@
-// src/services/strategy.ts
+//ВАЖНО! В этом версии было давблено - MACD + RSI фильтром для трендов
 
 import {
   MACD,
@@ -12,24 +12,15 @@ import {
 export const STARTING_BALANCE = 500;
 export const MAX_RISK_PER_TRADE = 0.01;
 
-// Paper-trading комиссия MEXC: 0%
+// Paper-trading комиссия MEXC: 0% (USDC/USDT пары с 0% комиссией).
 // Применяется отдельно при входе и при выходе позиции.
-// Paper-trading комиссия MEXC: 0.064%
-// Применяется отдельно при входе и при выходе позиции.
-export const TRADE_FEE_RATE = 0.00064;
+export const TRADE_FEE_RATE = 0.0;  //ВАЖНО <<< БЫЛО 0.0004
 
 export const ENABLE_TREND_UP_TRADES = true;
 
 const MIN_ADX_TREND = 21;
 const MIN_ADX_RANGE = 20;
 const BB_SQUEEZE_THRESHOLD = 0.05;
-
-// Обязательные RSI-окна для трендовых входов.
-const TREND_LONG_RSI_MIN = 52.52;
-const TREND_LONG_RSI_MAX = 58.5;
-
-const TREND_SHORT_RSI_MIN = 35.0;
-const TREND_SHORT_RSI_MAX = 42.43;
 
 // breakout_watch filters
 const BREAKOUT_ATR_BUFFER_K = 0.2;
@@ -42,11 +33,11 @@ const ENTRY_SLIPPAGE_ATR_MAX = 1.0;
 const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 const MAX_ENTRY_EXTENSION_BREAKOUT_ATR = 1.5;
 
-// Фильтр по расстоянию до локального экстремума.
+// Изменение 4: фильтр по расстоянию до локального экстремума
 const MAX_EXTREMUM_DISTANCE_ATR = 2.5;
 const EXTREMUM_LOOKBACK = 30;
 
-// Диапазон волатильности для пробоев.
+// Изменение 3: диапазон волатильности для пробоев
 const BREAKOUT_MIN_ATR_PCT = 0.015;
 const BREAKOUT_MAX_ATR_PCT = 0.035;
 const BREAKOUT_MIN_BB_WIDTH = 0.03;
@@ -82,7 +73,7 @@ type RegimeIndicators = {
   avgVol20: number;
 };
 
-function last<T>(arr: T[]): T {
+function last<T>(arr: T[]) {
   return arr[arr.length - 1];
 }
 
@@ -95,29 +86,19 @@ function getVolumeSpike(volumes: number[], avgVol20: number) {
   return latestVolume >= avgVol20 * 1.3;
 }
 
-// Поиск локального экстремума за lookback свечей.
-function findLocalExtremum(
-  candles: Candle[],
-  side: 'long' | 'short',
-  lookback: number
-) {
+// Изменение 4: поиск локального экстремума за lookback свечей
+function findLocalExtremum(candles: Candle[], side: 'long' | 'short', lookback: number) {
   const slice = candles.slice(-lookback);
-
   if (slice.length === 0) {
-    return {
-      extremePrice: 0,
-      distanceAtr: 0
-    };
+    return { extremePrice: 0, distanceAtr: 0 };
   }
 
   const extremePrice =
     side === 'long'
-      ? Math.min(...slice.map(candle => candle.low))
-      : Math.max(...slice.map(candle => candle.high));
+      ? Math.min(...slice.map(c => c.low))
+      : Math.max(...slice.map(c => c.high));
 
-  return {
-    extremePrice
-  };
+  return { extremePrice };
 }
 
 export function detectMarketRegime(candles: Candle[]) {
@@ -253,10 +234,7 @@ export function detectMarketRegime(candles: Candle[]) {
   };
 }
 
-export function analyzeMarket(
-  candles: Candle[],
-  signalPrice?: number
-) {
+export function analyzeMarket(candles: Candle[], signalPrice?: number) {
   const closes = candles.map(candle => candle.close);
   const highs = candles.map(candle => candle.high);
   const lows = candles.map(candle => candle.low);
@@ -322,8 +300,6 @@ export function analyzeMarket(
   const previousMacd = macd[macd.length - 2];
 
   const lastRsi = last(rsi);
-  const previousRsi = rsi[rsi.length - 2] ?? lastRsi;
-
   const lastAtr = last(atr);
   const lastBb = last(bb);
   const lastCandle = last(candles);
@@ -333,39 +309,23 @@ export function analyzeMarket(
   const regimeIndicators = regimeInfo.indicators;
 
   const macdCrossUp =
-    previousMacd.MACD !== undefined &&
-    previousMacd.signal !== undefined &&
-    lastMacd.MACD !== undefined &&
-    lastMacd.signal !== undefined &&
-    previousMacd.MACD < previousMacd.signal &&
-    lastMacd.MACD > lastMacd.signal;
+    previousMacd.MACD! < previousMacd.signal! &&
+    lastMacd.MACD! > lastMacd.signal!;
 
   const macdCrossDown =
-    previousMacd.MACD !== undefined &&
-    previousMacd.signal !== undefined &&
-    lastMacd.MACD !== undefined &&
-    lastMacd.signal !== undefined &&
-    previousMacd.MACD > previousMacd.signal &&
-    lastMacd.MACD < lastMacd.signal;
+    previousMacd.MACD! > previousMacd.signal! &&
+    lastMacd.MACD! < lastMacd.signal!;
 
-  // MACD-cross НЕ является обязательным условием.
-  // Достаточно MACD-cross ИЛИ роста RSI.
-  const rsiRising = lastRsi > previousRsi;
+  // MACD + RSI фильтр для трендов
+  const rsiRising = lastRsi > (rsi[rsi.length - 2] ?? lastRsi);
+  
+  const rsiBull = regime === 'trend_up'
+    ? (lastRsi > 45 && lastRsi < 75)
+    : (lastRsi > 45 && lastRsi < 75);
 
-  // Обязательное RSI-окно для long:
-  // 52.52 <= RSI <= 58.50.
-  const rsiBull =
-    lastRsi >= TREND_LONG_RSI_MIN &&
-    lastRsi <= TREND_LONG_RSI_MAX;
+  const rsiBear = lastRsi < 60 && lastRsi > 35;
 
-  // Обязательное RSI-окно для short:
-  // 35 < RSI < 42.43.
-  const rsiBear =
-    lastRsi > TREND_SHORT_RSI_MIN &&
-    lastRsi < TREND_SHORT_RSI_MAX;
-
-  const riskCapital =
-    STARTING_BALANCE * MAX_RISK_PER_TRADE;
+  const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
 
   let side: 'long' | 'short' | 'none' = 'none';
   let buy = false;
@@ -381,14 +341,11 @@ export function analyzeMarket(
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
 
-  // Long-тренд:
-  // RSI-окно обязательно.
-  // Для входа достаточно MACD-cross вверх ИЛИ роста RSI.
+  // <<< ИЗМЕНЕНИЕ: MACD cross up ИЛИ (RSI > 55 и растёт)
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    rsiBull &&
-    (macdCrossUp || rsiRising) &&
+    (macdCrossUp || (rsiBull && rsiRising && lastRsi > 55)) &&  // <<< ДОБАВИЛ RSI фильтр БЫЛО 55
     price > regimeIndicators.ema200
   ) {
     side = 'long';
@@ -397,13 +354,10 @@ export function analyzeMarket(
     takeProfitPrice = price + lastAtr * 2.8;
   }
 
-  // Short-тренд:
-  // RSI-окно обязательно.
-  // Для входа достаточно MACD-cross вниз ИЛИ роста RSI.
   if (
     regime === 'trend_down' &&
+    (macdCrossDown || (rsiBear && rsiRising && lastRsi < 45)) &&  // <<< ДОБАВИЛ RSI фильтр для downtrend БЫЛО 45
     rsiBear &&
-    (macdCrossDown || rsiRising) &&
     price < regimeIndicators.ema200
   ) {
     side = 'short';
@@ -413,13 +367,12 @@ export function analyzeMarket(
   }
 
   if (regime === 'breakout_watch') {
-    const candleBody = Math.abs(
-      lastCandle.close - lastCandle.open
-    );
-
+    const candleBody = Math.abs(lastCandle.close - lastCandle.open);
     const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
     const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
 
+    // Изменение 2: пробой проверяется по закрытию свечи
+    // Изменение 1: расширено RSI-окно для пробоев
     const breakoutUp =
       lastCandle.close > lastBb.upper + atrBuffer &&
       candleBody >= minBody &&
@@ -432,9 +385,8 @@ export function analyzeMarket(
       lastRsi < 55 &&
       lastRsi > 25;
 
-    const atrPct =
-      lastClose > 0 ? lastAtr / lastClose : 0;
-
+    // Изменение 3: фильтр по волатильности для пробоев
+    const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
     const bbWidth =
       lastBb.middle !== 0
         ? (lastBb.upper - lastBb.lower) / lastBb.middle
@@ -446,28 +398,17 @@ export function analyzeMarket(
       bbWidth >= BREAKOUT_MIN_BB_WIDTH &&
       bbWidth <= BREAKOUT_MAX_BB_WIDTH;
 
+    // Изменение 4: проверка расстояния до локального экстремума
     let extremumOk = true;
-
     if (breakoutUp || breakoutDown) {
-      const sideForExtremum = breakoutUp
-        ? 'long'
-        : 'short';
-
-      const { extremePrice } = findLocalExtremum(
-        candles,
-        sideForExtremum,
-        EXTREMUM_LOOKBACK
-      );
-
+      const sideForExtremum = breakoutUp ? 'long' : 'short';
+      const { extremePrice } = findLocalExtremum(candles, sideForExtremum, EXTREMUM_LOOKBACK);
       if (extremePrice !== 0 && lastAtr > 0) {
         const distanceFromExtremum =
           sideForExtremum === 'long'
             ? lastClose - extremePrice
             : extremePrice - lastClose;
-
-        const distanceAtr =
-          Math.abs(distanceFromExtremum) / lastAtr;
-
+        const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
         if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
           extremumOk = false;
         }
@@ -479,26 +420,21 @@ export function analyzeMarket(
         side = 'long';
         buy = true;
         sell = false;
-
-        // Стоп 1.5 ATR, тейк 2.2 ATR.
+        // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
         stopLossPrice = price - lastAtr * 1.5;
         takeProfitPrice = price + lastAtr * 2.2;
       } else if (breakoutDown) {
         side = 'short';
         sell = true;
         buy = false;
-
-        // Стоп 1.5 ATR, тейк 2.2 ATR.
+        // Изменение 5b: R:R для пробоев — стоп 1.5 ATR, тейк 2.2 ATR
         stopLossPrice = price + lastAtr * 1.5;
         takeProfitPrice = price - lastAtr * 2.2;
       }
     }
   }
 
-  if (
-    regime === 'high_volatility' ||
-    regime === 'range'
-  ) {
+  if (regime === 'high_volatility' || regime === 'range') {
     buy = false;
     sell = false;
     side = 'none';
@@ -507,20 +443,11 @@ export function analyzeMarket(
     positionSize = null;
   }
 
-  if (
-    (buy || sell) &&
-    signalPrice != null &&
-    lastAtr > 0
-  ) {
-    const distanceFromSignal =
-      Math.abs(price - signalPrice);
+  if ((buy || sell) && signalPrice != null && lastAtr > 0) {
+    const distanceFromSignal = Math.abs(price - signalPrice);
+    const signalDistanceAtr = distanceFromSignal / lastAtr;
 
-    const signalDistanceAtr =
-      distanceFromSignal / lastAtr;
-
-    if (
-      signalDistanceAtr > ENTRY_SLIPPAGE_ATR_MAX
-    ) {
+    if (signalDistanceAtr > ENTRY_SLIPPAGE_ATR_MAX) {
       buy = false;
       sell = false;
       side = 'none';
@@ -530,17 +457,14 @@ export function analyzeMarket(
 
       skipReason =
         `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
-        `from signal (max ` +
-        `${ENTRY_SLIPPAGE_ATR_MAX.toFixed(2)} ATR)`;
+        `from signal (max ${ENTRY_SLIPPAGE_ATR_MAX.toFixed(2)} ATR)`;
     }
   }
 
   if (side !== 'none' && lastAtr > 0) {
     const referencePrice =
       regime === 'breakout_watch'
-        ? side === 'long'
-          ? lastBb.upper
-          : lastBb.lower
+        ? (side === 'long' ? lastBb.upper : lastBb.lower)
         : regimeIndicators.ema20;
 
     const distanceFromRef =
@@ -548,8 +472,7 @@ export function analyzeMarket(
         ? price - referencePrice
         : referencePrice - price;
 
-    entryExtensionAtr =
-      distanceFromRef / lastAtr;
+    entryExtensionAtr = distanceFromRef / lastAtr;
 
     maxEntryExtensionAtr =
       regime === 'breakout_watch'
@@ -560,15 +483,10 @@ export function analyzeMarket(
       entryExtensionAtr > maxEntryExtensionAtr;
 
     if (entryTooExtended) {
-      const direction =
-        side === 'long' ? 'above' : 'below';
-
-      const refLabel =
-        regime === 'breakout_watch'
-          ? side === 'long'
-            ? 'BB.upper'
-            : 'BB.lower'
-          : 'EMA20';
+      const direction = side === 'long' ? 'above' : 'below';
+      const refLabel = regime === 'breakout_watch'
+        ? (side === 'long' ? 'BB.upper' : 'BB.lower')
+        : 'EMA20';
 
       buy = false;
       sell = false;
@@ -578,20 +496,14 @@ export function analyzeMarket(
       positionSize = null;
 
       skipReason =
-        `Entry too extended: ` +
-        `${entryExtensionAtr.toFixed(2)} ATR ` +
-        `${direction} ${refLabel} ` +
-        `(max ${maxEntryExtensionAtr.toFixed(2)} ATR, ` +
+        `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
+        `${direction} ${refLabel} (max ${maxEntryExtensionAtr.toFixed(2)} ATR, ` +
         `regime ${regime})`;
     }
   }
 
-  if (
-    side !== 'none' &&
-    stopLossPrice != null
-  ) {
-    const riskPerUnit =
-      Math.abs(price - stopLossPrice);
+  if (side !== 'none' && stopLossPrice != null) {
+    const riskPerUnit = Math.abs(price - stopLossPrice);
 
     positionSize =
       riskPerUnit > 0
@@ -612,48 +524,25 @@ export function analyzeMarket(
     indicators: {
       macdCrossUp,
       macdCrossDown,
-      rsiRising,
-
       lastRsi,
-      previousRsi,
-
+      lastAtr,
       rsiBull,
       rsiBear,
-
-      trendLongRsiMin: TREND_LONG_RSI_MIN,
-      trendLongRsiMax: TREND_LONG_RSI_MAX,
-      trendShortRsiMin: TREND_SHORT_RSI_MIN,
-      trendShortRsiMax: TREND_SHORT_RSI_MAX,
-
-      lastAtr,
-
       bbUpper: lastBb.upper,
       bbMiddle: lastBb.middle,
       bbLower: lastBb.lower,
-
       regimeReady: regimeInfo.ready,
       regimeIndicators,
-
       breakoutAtrBufferK: BREAKOUT_ATR_BUFFER_K,
       breakoutBodyAtrMin: BREAKOUT_BODY_ATR_MIN,
-
       entrySlippageAtrMax: ENTRY_SLIPPAGE_ATR_MAX,
-
-      maxEntryExtensionTrendAtr:
-        MAX_ENTRY_EXTENSION_TREND_ATR,
-
-      maxEntryExtensionBreakoutAtr:
-        MAX_ENTRY_EXTENSION_BREAKOUT_ATR,
-
+      maxEntryExtensionTrendAtr: MAX_ENTRY_EXTENSION_TREND_ATR,
+      maxEntryExtensionBreakoutAtr: MAX_ENTRY_EXTENSION_BREAKOUT_ATR,
       entryExtensionAtr,
       maxEntryExtensionAtr,
       entryTooExtended,
-
-      trendUpTradesEnabled:
-        ENABLE_TREND_UP_TRADES,
-
+      trendUpTradesEnabled: ENABLE_TREND_UP_TRADES,
       tradeFeeRate: TRADE_FEE_RATE,
-
       ready: true
     }
   };
