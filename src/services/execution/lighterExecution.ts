@@ -361,9 +361,8 @@ export class LighterExecutionService
           resolve({
             ok: false,
             status: 'unknown',
-            orderId,
-            clientOrderId:
-              req.clientOrderId,
+            orderId: orderId ?? '',
+            clientOrderId: req.clientOrderId ?? '',
             requestedQuantity,
             filledQuantity: 0,
             message:
@@ -613,8 +612,8 @@ export class LighterExecutionService
                   string,
                   unknown
                 >
-              ),
-            clientOrderId: pending.resolve.name ? undefined : undefined,
+              ) ?? '',
+            clientOrderId: req.clientOrderId ?? '',
             requestedQuantity:
               pending.requestedQuantity,
             filledQuantity: 0,
@@ -655,8 +654,8 @@ export class LighterExecutionService
               string,
               unknown
             >
-          ) ?? undefined,
-        clientOrderId: undefined,
+          ) ?? '',
+        clientOrderId: pending.requestedQuantity.toString(),
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -714,8 +713,8 @@ export class LighterExecutionService
         ok: true,
         status: 'filled',
         orderId:
-          this.readTradeId(trade) ?? undefined,
-        clientOrderId: undefined,
+          this.readTradeId(trade) ?? '',
+        clientOrderId: String(clientOrderIndex),
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
@@ -905,7 +904,7 @@ export class LighterExecutionService
     return {
       ok: false,
       status: 'rejected',
-      clientOrderId: req.clientOrderId,
+      clientOrderId: req.clientOrderId ?? '',
       requestedQuantity: req.quantity,
       filledQuantity: 0,
       message
@@ -921,7 +920,7 @@ export class LighterExecutionService
     return {
       ok: false,
       status: 'unknown',
-      clientOrderId: req.clientOrderId,
+      clientOrderId: req.clientOrderId ?? '',
       requestedQuantity: req.quantity,
       filledQuantity: 0,
       message
@@ -959,7 +958,7 @@ export class LighterExecutionService
       pending.resolve({
         ok: false,
         status: 'unknown',
-        clientOrderId: undefined,
+        clientOrderId: '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity: 0,
