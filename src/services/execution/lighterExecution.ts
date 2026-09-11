@@ -19,9 +19,6 @@ const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
   'wss://mainnet.zklighter.elliot.ai/stream';
 
-const BASE_AMOUNT_DECIMALS = 8;
-const PRICE_DECIMALS = 2;
-
 const ORDER_WAIT_TIMEOUT_MS = 15_000;
 
 type LighterOrder = {
@@ -71,10 +68,19 @@ type PendingOrder = {
   clientOrderIndex: number;
   clientOrderId?: string;
   requestedQuantity: number;
+  priceDecimals: number;
+  sizeDecimals: number;
   resolve: (
     result: ExecutionResult
   ) => void;
   timer: NodeJS.Timeout;
+  fills: {
+    quantity: number;
+    price: number;
+    fee: number;
+  }[];
+  lastStatus?: string;
+  orderId?: string;
 };
 
 export class LighterExecutionService
@@ -154,7 +160,10 @@ export class LighterExecutionService
 
     try {
       const baseAmount =
-        this.toBaseAmount(req.quantity);
+        this.toBaseAmount(
+          req.quantity,
+          req.sizeDecimals ?? 8
+        );
 
       if (baseAmount <= 0) {
         return this.rejectedResult(
@@ -179,7 +188,9 @@ export class LighterExecutionService
           baseAmount,
           req.expectedPrice,
           isAsk,
-          false
+          false,
+          req.priceDecimals ?? 2,
+          req.sizeDecimals ?? 8
         );
 
       if (!submitted.ok) {
@@ -194,7 +205,9 @@ export class LighterExecutionService
         req.marketId,
         clientOrderIndex,
         submitted.orderId,
-        req.quantity
+        req.quantity,
+        req.priceDecimals ?? 2,
+        req.sizeDecimals ?? 8
       );
     } catch (error) {
       console.error(
@@ -228,7 +241,10 @@ export class LighterExecutionService
 
     try {
       const baseAmount =
-        this.toBaseAmount(req.quantity);
+        this.toBaseAmount(
+          req.quantity,
+          req.sizeDecimals ?? 8
+        );
 
       if (baseAmount <= 0) {
         return this.rejectedResult(
@@ -253,7 +269,9 @@ export class LighterExecutionService
           baseAmount,
           req.expectedPrice,
           isAsk,
-          true
+          true,
+          req.priceDecimals ?? 2,
+          req.sizeDecimals ?? 8
         );
 
       if (!submitted.ok) {
@@ -268,7 +286,9 @@ export class LighterExecutionService
         req.marketId,
         clientOrderIndex,
         submitted.orderId,
-        req.quantity
+        req.quantity,
+        req.priceDecimals ?? 2,
+        req.sizeDecimals ?? 8
       );
     } catch (error) {
       console.error(
@@ -292,7 +312,9 @@ export class LighterExecutionService
     baseAmount: number,
     expectedPrice: number,
     isAsk: boolean,
-    reduceOnly: boolean
+    reduceOnly: boolean,
+    priceDecimals: number,
+    sizeDecimals: number
   ): Promise<{
     ok: true;
     orderId?: string;
@@ -309,7 +331,7 @@ export class LighterExecutionService
         marketId,
         clientOrderIndex,
         baseAmount,
-        this.toPriceUnits(expectedPrice),
+        this.toPriceUnits(expectedPrice, priceDecimals),
         isAsk,
         reduceOnly,
         -1,
@@ -324,7 +346,7 @@ export class LighterExecutionService
     }
 
     const orderId =
-      this.readOrderId(
+      this.readExchangeOrderId(
         order as Record<string, unknown> | null
       ) ??
       (tx as unknown as Record<string, unknown>)?.tx_hash as string | undefined ??
@@ -350,14 +372,70 @@ export class LighterExecutionService
     marketId: number,
     clientOrderIndex: number,
     orderId: string | undefined,
-    requestedQuantity: number
+    requestedQuantity: number,
+    priceDecimals: number,
+    sizeDecimals: number
   ): Promise<ExecutionResult> {
     return new Promise<ExecutionResult>(resolve => {
       const timer =
         setTimeout(() => {
+          const pending =
+            this.pendingOrders.get(
+              clientOrderIndex
+            );
+
           this.pendingOrders.delete(
             clientOrderIndex
           );
+
+          if (!pending) {
+            resolve({
+              ok: false,
+              status: 'unknown',
+              orderId: orderId ?? '',
+              clientOrderId: req.clientOrderId ?? '',
+              requestedQuantity,
+              filledQuantity: 0,
+              message:
+                `Order accepted but execution ` +
+                `was not confirmed within ` +
+                `${ORDER_WAIT_TIMEOUT_MS}ms`
+            });
+
+            return;
+          }
+
+          const totalFilled =
+            pending.fills.reduce(
+              (sum, f) => sum + f.quantity,
+              0
+            );
+
+          if (totalFilled > 0) {
+            const totalQuote =
+              pending.fills.reduce(
+                (sum, f) =>
+                  sum + f.quantity * f.price,
+                0
+              );
+
+            const avgPrice =
+              totalQuote / totalFilled;
+
+            resolve({
+              ok: true,
+              status: 'filled',
+              orderId: pending.orderId ?? orderId ?? '',
+              clientOrderId: req.clientOrderId ?? '',
+              requestedQuantity,
+              filledQuantity: totalFilled,
+              averageFillPrice: avgPrice,
+              message:
+                `Partial fill confirmed after timeout`
+            });
+
+            return;
+          }
 
           resolve({
             ok: false,
@@ -380,8 +458,13 @@ export class LighterExecutionService
           clientOrderIndex,
           clientOrderId: req.clientOrderId,
           requestedQuantity,
+          priceDecimals,
+          sizeDecimals,
           resolve,
-          timer
+          timer,
+          fills: [],
+          lastStatus: undefined,
+          orderId
         }
       );
 
@@ -576,26 +659,28 @@ export class LighterExecutionService
       return;
     }
 
-    const filledBaseAmount =
+    const filledBaseAmountRaw =
       this.toNumber(
         order.filled_base_amount
       ) ?? 0;
 
-    const filledQuoteAmount =
+    const filledQuoteAmountRaw =
       this.toNumber(
         order.filled_quote_amount
       ) ?? 0;
 
     const filledQuantity =
-      filledBaseAmount /
-      Math.pow(10, BASE_AMOUNT_DECIMALS);
+      filledBaseAmountRaw /
+      Math.pow(10, pending.sizeDecimals);
+
+    const status =
+      order.status ?? '';
+
+    pending.lastStatus = status;
 
     if (
       filledQuantity <= 0
     ) {
-      const status =
-        order.status ?? '';
-
       if (
         status.startsWith('canceled') ||
         status === 'filled'
@@ -609,12 +694,12 @@ export class LighterExecutionService
                 ? 'unknown'
                 : 'rejected',
             orderId:
-              this.readOrderId(
+              this.readExchangeOrderId(
                 order as Record<
                   string,
                   unknown
                 >
-              ) ?? '',
+              ) ?? pending.orderId ?? '',
             clientOrderId: pending.clientOrderId ?? '',
             requestedQuantity:
               pending.requestedQuantity,
@@ -629,10 +714,10 @@ export class LighterExecutionService
     }
 
     const averageFillPrice =
-      filledQuoteAmount > 0
+      filledQuoteAmountRaw > 0 && filledBaseAmountRaw > 0
         ? (
-            filledQuoteAmount /
-            filledBaseAmount
+            filledQuoteAmountRaw /
+            filledBaseAmountRaw
           )
         : 0;
 
@@ -651,12 +736,12 @@ export class LighterExecutionService
         ok: true,
         status: 'filled',
         orderId:
-          this.readOrderId(
+          this.readExchangeOrderId(
             order as Record<
               string,
               unknown
             >
-          ) ?? '',
+          ) ?? pending.orderId ?? '',
         clientOrderId: pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
@@ -694,44 +779,81 @@ export class LighterExecutionService
       return;
     }
 
-    const filledQuantity =
+    const filledQuantityRaw =
       this.toNumber(trade.size);
 
-    const price =
+    const priceRaw =
       this.toNumber(trade.price);
 
     if (
-      filledQuantity == null ||
-      filledQuantity <= 0 ||
-      price == null ||
-      price <= 0
+      filledQuantityRaw == null ||
+      filledQuantityRaw <= 0 ||
+      priceRaw == null ||
+      priceRaw <= 0
     ) {
       return;
     }
 
-    this.resolvePendingOrder(
-      clientOrderIndex,
-      {
-        ok: true,
-        status: 'filled',
-        orderId:
-          this.readTradeId(trade) ?? '',
-        clientOrderId: pending.clientOrderId ?? '',
-        requestedQuantity:
-          pending.requestedQuantity,
-        filledQuantity,
-        averageFillPrice: price,
-        fee:
-          this.toNumber(
-            trade.taker_fee
-          ) ??
-          this.toNumber(
-            trade.maker_fee
-          ) ??
-          0,
-        message: 'Trade received'
-      }
-    );
+    const filledQuantity =
+      filledQuantityRaw /
+      Math.pow(10, pending.sizeDecimals);
+
+    const price =
+      priceRaw /
+      Math.pow(10, pending.priceDecimals);
+
+    const fee =
+      this.toNumber(
+        trade.taker_fee
+      ) ??
+      this.toNumber(
+        trade.maker_fee
+      ) ??
+      0;
+
+    pending.fills.push({
+      quantity: filledQuantity,
+      price,
+      fee
+    });
+
+    const totalFilled =
+      pending.fills.reduce(
+        (sum, f) => sum + f.quantity,
+        0
+      );
+
+    if (totalFilled >= pending.requestedQuantity * 0.95) {
+      const totalQuote =
+        pending.fills.reduce(
+          (sum, f) =>
+            sum + f.quantity * f.price,
+          0
+        );
+
+      const avgPrice =
+        totalQuote / totalFilled;
+
+      this.resolvePendingOrder(
+        clientOrderIndex,
+        {
+          ok: true,
+          status: 'filled',
+          orderId: pending.orderId ?? '',
+          clientOrderId: pending.clientOrderId ?? '',
+          requestedQuantity:
+            pending.requestedQuantity,
+          filledQuantity: totalFilled,
+          averageFillPrice: avgPrice,
+          fee:
+            pending.fills.reduce(
+              (sum, f) => sum + f.fee,
+              0
+            ),
+          message: 'Trade filled'
+        }
+      );
+    }
   }
 
   private resolvePendingOrder(
@@ -777,7 +899,7 @@ export class LighterExecutionService
       );
   }
 
-  private readOrderId(
+  private readExchangeOrderId(
     order: Record<string, unknown> | null
   ): string | undefined {
     if (!order) {
@@ -786,9 +908,7 @@ export class LighterExecutionService
 
     for (const key of [
       'order_id',
-      'order_index',
-      'client_order_id',
-      'client_order_index'
+      'order_index'
     ]) {
       const value =
         order[key];
@@ -823,7 +943,8 @@ export class LighterExecutionService
   }
 
   private toBaseAmount(
-    quantity: number
+    quantity: number,
+    sizeDecimals: number
   ): number {
     if (
       !Number.isFinite(quantity) ||
@@ -836,13 +957,14 @@ export class LighterExecutionService
       quantity *
         Math.pow(
           10,
-          BASE_AMOUNT_DECIMALS
+          sizeDecimals
         )
     );
   }
 
   private toPriceUnits(
-    price: number
+    price: number,
+    priceDecimals: number
   ): number {
     if (
       !Number.isFinite(price) ||
@@ -857,13 +979,19 @@ export class LighterExecutionService
       price *
         Math.pow(
           10,
-          PRICE_DECIMALS
+          priceDecimals
         )
     );
   }
 
+  private orderSequence = 0;
+
   private createClientOrderIndex(): number {
-    return Date.now();
+    const timestamp = Date.now() * 1000;
+    this.orderSequence =
+      (this.orderSequence + 1) % 1000;
+
+    return timestamp + this.orderSequence;
   }
 
   private toNumber(
