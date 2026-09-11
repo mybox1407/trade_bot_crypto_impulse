@@ -1456,59 +1456,57 @@ export async function startScheduler(): Promise<void> {
 
   console.log(
     `[${new Date().toISOString()}] ` +
-    `Starting Lighter market data...`
+      `Loading Lighter top markets...`
   );
 
-  for (const symbol of TRADING_PAIRS) {
-    await startMarketData(symbol, '15m');
+  await refreshTopMarkets();
 
-    console.log(
-      `[${new Date().toISOString()}] ✅ ` +
-      `Lighter data ready: ${symbol}`
-    );
-  }
+  startMarketRefresh();
+
+  const activeTradingPairs =
+    getActiveTradingPairs();
 
   console.log(
-    `[${new Date().toISOString()}] ✅ ` +
-    `All Lighter market data started`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Port: ` +
-    `${Number(process.env.PORT) || 3002}`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Signal check interval: ` +
-    `${SIGNAL_CHECK_INTERVAL_MS / 1000}s`
-  );
-
-  console.log(
-    `[${new Date().toISOString()}] Position check interval: ` +
-    `${POSITION_CHECK_INTERVAL_MS / 1000}s`
+    `[${new Date().toISOString()}] ✅ Active markets: ` +
+      `${activeTradingPairs.length}`
   );
 
   console.log(
     `[${new Date().toISOString()}] Trading pairs: ` +
-    `${[...TRADING_PAIRS].join(', ')}`
+      `${activeTradingPairs.join(', ')}`
+  );
+
+  console.log(
+    `[${new Date().toISOString()}] Port: ` +
+      `${Number(process.env.PORT) || 3002}`
+  );
+
+  console.log(
+    `[${new Date().toISOString()}] Signal check interval: ` +
+      `${SIGNAL_CHECK_INTERVAL_MS / 1000}s`
+  );
+
+  console.log(
+    `[${new Date().toISOString()}] Position check interval: ` +
+      `${POSITION_CHECK_INTERVAL_MS / 1000}s`
   );
 
   console.log(
     `[${new Date().toISOString()}] Max positions: ` +
-    `${MAX_PARALLEL_POSITIONS}`
+      `${MAX_PARALLEL_POSITIONS}`
   );
 
   console.log(
     `[${new Date().toISOString()}] Exit management: ` +
-    `BE @ +${BE_THRESHOLD_PERCENT}% ` +
-    `(lock ${LOCK_RATIO * 100}%) | ` +
-    `Partial @ +${PARTIAL_THRESHOLD_PERCENT}% | ` +
-    `Trailing @ ${TRAILING_DISTANCE_PERCENT}% | ` +
-    `Time-stop ${TIME_STOP_SECONDS / 60}min ` +
-    `@ MFE<${TIME_STOP_MFE_PERCENT}% ` +
-    `(только если !beTriggered) | ` +
-    `Dead-trade ${DEAD_TRADE_CHECK_AFTER_SEC / 60}min ` +
-    `@ MFE<${DEAD_TRADE_MIN_MFE_ATR} ATR`
+      `BE @ +${BE_THRESHOLD_PERCENT}% ` +
+      `(lock ${LOCK_RATIO * 100}%) | ` +
+      `Partial @ +${PARTIAL_THRESHOLD_PERCENT}% | ` +
+      `Trailing @ ${TRAILING_DISTANCE_PERCENT}% | ` +
+      `Time-stop ${TIME_STOP_SECONDS / 60}min ` +
+      `@ MFE<${TIME_STOP_MFE_PERCENT}% ` +
+      `(только если !beTriggered) | ` +
+      `Dead-trade ${DEAD_TRADE_CHECK_AFTER_SEC / 60}min ` +
+      `@ MFE<${DEAD_TRADE_MIN_MFE_ATR} ATR`
   );
 
   const positionPercent =
@@ -1518,19 +1516,21 @@ export async function startScheduler(): Promise<void> {
 
   console.log(
     `[${new Date().toISOString()}] Position size: ` +
-    `${positionPercent.toFixed(0)}% of equity`
+      `${positionPercent.toFixed(0)}% of equity`
   );
 
   console.log(
     `[${new Date().toISOString()}] Starting equity: ` +
-    `$${getBalance().toFixed(2)}\n`
+      `$${getBalance().toFixed(2)}\n`
   );
 
   notifyStartup({
     port: Number(process.env.PORT) || 3002,
-    tradingPairs: [...TRADING_PAIRS],
-    signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
-    positionInterval: POSITION_CHECK_INTERVAL_MS / 1000
+    tradingPairs: activeTradingPairs,
+    signalInterval:
+      SIGNAL_CHECK_INTERVAL_MS / 1000,
+    positionInterval:
+      POSITION_CHECK_INTERVAL_MS / 1000
   });
 
   void checkSignals();
@@ -1551,6 +1551,8 @@ export function stopScheduler(): void {
     `\n[${new Date().toISOString()}] 🛑 Stopping scheduler...`
   );
 
+  stopMarketRefresh();
+
   if (signalCheckInterval) {
     clearInterval(signalCheckInterval);
     signalCheckInterval = null;
@@ -1564,13 +1566,25 @@ export function stopScheduler(): void {
   if (!schedulerStopping) {
     schedulerStopping = true;
 
-    for (const symbol of TRADING_PAIRS) {
+    for (const position of getPositions()) {
+      try {
+        stopMarketData(position.symbol);
+      } catch (error) {
+        console.error(
+          `[${new Date().toISOString()}] Failed to stop ` +
+            `position market data for ${position.symbol}:`,
+          error
+        );
+      }
+    }
+
+    for (const symbol of getActiveTradingPairs()) {
       try {
         stopMarketData(symbol);
       } catch (error) {
         console.error(
           `[${new Date().toISOString()}] Failed to stop ` +
-          `Lighter data for ${symbol}:`,
+            `Lighter data for ${symbol}:`,
           error
         );
       }
