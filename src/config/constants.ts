@@ -8,7 +8,6 @@ export const TRADING_PAIRS = [
   'BTC/USDT',
   'XRP/USDT',
   'UNI/USDT',
-  'GRAM/USDT',
   'SUI/USDT',
   'NEAR/USDT',
   'DOGE/USDT',
