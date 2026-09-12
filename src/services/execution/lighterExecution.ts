@@ -691,7 +691,7 @@ export class LighterExecutionService
     return new Promise<ExecutionResult>(
       resolve => {
         const timer =
-          setTimeout(() => {
+          setTimeout(async () => {
             const pending =
               this.pendingOrders.get(
                 clientOrderIndex
@@ -766,6 +766,61 @@ export class LighterExecutionService
               return;
             }
 
+            // REST fallback вместо сразу unknown
+            try {
+              const expectedSide: 'BUY' | 'SELL' =
+                req.side === 'long' ? 'BUY' : 'SELL';
+
+              const reconciled = await this.reconcileOrderViaRest(
+                marketId,
+                clientOrderIndex,
+                orderId,
+                expectedSide,
+                45_000,
+                1500
+              );
+
+              if (reconciled.status === 'FILLED' && reconciled.filledQuantity > 0) {
+                resolve({
+                  ok: true,
+                  status:
+                    reconciled.filledQuantity >= requestedQuantity
+                      ? 'filled'
+                      : 'partially_filled',
+                  orderId: pending.orderId ?? orderId ?? '',
+                  clientOrderId: req.clientOrderId,
+                  requestedQuantity,
+                  filledQuantity: reconciled.filledQuantity,
+                  averageFillPrice: reconciled.averageFillPrice,
+                  fee: reconciled.fee,
+                  message: 'Execution confirmed via REST reconciliation'
+                });
+
+                return;
+              }
+
+              if (reconciled.status === 'CANCELED') {
+                resolve({
+                  ok: false,
+                  status: 'rejected',
+                  orderId: pending.orderId ?? orderId ?? '',
+                  clientOrderId: req.clientOrderId,
+                  requestedQuantity,
+                  filledQuantity: 0,
+                  message: 'Order canceled (confirmed via REST)'
+                });
+
+                return;
+              }
+            } catch (error) {
+              console.error(
+                `[${new Date().toISOString()}] ` +
+                  `[LIGHTER] REST reconciliation error:`,
+                error
+              );
+            }
+
+            // Fallback: unknown
             resolve({
               ok: false,
               status: 'unknown',
@@ -802,6 +857,274 @@ export class LighterExecutionService
         this.ensureAccountWebSocket();
       }
     );
+  }
+
+  private async reconcileOrderViaRest(
+    marketId: number,
+    clientOrderIndex: number,
+    orderId: string | undefined,
+    _expectedSide: 'BUY' | 'SELL',
+    timeoutMs: number = 45_000,
+    pollIntervalMs: number = 1500
+  ): Promise<{
+    status: 'FILLED' | 'CANCELED' | 'UNKNOWN';
+    filledQuantity: number;
+    averageFillPrice?: number;
+    fee: number;
+    position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
+  }> {
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+      // 1. Активные ордера
+      const activeUrl = new URL(
+        `${LIGHTER_API_URL}/api/v1/accountActiveOrders`
+      );
+      activeUrl.searchParams.set('account_index', String(this.accountIndex));
+      activeUrl.searchParams.set('limit', '100');
+
+      const activeResp = await fetch(activeUrl, {
+        headers: { Accept: 'application/json' }
+      });
+
+      let activeData: unknown = null;
+      if (activeResp.ok) {
+        try {
+          activeData = await activeResp.json();
+        } catch {
+          // ignore
+        }
+      }
+
+      const activeOrders = this.parseOrdersList(activeData);
+
+      const activeOrder = activeOrders.find(
+        o =>
+          (orderId && String(o.order_index) === orderId) ||
+          Number(o.client_order_index) === clientOrderIndex
+      );
+
+      if (activeOrder) {
+        const status = String(activeOrder.status ?? '').toLowerCase();
+
+        if (status === 'filled' || status.startsWith('filled')) {
+          const fills = await this.fetchOrderFills(marketId, Number(activeOrder.order_index));
+          const filledQuantity = fills.reduce((sum, f) => sum + Number(f.size ?? 0), 0);
+          const avgPrice =
+            filledQuantity > 0
+              ? fills.reduce((sum, f) => sum + Number(f.price ?? 0) * Number(f.size ?? 0), 0) / filledQuantity
+              : undefined;
+          const fee = fills.reduce((sum, f) => sum + Number(f.taker_fee ?? f.maker_fee ?? 0), 0);
+          const position = await this.fetchPosition(marketId);
+
+          return {
+            status: 'FILLED',
+            filledQuantity,
+            averageFillPrice: avgPrice,
+            fee,
+            position
+          };
+        }
+
+        await this.sleep(pollIntervalMs);
+        continue;
+      }
+
+      // 2. Неактивные ордера
+      const inactiveUrl = new URL(
+        `${LIGHTER_API_URL}/api/v1/accountInactiveOrders`
+      );
+      inactiveUrl.searchParams.set('account_index', String(this.accountIndex));
+      inactiveUrl.searchParams.set('limit', '100');
+
+      const inactiveResp = await fetch(inactiveUrl, {
+        headers: { Accept: 'application/json' }
+      });
+
+      let inactiveData: unknown = null;
+      if (inactiveResp.ok) {
+        try {
+          inactiveData = await inactiveResp.json();
+        } catch {
+          // ignore
+        }
+      }
+
+      const inactiveOrders = this.parseOrdersList(inactiveData);
+
+      const inactiveOrder = inactiveOrders.find(
+        o =>
+          (orderId && String(o.order_index) === orderId) ||
+          Number(o.client_order_index) === clientOrderIndex
+      );
+
+      if (inactiveOrder) {
+        const status = String(inactiveOrder.status ?? '').toLowerCase();
+
+        if (status === 'filled' || status.startsWith('filled')) {
+          const filledQty = Number(inactiveOrder.filled_base_amount ?? 0);
+          const filledQuote = Number(inactiveOrder.filled_quote_amount ?? 0);
+          const avgPrice = filledQty > 0 ? filledQuote / filledQty : undefined;
+          const fee = 0;
+          const position = await this.fetchPosition(marketId);
+
+          return {
+            status: 'FILLED',
+            filledQuantity: filledQty,
+            averageFillPrice: avgPrice,
+            fee,
+            position
+          };
+        }
+
+        if (
+          status.startsWith('cancel') ||
+          status === 'rejected' ||
+          status === 'failed'
+        ) {
+          return {
+            status: 'CANCELED',
+            filledQuantity: 0,
+            fee: 0,
+            position: { size: 0, side: 'FLAT' as const }
+          };
+        }
+      }
+
+      await this.sleep(pollIntervalMs);
+    }
+
+    return {
+      status: 'UNKNOWN',
+      filledQuantity: 0,
+      fee: 0,
+      position: { size: 0, side: 'FLAT' as const }
+    };
+  }
+
+  private parseOrdersList(data: unknown): LighterOrder[] {
+    const rec = data as Record<string, unknown> | null;
+    if (!rec) {
+      return [];
+    }
+
+    const ordersRaw =
+      (rec.orders as unknown[]) ??
+      (rec.data as Record<string, unknown>)?.orders ??
+      (rec.account as Record<string, unknown>)?.orders ??
+      [];
+
+    if (Array.isArray(ordersRaw)) {
+      return ordersRaw.filter(
+        (o): o is LighterOrder => o != null && typeof o === 'object'
+      );
+    }
+
+    return [];
+  }
+
+  private async fetchOrderFills(
+    marketId: number,
+    orderIndex: number
+  ): Promise<LighterTrade[]> {
+    const url = new URL(
+      `${LIGHTER_API_URL}/api/v1/account/${this.accountIndex}/trades`
+    );
+    url.searchParams.set('market_id', String(marketId));
+
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json' }
+    });
+
+    if (!resp.ok) {
+      return [];
+    }
+
+    const data = (await resp.json()) as Record<string, unknown> | null;
+    if (!data) {
+      return [];
+    }
+
+    const tradesRaw =
+      (data.trades as unknown[]) ??
+      (data.data as Record<string, unknown>)?.trades ??
+      (data.account as Record<string, unknown>)?.trades ??
+      [];
+
+    if (!Array.isArray(tradesRaw)) {
+      return [];
+    }
+
+    return tradesRaw.filter(
+      (t): t is LighterTrade =>
+        t != null &&
+        typeof t === 'object' &&
+        (
+          Number((t as LighterTrade).ask_client_id) === orderIndex ||
+          Number((t as LighterTrade).bid_client_id) === orderIndex
+        )
+    );
+  }
+
+  private async fetchPosition(
+    marketId: number
+  ): Promise<{ size: number; side: 'LONG' | 'SHORT' | 'FLAT' }> {
+    const url = new URL(
+      `${LIGHTER_API_URL}/api/v1/account`
+    );
+    url.searchParams.set('by', 'index');
+    url.searchParams.set('value', String(this.accountIndex));
+
+    const resp = await fetch(url, {
+      headers: { Accept: 'application/json' }
+    });
+
+    if (!resp.ok) {
+      return { size: 0, side: 'FLAT' as const };
+    }
+
+    const data = (await resp.json()) as Record<string, unknown> | null;
+    if (!data) {
+      return { size: 0, side: 'FLAT' as const };
+    }
+
+    const positionsRaw =
+      (data.positions as unknown[]) ??
+      (data.data as Record<string, unknown>)?.positions ??
+      (data.account as Record<string, unknown>)?.positions ??
+      [];
+
+    if (!Array.isArray(positionsRaw)) {
+      return { size: 0, side: 'FLAT' as const };
+    }
+
+    const pos = positionsRaw.find(
+      (p: any) =>
+        Number(p.market_id ?? p.market_index ?? p.marketId) === marketId
+    ) as Record<string, unknown> | undefined;
+
+    if (!pos) {
+      return { size: 0, side: 'FLAT' as const };
+    }
+
+    const rawSize =
+      Number(pos.position ?? pos.position_size ?? pos.size ?? pos.quantity ?? 0);
+
+    const side =
+      rawSize > 0
+        ? 'LONG'
+        : rawSize < 0
+          ? 'SHORT'
+          : 'FLAT';
+
+    return {
+      size: Math.abs(rawSize),
+      side: side as 'LONG' | 'SHORT' | 'FLAT'
+    };
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private startAccountWebSocket(): void {
@@ -1435,7 +1758,7 @@ export class LighterExecutionService
       throw new Error('client_order_index exceeds uint48');
     }
     
-    return value;  // ✅ Всегда > 0
+    return value;
   }
 
   private toNumber(
