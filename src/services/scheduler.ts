@@ -1847,19 +1847,19 @@ async function checkPositions(): Promise<void> {
               TIME_STOP_MFE_PERCENT ||
             unrealizedPnLPercent <
               TIME_STOP_MAX_LOSS_PERCENT
-          ) {
-            await executeClose(
-              currentStatePosition,
-              exitPrice,
-              'time_stop'
-            );
+          )
+        ) {
+          await executeClose(
+            currentStatePosition,
+            exitPrice,
+            'time_stop'
+          );
 
-            await verifyRemotePositionClosed(
-              symbol
-            );
+          await verifyRemotePositionClosed(
+            symbol
+          );
 
-            continue;
-          }
+          continue;
         }
 
         if (
