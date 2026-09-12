@@ -1,36 +1,13 @@
-cd trade_bot_crypto_impulse
+cd lighter_trade_bot
 docker compose down
 cd ~
-rm -rf trade_bot_crypto_impulse
-git clone -b etalon_lighter_11_09_2026 https://github.com/mybox1407/trade_bot_crypto_impulse.git
-cd trade_bot_crypto_impulse
+rm -rf lighter_trade_bot
+git clone -b etalon_lighter_11_09_2026 --single-branch https://github.com/mybox1407/trade_bot_crypto_impulse.git lighter_trade_bot
+cd lighter_trade_bot
 npm install protobufjs
 npm install -D @types/protobufjs
 npm install
 docker compose up -d --build
 
 
-docker compose logs -f trade_bot
-
-
-
-
-
-
-
-
-
-
-
-
-
-npx tsx src/backtest/downloadCandles.ts SOLUSDT 120 15m
-npx tsx src/backtest/downloadCandles.ts SOLUSDT 120 1m
-npx tsx src/backtest/runBacktest.ts \
-./src/backtest/data/SOLUSDT_15m.json \
-./src/backtest/data/SOLUSDT_1m.json \
-SOLUSDT
-
-tmux new -s backtest
-tmux kill-session -t backtest
-tmux attach -t backtest
+docker compose logs -f lighter_bot
