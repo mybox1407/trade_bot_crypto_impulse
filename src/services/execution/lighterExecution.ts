@@ -879,7 +879,41 @@ export class LighterExecutionService
     fee: number;
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
-    // === Логирование для отладки ===
+    // Создаём токен, если не инициализирован
+    if (!this.authToken) {
+      try {
+        const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
+          60 * 60,
+          undefined,
+          this.apiKeyIndex
+        );
+  
+        if (authError || !auth) {
+          throw new Error(authError ?? 'Failed to create auth token');
+        }
+  
+        this.authToken = auth;
+  
+        console.log(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Auth token created for REST reconciliation`
+        );
+      } catch (error) {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Failed to create auth token:`,
+          error
+        );
+  
+        return {
+          status: 'UNKNOWN',
+          filledQuantity: 0,
+          fee: 0,
+          position: { size: 0, side: 'FLAT' as const }
+        };
+      }
+    }
+  
     console.log(
       `[${new Date().toISOString()}] ` +
         `[LIGHTER] REST reconciliation START: ` +
@@ -887,7 +921,6 @@ export class LighterExecutionService
         `clientOrderIndex=${clientOrderIndex}, ` +
         `orderId=${orderId ?? 'n/a'}`
     );
-    // ===============================
   
     const start = Date.now();
   
