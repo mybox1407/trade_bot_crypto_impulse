@@ -62,6 +62,8 @@ import {
 
 import {
   restoreStateAfterRestart,
+  reconcileAccount,
+  fetchAccountPositions,
   verifyPositionAfterFill
 } from './reconciliation';
 
