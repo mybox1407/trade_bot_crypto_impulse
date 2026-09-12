@@ -9,6 +9,7 @@ services:
     environment:
       - PORT=3006
       - NODE_ENV=production
+      - PAPER_TRADING=${PAPER_TRADING:-true}
 
       - LIGHTER_API_KEY=${LIGHTER_API_KEY:-}
       - LIGHTER_API_SECRET=${LIGHTER_API_SECRET:-}
