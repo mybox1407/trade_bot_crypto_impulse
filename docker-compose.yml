@@ -1,7 +1,7 @@
 services:
   trade_bot:
     build: .
-    container_name: lighter_bot
+    container_name: lighter_live
     restart: unless-stopped
     ports:
       - "3006:3006"
