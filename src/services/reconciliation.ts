@@ -1009,16 +1009,55 @@ export async function syncLiveBalance(
   }
 
   const root = getRecord(parsed);
-  const account = getRecord(root?.account) ?? root;
 
-  // Правильные поля из Lighter API
+  if (!root) {
+    throw new Error('Invalid account response structure');
+  }
+
+  // Пробуем разные структуры ответа
+  let account: Record<string, unknown> | null = null;
+
+  // Вариант 1: account (объект)
+  account = getRecord(root?.account);
+
+  // Вариант 2: accounts (массив) - ищем по account_id
+  if (!account) {
+    const accounts = root?.accounts;
+    if (Array.isArray(accounts)) {
+      account = accounts.find(
+        (acc: unknown) => {
+          const record = getRecord(acc);
+          return record?.account_id === accountIndex;
+        }
+      ) as Record<string, unknown> | null;
+    }
+  }
+
+  // Вариант 3: data.account
+  if (!account) {
+    const data = getRecord(root?.data);
+    account = getRecord(data?.account);
+  }
+
+  if (!account) {
+    console.warn(
+      `[${new Date().toISOString()}] ` +
+        `Account object not found in response. ` +
+        `Response keys: ${Object.keys(root).join(', ')}`
+    );
+
+    return;
+  }
+
+  // Ищем баланс в разных полях
   const balance =
     toNumber(
-      account?.collateral ??           // ✅ Основное поле
-        account?.total_collateral ??   // ✅ Альтернатива
-        account?.balance ??            // ✅ На случай изменений
-        account?.available_balance ??  // ✅ Доступный баланс
-        account?.availableBalance      // ✅ camelCase версия
+      account?.collateral ??
+        account?.total_collateral ??
+        account?.balance ??
+        account?.available_balance ??
+        account?.availableBalance ??
+        account?.equity
     );
 
   if (
@@ -1027,15 +1066,19 @@ export async function syncLiveBalance(
   ) {
     console.warn(
       `[${new Date().toISOString()}] ` +
-        `Live balance field not found in account response. ` +
-        `Response keys: ${Object.keys(account ?? {}).join(', ')}`
+        `Live balance field not found. ` +
+        `Account keys: ${Object.keys(account).join(', ')}`
     );
 
-    // Не падаем, а просто пропускаем синхронизацию
     return;
   }
 
   updateLiveAccountState({
     balance
   });
+
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Balance synced: $${balance.toFixed(2)}`
+  );
 }
