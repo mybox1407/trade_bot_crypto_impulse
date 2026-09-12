@@ -56,8 +56,109 @@ import {
   ExecutionService
 } from './execution';
 
+import {
+  SignerClient
+} from 'zklighter-sdk';
+
+import {
+  restoreStateAfterRestart,
+  verifyPositionAfterFill
+} from './reconciliation';
+
 const executionService: ExecutionService =
   new PaperExecutionService();
+
+
+const LIGHTER_API_URL =
+  process.env.LIGHTER_API_URL ??
+  'https://mainnet.zklighter.elliot.ai';
+
+let signerClient: SignerClient | null = null;
+let reconciliationInterval: NodeJS.Timeout | null = null;
+
+function initializeSignerClient(): void {
+  const apiKeySecret =
+    process.env.LIGHTER_API_SECRET ?? '';
+
+  const apiKeyIndex =
+    Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+
+  const accountIndex =
+    Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+  if (apiKeySecret) {
+    const normalizedKey =
+      apiKeySecret.startsWith('0x')
+        ? apiKeySecret.slice(2)
+        : apiKeySecret;
+
+    signerClient = new SignerClient(
+      LIGHTER_API_URL,
+      normalizedKey,
+      apiKeyIndex,
+      accountIndex
+    );
+
+    console.log(
+      `[${new Date().toISOString()}] SignerClient initialized for reconciliation`
+    );
+  } else {
+    console.warn(
+      `[${new Date().toISOString()}] LIGHTER_API_SECRET not configured, reconciliation disabled`
+    );
+  }
+}
+
+function startReconciliationLoop(
+  client: SignerClient,
+  accountIndex: number,
+  intervalMs: number
+): void {
+  reconciliationInterval = setInterval(() => {
+    void reconcileAccountPeriodic(client, accountIndex);
+  }, intervalMs);
+}
+
+async function reconcileAccountPeriodic(
+  client: SignerClient,
+  accountIndex: number
+): Promise<void> {
+  try {
+    const result = await reconcileAccount(
+      client,
+      accountIndex,
+      {
+        autoFix: false,
+        dryRun: false
+      }
+    );
+
+    if (!result.ok) {
+      console.warn(
+        `[${new Date().toISOString()}] Reconciliation check: ` +
+        `${result.mismatches.length} mismatches detected`
+      );
+
+      notifyError({
+        context: 'reconciliation-periodic',
+        error:
+          `${result.mismatches.length} position mismatches detected`
+      });
+    }
+  } catch (error) {
+    console.error(
+      `[${new Date().toISOString()}] Reconciliation check error:`,
+      error
+    );
+  }
+}
+
+function stopReconciliationLoop(): void {
+  if (reconciliationInterval) {
+    clearInterval(reconciliationInterval);
+    reconciliationInterval = null;
+  }
+}
 
 type SignalResult = {
   symbol: string;
@@ -1463,7 +1564,48 @@ export async function startScheduler(): Promise<void> {
   schedulerFatalError = null;
 
   try {
+    initializeSignerClient();
+
     await refreshTopMarkets();
+
+    if (signerClient) {
+      const apiKeyIndex =
+        Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+
+      const accountIndex =
+        Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+      console.log(
+        `[${new Date().toISOString()}] Running state reconciliation...`
+      );
+
+      const restore =
+        await restoreStateAfterRestart(
+          signerClient,
+          accountIndex
+        );
+
+      console.log(
+        `[${new Date().toISOString()}] Reconciliation: ` +
+        `restored=${restore.restored}, ` +
+        `closed=${restore.closed}, ` +
+        `errors=${restore.errors}`
+      );
+
+      if (restore.errors > 0) {
+        notifyError({
+          context: 'reconciliation',
+          error:
+            `State reconciliation completed with ${restore.errors} severe mismatches`
+        });
+      }
+
+      startReconciliationLoop(
+        signerClient,
+        accountIndex,
+        15 * 60 * 1000
+      );
+    }
 
     startMarketRefresh();
 
@@ -1508,12 +1650,15 @@ export async function startScheduler(): Promise<void> {
   } catch (error) {
     schedulerStarted = false;
     stopMarketRefresh();
+    stopReconciliationLoop();
 
     throw error;
   }
 }
 
 export function stopScheduler(): void {
+  stopReconciliationLoop();
+
   stopMarketRefresh();
 
   if (signalCheckInterval) {
