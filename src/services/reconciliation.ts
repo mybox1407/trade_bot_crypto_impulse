@@ -720,9 +720,9 @@ export async function reconcileAccount(
           });
 
           // Помечаем позицию как проблемную в metadata
-          updatePositionMetadata(local.id, {
-            reconciliationIssue: 'missing_remote'
-          });
+          //updatePositionMetadata(local.id, {
+          //  reconciliationIssue: 'missing_remote'
+          //});
 
           continue;
         } else if (
