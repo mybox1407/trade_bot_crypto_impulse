@@ -1,5 +1,5 @@
 {
-  "name": "trade_bot_crypto_impulse",
+  "name": "lighter_trade_live",
   "version": "1.0.0",
   "description": "Autonomous crypto impulse trading bot",
   "main": "dist/server.js",
