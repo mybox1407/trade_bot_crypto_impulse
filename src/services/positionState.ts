@@ -709,32 +709,20 @@ export function partialClosePosition(
     clientOrderId?: string;
     fee?: number;
   }
-):
-  | {
-      ok: true;
-      realizedPnL: number;
-      position: VirtualPosition;
-    }
-  | {
-      ok: false;
-      message: string;
-    } {
+): { ok: true; realizedPnL: number; position: VirtualPosition } | {
+  ok: false;
+  message: string;
+} {
   const index = currentPositions.findIndex(
     position => position.id === positionId
   );
 
   if (index === -1) {
-    return {
-      ok: false,
-      message: 'No open position'
-    };
+    return { ok: false, message: 'No open position' };
   }
 
   if (!isFinitePositive(exitPrice)) {
-    return {
-      ok: false,
-      message: 'Invalid exit price'
-    };
+    return { ok: false, message: 'Invalid exit price' };
   }
 
   const position = currentPositions[index];
@@ -751,9 +739,7 @@ export function partialClosePosition(
 
   const exitFee =
     options?.fee ??
-    exitPrice *
-      quantityToClose *
-      TRADE_FEE_RATE;
+    exitPrice * quantityToClose * TRADE_FEE_RATE;
 
   if (!Number.isFinite(exitFee) || exitFee < 0) {
     return {
@@ -766,10 +752,8 @@ export function partialClosePosition(
 
   const realizedPnL =
     position.side === 'long'
-      ? (exitPrice - position.entryPrice) *
-        quantityToClose
-      : (position.entryPrice - exitPrice) *
-        quantityToClose;
+      ? (exitPrice - position.entryPrice) * quantityToClose
+      : (position.entryPrice - exitPrice) * quantityToClose;
 
   const realizedPnLPercent =
     position.notional > 0
@@ -777,28 +761,20 @@ export function partialClosePosition(
       : 0;
 
   const proportionalEntryFee =
-    position.entryFee *
-    (quantityToClose / position.quantity);
+    position.entryFee * (quantityToClose / position.quantity);
 
-  const netPnL =
-    realizedPnL -
-    exitFee -
-    proportionalEntryFee;
+  const netPnL = realizedPnL - exitFee - proportionalEntryFee;
 
   const oldQuantity = position.quantity;
   const oldNotional = position.notional;
 
-  const newQuantity =
-    oldQuantity - quantityToClose;
-
-  const newNotional =
-    newQuantity * position.entryPrice;
+  const newQuantity = oldQuantity - quantityToClose;
+  const newNotional = newQuantity * position.entryPrice;
 
   const newEntryFee =
     Math.max(
       0,
-      position.entryFee -
-        proportionalEntryFee
+      position.entryFee - proportionalEntryFee
     );
 
   const updatedPosition: VirtualPosition = {
@@ -834,8 +810,7 @@ export function partialClosePosition(
     realizedPnLPercent,
     entryFee: proportionalEntryFee,
     exitFee,
-    totalFee:
-      proportionalEntryFee + exitFee,
+    totalFee: proportionalEntryFee + exitFee,
     netPnL,
     netPnLPercent:
       oldNotional > 0
@@ -843,10 +818,8 @@ export function partialClosePosition(
         : 0,
     balanceBefore,
     balanceAfter: balance,
-    executionOrderId:
-      options?.executionOrderId,
-    clientOrderId:
-      options?.clientOrderId
+    executionOrderId: options?.executionOrderId,
+    clientOrderId: options?.clientOrderId
   });
 
   return {
