@@ -991,34 +991,6 @@ export async function syncLiveBalance(
 
   const body = await response.text();
 
-  // Полное логирование ответа
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Account API Response Status: ${response.status}`
-  );
-  
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Account API Response Body:`,
-    body
-  );
-  
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new Error(
-      'Invalid JSON while fetching live balance'
-    );
-  }
-  
-  // Логирование распарсенного объекта
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Account API Parsed:`,
-    JSON.stringify(parsed, null, 2)
-  );  
-
   if (!response.ok) {
     throw new Error(
       `Failed to fetch live balance: ` +
@@ -1026,7 +998,7 @@ export async function syncLiveBalance(
     );
   }
 
- // let parsed: unknown;
+  let parsed: unknown;
 
   try {
     parsed = JSON.parse(body);
@@ -1042,26 +1014,25 @@ export async function syncLiveBalance(
     throw new Error('Invalid account response structure');
   }
 
-  // Пробуем разные структуры ответа
+  // Ищем аккаунт в массиве accounts
   let account: Record<string, unknown> | null = null;
 
-  // Вариант 1: account (объект)
-  account = getRecord(root?.account);
-
-  // Вариант 2: accounts (массив) - ищем по account_id
-  if (!account) {
-    const accounts = root?.accounts;
-    if (Array.isArray(accounts)) {
-      account = accounts.find(
-        (acc: unknown) => {
-          const record = getRecord(acc);
-          return record?.account_id === accountIndex;
-        }
-      ) as Record<string, unknown> | null;
-    }
+  const accounts = root?.accounts;
+  if (Array.isArray(accounts)) {
+    account = accounts.find(
+      (acc: unknown) => {
+        const record = getRecord(acc);
+        return record?.index === accountIndex || record?.account_index === accountIndex;
+      }
+    ) as Record<string, unknown> | null;
   }
 
-  // Вариант 3: data.account
+  // Fallback: пробуем account (объект)
+  if (!account) {
+    account = getRecord(root?.account);
+  }
+
+  // Fallback: data.account
   if (!account) {
     const data = getRecord(root?.data);
     account = getRecord(data?.account);
@@ -1081,29 +1052,25 @@ export async function syncLiveBalance(
   const balance =
     toNumber(
       account?.collateral ??
-        account?.total_collateral ??
-        account?.balance ??
         account?.available_balance ??
         account?.availableBalance ??
-        account?.equity
+        account?.balance ??
+        account?.total_collateral ??
+        account?.equity ??
+        account?.total_asset_value ??
+        account?.cross_asset_value
     );
 
-  if (
-    balance == null ||
-    balance < 0
-  ) {
+  if (balance == null || balance < 0) {
     console.warn(
       `[${new Date().toISOString()}] ` +
-        `Live balance field not found. ` +
-        `Account keys: ${Object.keys(account).join(', ')}`
+        `Balance field not found. Account keys: ${Object.keys(account).join(', ')}`
     );
 
     return;
   }
 
-  updateLiveAccountState({
-    balance
-  });
+  updateLiveAccountState({ balance });
 
   console.log(
     `[${new Date().toISOString()}] ` +
