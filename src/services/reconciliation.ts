@@ -32,21 +32,23 @@ export type LighterPosition = {
   entryPrice: number;
 };
 
+type ReconciliationMismatch = {
+  symbol: string;
+  local?: ReturnType<typeof getPositions>[number];
+  remote?: LighterPosition;
+  reason:
+    | 'missing_remote'
+    | 'missing_local'
+    | 'quantity_mismatch'
+    | 'side_mismatch'
+    | 'price_mismatch';
+};
+
 type ReconciliationResult = {
   ok: boolean;
   localPositions: ReturnType<typeof getPositions>;
   remotePositions: LighterPosition[];
-  mismatches: Array<{
-    symbol: string;
-    local?: ReturnType<typeof getPositions>[number];
-    remote?: LighterPosition;
-    reason:
-      | 'missing_remote'
-      | 'missing_local'
-      | 'quantity_mismatch'
-      | 'side_mismatch'
-      | 'price_mismatch';
-  }>;
+  mismatches: ReconciliationMismatch[];
   error?: string;
 };
 
@@ -92,6 +94,36 @@ function getString(
   return undefined;
 }
 
+function recordsFromValue(
+  value: unknown
+): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value
+      .map(getRecord)
+      .filter(
+        (
+          item
+        ): item is Record<string, unknown> =>
+          item !== null
+      );
+  }
+
+  const record = getRecord(value);
+
+  if (!record) {
+    return [];
+  }
+
+  return Object.values(record)
+    .map(getRecord)
+    .filter(
+      (
+        item
+      ): item is Record<string, unknown> =>
+        item !== null
+    );
+}
+
 function getPositionRecords(
   response: unknown
 ): Array<Record<string, unknown>> {
@@ -101,86 +133,67 @@ function getPositionRecords(
     return [];
   }
 
+  const directPositions =
+    recordsFromValue(root.positions);
+
+  if (directPositions.length > 0) {
+    return directPositions;
+  }
+
   const candidates: unknown[] = [
-    root.positions,
     root.data,
     root.account,
     root.accounts
   ];
 
   for (const candidate of candidates) {
-    if (Array.isArray(candidate)) {
-      const directRecords = candidate
-        .map(getRecord)
-        .filter(
-          (
-            item
-          ): item is Record<string, unknown> =>
-            item !== null
-        );
+    const candidateRecord =
+      getRecord(candidate);
 
-      const nestedPositions: Array<
-        Record<string, unknown>
-      > = [];
-
-      for (const item of directRecords) {
-        if (Array.isArray(item.positions)) {
-          nestedPositions.push(
-            ...item.positions
-              .map(getRecord)
-              .filter(
-                (
-                  position
-                ): position is Record<string, unknown> =>
-                  position !== null
-              )
-          );
-        }
-      }
-
-      if (nestedPositions.length > 0) {
-        return nestedPositions;
-      }
-
-      if (candidate === root.positions) {
-        return directRecords;
-      }
-    }
-
-    const nested = getRecord(candidate);
-
-    if (!nested) {
+    if (!candidateRecord) {
       continue;
     }
 
-    if (Array.isArray(nested.positions)) {
-      return nested.positions
-        .map(getRecord)
-        .filter(
-          (
-            item
-          ): item is Record<string, unknown> =>
-            item !== null
-        );
+    const directNestedPositions =
+      recordsFromValue(
+        candidateRecord.positions
+      );
+
+    if (
+      directNestedPositions.length > 0
+    ) {
+      return directNestedPositions;
     }
 
-    if (Array.isArray(nested.accounts)) {
-      for (const accountItem of nested.accounts) {
-        const account = getRecord(accountItem);
+    const nestedAccounts =
+      recordsFromValue(
+        candidateRecord.accounts
+      );
 
-        if (
-          account &&
-          Array.isArray(account.positions)
-        ) {
-          return account.positions
-            .map(getRecord)
-            .filter(
-              (
-                item
-              ): item is Record<string, unknown> =>
-                item !== null
-            );
-        }
+    for (const account of nestedAccounts) {
+      const accountPositions =
+        recordsFromValue(
+          account.positions
+        );
+
+      if (
+        accountPositions.length > 0
+      ) {
+        return accountPositions;
+      }
+    }
+
+    const nestedRecords =
+      recordsFromValue(candidate);
+
+    for (const record of nestedRecords) {
+      const positions =
+        recordsFromValue(
+          record.positions
+        );
+
+      if (positions.length > 0) {
+        return positions;
       }
     }
   }
@@ -193,22 +206,22 @@ function parsePosition(
 ): LighterPosition | null {
   const marketId = toNumber(
     rawPosition.market_id ??
-    rawPosition.market_index ??
-    rawPosition.marketId
+      rawPosition.market_index ??
+      rawPosition.marketId
   );
 
   const rawSize = toNumber(
     rawPosition.position ??
-    rawPosition.position_size ??
-    rawPosition.size ??
-    rawPosition.quantity
+      rawPosition.position_size ??
+      rawPosition.size ??
+      rawPosition.quantity
   );
 
   const entryPrice = toNumber(
     rawPosition.avg_entry_price ??
-    rawPosition.entry_price ??
-    rawPosition.average_entry_price ??
-    rawPosition.entryPrice
+      rawPosition.entry_price ??
+      rawPosition.average_entry_price ??
+      rawPosition.entryPrice
   );
 
   if (
@@ -238,7 +251,10 @@ function parsePosition(
     explicitSide === 'short'
   ) {
     side = explicitSide;
-  } else if (sign != null && sign !== 0) {
+  } else if (
+    sign != null &&
+    sign !== 0
+  ) {
     side = sign > 0
       ? 'long'
       : 'short';
@@ -301,7 +317,8 @@ export async function fetchAccountPositions(
       }
     });
 
-    const responseText = await response.text();
+    const responseText =
+      await response.text();
 
     let responseData: unknown = null;
 
@@ -341,7 +358,10 @@ export async function fetchAccountPositions(
     ) {
       throw new Error(
         `Lighter account API error: ` +
-        `${String(responseRecord.message ?? responseRecord.code)}`
+        `${String(
+          responseRecord.message ??
+            responseRecord.code
+        )}`
       );
     }
 
@@ -377,61 +397,32 @@ export async function fetchAccountPositions(
   }
 }
 
-function getReconciliationLevels(
-  position: LighterPosition
-): {
-  takeProfitPrice: number;
-  stopLossPrice: number;
-} {
-  if (position.side === 'long') {
-    return {
-      takeProfitPrice:
-        position.entryPrice * 1.1,
-      stopLossPrice:
-        position.entryPrice * 0.9
-    };
+function getPositionKey(
+  position: {
+    marketId?: number;
+    symbol: string;
+  }
+): string {
+  if (
+    position.marketId != null
+  ) {
+    return `market:${position.marketId}`;
   }
 
-  return {
-    takeProfitPrice:
-      position.entryPrice * 0.9,
-    stopLossPrice:
-      position.entryPrice * 1.1
-  };
+  return (
+    `symbol:${normalizeSymbol(position.symbol)}`
+  );
 }
 
 function restoreRemotePosition(
   remote: LighterPosition
-): void {
-  const levels =
-    getReconciliationLevels(remote);
-
-  const result = openPosition({
-    symbol: remote.symbol,
-    marketId: remote.marketId,
-    side: remote.side,
-    entryPrice: remote.entryPrice,
-    quantity: remote.quantity,
-    takeProfitPrice: levels.takeProfitPrice,
-    stopLossPrice: levels.stopLossPrice,
-    metadata: {
-      regime: 'reconciliation',
-      macdCrossUp: false,
-      macdCrossDown: false,
-      lastRsi: 0,
-      lastAtr: 0,
-      adx: 0,
-      bbWidth: 0,
-      atrPct: 0
-    }
-  });
-
-  if (!result.ok) {
-    throw new Error(
-      `Failed to restore ${remote.symbol}: ` +
-      result.message
-    );
-  }
+): never {
+  throw new Error(
+    `Cannot safely restore remote position ` +
+      `${remote.symbol} without persisted ` +
+      `strategy SL/TP levels and protective ` +
+      `order state`
+  );
 }
 
 export async function reconcileAccount(
@@ -477,24 +468,32 @@ export async function reconcileAccount(
     });
   }
 
-  const mismatches: ReconciliationResult['mismatches'] = [];
+  const mismatches: ReconciliationMismatch[] =
+    [];
 
-  const localBySymbol = new Map(
+  const localByKey = new Map(
     localPositions.map(position => [
-      normalizeSymbol(position.symbol),
+      getPositionKey(position),
       position
     ])
   );
 
-  const remoteBySymbol = new Map(
+  const remoteByKey = new Map(
     remotePositions.map(position => [
-      normalizeSymbol(position.symbol),
+      getPositionKey(position),
       position
     ])
   );
 
-  for (const [symbol, local] of localBySymbol) {
-    const remote = remoteBySymbol.get(symbol);
+  for (
+    const [key, local]
+    of localByKey
+  ) {
+    const remote =
+      remoteByKey.get(key);
+
+    const symbol =
+      normalizeSymbol(local.symbol);
 
     if (!remote) {
       mismatches.push({
@@ -518,11 +517,15 @@ export async function reconcileAccount(
     }
 
     const quantityTolerance =
-      Math.max(local.quantity * 0.01, 1e-12);
+      Math.max(
+        local.quantity * 0.01,
+        1e-12
+      );
 
     if (
       Math.abs(
-        local.quantity - remote.quantity
+        local.quantity -
+          remote.quantity
       ) > quantityTolerance
     ) {
       mismatches.push({
@@ -536,11 +539,15 @@ export async function reconcileAccount(
     }
 
     const priceTolerance =
-      Math.max(local.entryPrice * 0.01, 1e-12);
+      Math.max(
+        local.entryPrice * 0.01,
+        1e-12
+      );
 
     if (
       Math.abs(
-        local.entryPrice - remote.entryPrice
+        local.entryPrice -
+          remote.entryPrice
       ) > priceTolerance
     ) {
       mismatches.push({
@@ -552,16 +559,21 @@ export async function reconcileAccount(
     }
   }
 
-  for (const [symbol, remote] of remoteBySymbol) {
-    const local = localBySymbol.get(symbol);
-
-    if (!local) {
-      mismatches.push({
-        symbol,
-        remote,
-        reason: 'missing_local'
-      });
+  for (
+    const [key, remote]
+    of remoteByKey
+  ) {
+    if (localByKey.has(key)) {
+      continue;
     }
+
+    mismatches.push({
+      symbol: normalizeSymbol(
+        remote.symbol
+      ),
+      remote,
+      reason: 'missing_local'
+    });
   }
 
   if (
@@ -576,13 +588,19 @@ export async function reconcileAccount(
     };
   }
 
-  if (autoFix && !dryRun && remoteError == null) {
+  if (
+    autoFix &&
+    !dryRun &&
+    remoteError == null
+  ) {
     for (const mismatch of mismatches) {
       try {
         if (
-          mismatch.reason === 'missing_remote'
+          mismatch.reason ===
+          'missing_remote'
         ) {
-          const local = mismatch.local;
+          const local =
+            mismatch.local;
 
           if (!local) {
             continue;
@@ -590,79 +608,70 @@ export async function reconcileAccount(
 
           console.warn(
             `[${new Date().toISOString()}] ` +
-            `Reconciliation: local position ` +
-            `${local.symbol} not found on exchange, ` +
-            `closing local state`
+              `Reconciliation: local position ` +
+              `${local.symbol} not found on exchange`
           );
 
-          const result = closePosition(
-            local.id,
-            local.entryPrice,
-            'reconciliation_missing_remote'
-          );
+          const result =
+            closePosition(
+              local.id,
+              local.entryPrice,
+              'reconciliation_missing_remote'
+            );
 
           if (!result.ok) {
-            throw new Error(result.message);
+            throw new Error(
+              result.message
+            );
           }
         } else if (
-          mismatch.reason === 'missing_local'
+          mismatch.reason ===
+          'missing_local'
         ) {
-          const remote = mismatch.remote;
+          const remote =
+            mismatch.remote;
 
           if (!remote) {
             continue;
           }
 
-          console.warn(
+          console.error(
             `[${new Date().toISOString()}] ` +
-            `Reconciliation: remote position ` +
-            `${remote.symbol} not found locally, ` +
-            `creating local state`
+              `Reconciliation: remote position ` +
+              `${remote.symbol} has no local state; ` +
+              `automatic restore is blocked`
           );
 
           restoreRemotePosition(remote);
-        } else if (
-          mismatch.reason === 'quantity_mismatch' ||
-          mismatch.reason === 'side_mismatch' ||
-          mismatch.reason === 'price_mismatch'
-        ) {
-          const local = mismatch.local;
-          const remote = mismatch.remote;
+        } else {
+          const local =
+            mismatch.local;
+
+          const remote =
+            mismatch.remote;
 
           console.error(
             `[${new Date().toISOString()}] ` +
-            `Reconciliation: severe mismatch ` +
-            `for ${mismatch.symbol}: ` +
-            `local=${
-              local
-                ? JSON.stringify(local)
-                : 'none'
-            }, ` +
-            `remote=${
-              remote
-                ? JSON.stringify(remote)
-                : 'none'
-            }, ` +
-            `reason=${mismatch.reason}`
+              `Reconciliation severe mismatch for ` +
+              `${mismatch.symbol}: ` +
+              `local=${
+                local
+                  ? JSON.stringify(local)
+                  : 'none'
+              }, ` +
+              `remote=${
+                remote
+                  ? JSON.stringify(remote)
+                  : 'none'
+              }, ` +
+              `reason=${mismatch.reason}`
           );
 
-          if (local) {
-            const closeResult = closePosition(
-              local.id,
-              local.entryPrice,
-              'reconciliation_severe_mismatch'
-            );
-
-            if (!closeResult.ok) {
-              throw new Error(
-                closeResult.message
-              );
-            }
-          }
-
-          if (remote) {
-            restoreRemotePosition(remote);
-          }
+          throw new Error(
+            `Severe reconciliation mismatch for ` +
+              `${mismatch.symbol}; automatic state ` +
+              `mutation is blocked`
+          );
         }
       } catch (error) {
         const errorMsg =
@@ -705,14 +714,15 @@ export async function restoreStateAfterRestart(
   closed: number;
   errors: number;
 }> {
-  const result = await reconcileAccount(
-    signerClient,
-    accountIndex,
-    {
-      autoFix: true,
-      dryRun: false
-    }
-  );
+  const result =
+    await reconcileAccount(
+      signerClient,
+      accountIndex,
+      {
+        autoFix: true,
+        dryRun: false
+      }
+    );
 
   if (result.error) {
     return {
@@ -728,11 +738,13 @@ export async function restoreStateAfterRestart(
 
   for (const mismatch of result.mismatches) {
     if (
-      mismatch.reason === 'missing_local'
+      mismatch.reason ===
+      'missing_local'
     ) {
-      restored++;
+      errors++;
     } else if (
-      mismatch.reason === 'missing_remote'
+      mismatch.reason ===
+      'missing_remote'
     ) {
       closed++;
     } else {
@@ -767,11 +779,13 @@ export async function verifyPositionAfterFill(
     const normalizedSymbol =
       normalizeSymbol(symbol);
 
-    const remote = remotePositions.find(
-      position =>
-        normalizeSymbol(position.symbol) ===
-        normalizedSymbol
-    );
+    const remote =
+      remotePositions.find(
+        position =>
+          normalizeSymbol(
+            position.symbol
+          ) === normalizedSymbol
+      );
 
     if (!remote) {
       return {
@@ -782,7 +796,9 @@ export async function verifyPositionAfterFill(
       };
     }
 
-    if (remote.side !== expectedSide) {
+    if (
+      remote.side !== expectedSide
+    ) {
       return {
         ok: false,
         mismatch:
@@ -793,11 +809,15 @@ export async function verifyPositionAfterFill(
     }
 
     const quantityTolerance =
-      Math.max(expectedQuantity * 0.02, 1e-12);
+      Math.max(
+        expectedQuantity * 0.02,
+        1e-12
+      );
 
     if (
       Math.abs(
-        remote.quantity - expectedQuantity
+        remote.quantity -
+          expectedQuantity
       ) > quantityTolerance
     ) {
       return {
