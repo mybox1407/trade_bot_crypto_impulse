@@ -7,7 +7,8 @@ import { runBotOnce } from './botRunner';
 
 import {
   stopMarketData,
-  getCurrentPrice,
+  getMarkPrice,
+  getExitPrice,
   resolveMarket,
   normalizeSymbol
 } from './exchange';
@@ -29,10 +30,11 @@ import {
   updatePositionStopLoss
 } from './positionState';
 
-import { TRADE_FEE_RATE } from './strategy';
+import {
+  TRADE_FEE_RATE
+} from './strategy';
 
 import {
-  logSignalCheck,
   logPositionCheck,
   logError
 } from './logger';
@@ -48,11 +50,13 @@ import {
   refreshTopMarkets,
   startMarketRefresh,
   stopMarketRefresh,
-  getActiveTradingPairs
+  getActiveTradingPairs,
+  getActiveMarket
 } from './scheduler.dynamic.parts';
 
 import {
   PaperExecutionService,
+  LighterExecutionService,
   ExecutionService
 } from './execution';
 
@@ -71,22 +75,83 @@ import {
 const PAPER_TRADING =
   process.env.PAPER_TRADING !== 'false';
 
-const executionService: ExecutionService =
-  new PaperExecutionService();
-
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
+let executionService: ExecutionService;
+
 let signerClient: SignerClient | null = null;
-let reconciliationInterval: NodeJS.Timeout | null = null;
+
+let reconciliationInterval:
+  NodeJS.Timeout | null = null;
+
+function createExecutionService(): ExecutionService {
+  if (PAPER_TRADING) {
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `Paper execution enabled`
+    );
+
+    return new PaperExecutionService();
+  }
+
+  const apiKeySecret =
+    process.env.LIGHTER_API_SECRET ?? '';
+
+  const apiKeyIndex =
+    Number(
+      process.env.LIGHTER_API_KEY_INDEX ?? 0
+    );
+
+  const accountIndex =
+    Number(
+      process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+    );
+
+  if (!apiKeySecret) {
+    throw new Error(
+      'LIGHTER_API_SECRET is required in live mode'
+    );
+  }
+
+  if (
+    !Number.isInteger(apiKeyIndex) ||
+    apiKeyIndex < 0 ||
+    apiKeyIndex > 254
+  ) {
+    throw new Error(
+      `Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`
+    );
+  }
+
+  if (
+    !Number.isInteger(accountIndex) ||
+    accountIndex < 0
+  ) {
+    throw new Error(
+      `Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`
+    );
+  }
+
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Live execution enabled`
+  );
+
+  return new LighterExecutionService(
+    apiKeySecret,
+    apiKeyIndex,
+    accountIndex
+  );
+}
 
 function initializeSignerClient(): void {
   if (PAPER_TRADING) {
     console.log(
       `[${new Date().toISOString()}] ` +
-      `Paper trading enabled; signer initialization ` +
-      `skipped`
+        `Paper trading enabled; signer ` +
+        `initialization skipped`
     );
 
     signerClient = null;
@@ -108,15 +173,9 @@ function initializeSignerClient(): void {
     );
 
   if (!apiKeySecret) {
-    console.warn(
-      `[${new Date().toISOString()}] ` +
-      `LIGHTER_API_SECRET not configured, ` +
-      `reconciliation disabled`
+    throw new Error(
+      'LIGHTER_API_SECRET is required in live mode'
     );
-
-    signerClient = null;
-
-    return;
   }
 
   if (
@@ -152,7 +211,7 @@ function initializeSignerClient(): void {
 
   console.log(
     `[${new Date().toISOString()}] ` +
-    `SignerClient initialized for reconciliation`
+      `SignerClient initialized for reconciliation`
   );
 }
 
@@ -175,20 +234,21 @@ async function reconcileAccountPeriodic(
   accountIndex: number
 ): Promise<void> {
   try {
-    const result = await reconcileAccount(
-      client,
-      accountIndex,
-      {
-        autoFix: false,
-        dryRun: true
-      }
-    );
+    const result =
+      await reconcileAccount(
+        client,
+        accountIndex,
+        {
+          autoFix: false,
+          dryRun: true
+        }
+      );
 
     if (result.error) {
       console.error(
         `[${new Date().toISOString()}] ` +
-        `Periodic reconciliation API error: ` +
-        `${result.error}`
+          `Periodic reconciliation API error: ` +
+          `${result.error}`
       );
 
       notifyError({
@@ -202,9 +262,9 @@ async function reconcileAccountPeriodic(
     if (!result.ok) {
       console.warn(
         `[${new Date().toISOString()}] ` +
-        `Reconciliation check: ` +
-        `${result.mismatches.length} ` +
-        `mismatches detected`
+          `Reconciliation check: ` +
+          `${result.mismatches.length} ` +
+          `mismatches detected`
       );
 
       notifyError({
@@ -217,7 +277,7 @@ async function reconcileAccountPeriodic(
   } catch (error) {
     console.error(
       `[${new Date().toISOString()}] ` +
-      `Reconciliation check error:`,
+        `Reconciliation check error:`,
       error
     );
   }
@@ -254,12 +314,15 @@ const TIME_STOP_SECONDS = 1800;
 const TIME_STOP_MFE_PERCENT = 0.3;
 const TIME_STOP_MAX_LOSS_PERCENT = -0.5;
 const DEAD_TRADE_ENABLED = true;
-const DEAD_TRADE_CHECK_AFTER_SEC = 360; //БЫЛО 240
+const DEAD_TRADE_CHECK_AFTER_SEC = 360;
 const DEAD_TRADE_MIN_MFE_ATR = 0.3;
 const MIN_LOCKED_PERCENT = 0.25;
 
-let signalCheckInterval: NodeJS.Timeout | null = null;
-let positionCheckInterval: NodeJS.Timeout | null = null;
+let signalCheckInterval:
+  NodeJS.Timeout | null = null;
+
+let positionCheckInterval:
+  NodeJS.Timeout | null = null;
 
 let signalCheckRunning = false;
 let positionCheckRunning = false;
@@ -290,12 +353,14 @@ function requireMarketId(
   return marketId;
 }
 
-function markFatalError(message: string): void {
+function markFatalError(
+  message: string
+): void {
   schedulerFatalError = message;
 
   console.error(
     `[${new Date().toISOString()}] ` +
-    `FATAL SCHEDULER STATE ERROR: ${message}`
+      `FATAL SCHEDULER STATE ERROR: ${message}`
   );
 }
 
@@ -303,7 +368,7 @@ function ensureSchedulerHealthy(): void {
   if (schedulerFatalError) {
     throw new Error(
       `Scheduler is blocked after fatal state error: ` +
-      `${schedulerFatalError}`
+        `${schedulerFatalError}`
     );
   }
 }
@@ -337,30 +402,34 @@ function formatOpenPositionsForTelegram(): string {
 async function sendTelegramSummary(
   signalResults: SignalResult[]
 ): Promise<void> {
-  const activeResults = signalResults.filter(
-    result =>
-      result.status === 'signal' ||
-      result.status === 'no-signal' ||
-      result.status === 'not-ready' ||
-      result.status === 'error'
-  );
+  const activeResults =
+    signalResults.filter(
+      result =>
+        result.status === 'signal' ||
+        result.status === 'no-signal' ||
+        result.status === 'not-ready' ||
+        result.status === 'error'
+    );
 
-  const signalsCount = signalResults.filter(
-    result => result.status === 'signal'
-  ).length;
+  const signalsCount =
+    signalResults.filter(
+      result => result.status === 'signal'
+    ).length;
 
-  const noSignalCount = signalResults.filter(
-    result =>
-      result.status === 'no-signal' ||
-      result.status === 'not-ready'
-  ).length;
+  const noSignalCount =
+    signalResults.filter(
+      result =>
+        result.status === 'no-signal' ||
+        result.status === 'not-ready'
+    ).length;
 
   const openPositionsCount =
     getOpenPositionsCount();
 
-  const errorCount = signalResults.filter(
-    result => result.status === 'error'
-  ).length;
+  const errorCount =
+    signalResults.filter(
+      result => result.status === 'error'
+    ).length;
 
   const signalText =
     activeResults.length > 0
@@ -442,7 +511,10 @@ async function sendTelegramSummary(
     const telegramChatId =
       process.env.TELEGRAM_CHAT_ID;
 
-    if (!telegramToken || !telegramChatId) {
+    if (
+      !telegramToken ||
+      !telegramChatId
+    ) {
       return;
     }
 
@@ -466,7 +538,7 @@ async function sendTelegramSummary(
   } catch (error) {
     console.error(
       `[${new Date().toISOString()}] ` +
-      `Failed to send summary:`,
+        `Failed to send summary:`,
       error instanceof Error
         ? error.message
         : 'Unknown'
@@ -520,8 +592,12 @@ async function checkSignals(): Promise<void> {
 
     const signalResults: SignalResult[] = [];
 
-    for (const rawSymbol of activeTradingPairs) {
-      const symbol = normalizeSymbol(rawSymbol);
+    for (
+      const rawSymbol
+      of activeTradingPairs
+    ) {
+      const symbol =
+        normalizeSymbol(rawSymbol);
 
       try {
         ensureSchedulerHealthy();
@@ -572,8 +648,11 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        const buy = (result as any).buy as boolean;
-        const sell = (result as any).sell as boolean;
+        const buy =
+          (result as any).buy as boolean;
+
+        const sell =
+          (result as any).sell as boolean;
 
         const side =
           (result as any).side as
@@ -667,48 +746,80 @@ async function checkSignals(): Promise<void> {
             `open ${symbol}`
           );
 
+        const activeMarket =
+          getActiveMarket(symbol);
+
+        if (!activeMarket) {
+          throw new Error(
+            `Active market metadata not found: ${symbol}`
+          );
+        }
+
+        const priceDecimals =
+          activeMarket.priceDecimals;
+
+        const sizeDecimals =
+          activeMarket.sizeDecimals;
+
         const stopDistance =
           Math.abs(
-            expectedPrice - stopLossPrice
+            expectedPrice -
+              stopLossPrice
           );
 
         const worstCaseFeePerUnit =
-          Math.abs(
-            expectedPrice - stopLossPrice
-          ) * TRADE_FEE_RATE;
+          stopDistance *
+          TRADE_FEE_RATE;
 
         const totalRiskPerUnit =
           stopDistance +
           worstCaseFeePerUnit;
 
         if (
-          !Number.isFinite(totalRiskPerUnit) ||
+          !Number.isFinite(
+            totalRiskPerUnit
+          ) ||
           totalRiskPerUnit <= 0
         ) {
           throw new Error(
             `Invalid total risk per unit: ` +
-            `${totalRiskPerUnit}`
+              `${totalRiskPerUnit}`
           );
         }
 
-        const riskCapital = getRiskCapital();
+        const riskCapital =
+          getRiskCapital();
 
         const maxNotionalByPercent =
           getPositionNotional();
 
         const calculatedQuantity =
-          riskCapital / totalRiskPerUnit;
+          riskCapital /
+          totalRiskPerUnit;
 
         const maxQuantityByPercent =
           maxNotionalByPercent /
           expectedPrice;
 
-        const quantity = validateQuantity(
-          Math.min(
-            calculatedQuantity,
-            maxQuantityByPercent
-          )
-        );
+        const rawQuantity =
+          validateQuantity(
+            Math.min(
+              calculatedQuantity,
+              maxQuantityByPercent
+            )
+          );
+
+        const quantityFactor =
+          10 ** sizeDecimals;
+
+        const quantity =
+          validateQuantity(
+            Math.floor(
+              rawQuantity *
+                quantityFactor
+            ) /
+            quantityFactor
+          );
 
         const clientOrderId =
           `${symbol}-${Date.now()}-open`;
@@ -721,8 +832,10 @@ async function checkSignals(): Promise<void> {
             quantity,
             expectedPrice,
             clientOrderId,
-            priceDecimals: 2,
-            sizeDecimals: 8
+            priceDecimals,
+            sizeDecimals,
+            stopLossPrice,
+            takeProfitPrice
           });
 
         if (!executionResult.ok) {
@@ -750,61 +863,97 @@ async function checkSignals(): Promise<void> {
           );
         }
 
-        const openResult = openPosition({
-          symbol,
-          marketId,
-          side,
-          entryPrice:
-            executionResult.averageFillPrice,
-          quantity:
-            executionResult.filledQuantity,
-          takeProfitPrice,
-          stopLossPrice,
-          metadata: {
-            regime,
-            macdCrossUp:
-              indicators?.macdCrossUp ?? false,
-            macdCrossDown:
-              indicators?.macdCrossDown ?? false,
-            lastRsi:
-              indicators?.lastRsi ?? 0,
-            lastAtr:
-              indicators?.lastAtr ?? 0,
-            adx:
-              indicators?.regimeIndicators?.adx ??
-              0,
-            bbWidth:
-              indicators?.regimeIndicators?.bbWidth ??
-              0,
-            atrPct:
-              indicators?.regimeIndicators?.atrPct ??
-              0,
-            ema20:
-              indicators?.regimeIndicators?.ema20 ??
-              0,
-            ema50:
-              indicators?.regimeIndicators?.ema50 ??
-              0,
-            ema200:
-              indicators?.regimeIndicators?.ema200 ??
-              0,
-            entryExtensionAtr:
-              indicators?.entryExtensionAtr ?? 0,
-            maxEntryExtensionAtr:
-              indicators?.maxEntryExtensionAtr ?? 0,
-            entryTooExtended:
-              indicators?.entryTooExtended ?? false
-          },
-          executionOrderId:
-            executionResult.orderId,
-          clientOrderId
-        });
+        if (
+          !PAPER_TRADING &&
+          !executionResult.protectiveOrders
+        ) {
+          throw new Error(
+            `Live execution returned no protective ` +
+              `SL/TP orders for ${symbol}`
+          );
+        }
+
+        const openResult =
+          openPosition({
+            symbol,
+            marketId,
+            side,
+            entryPrice:
+              executionResult.averageFillPrice,
+            quantity:
+              executionResult.filledQuantity,
+            takeProfitPrice,
+            stopLossPrice,
+            exchangeStopLossPrice:
+              stopLossPrice,
+            exchangeTakeProfitPrice:
+              takeProfitPrice,
+            exchangeStopLossOrderId:
+              executionResult.protectiveOrders
+                ?.stopLossOrderId,
+            exchangeTakeProfitOrderId:
+              executionResult.protectiveOrders
+                ?.takeProfitOrderId,
+            exchangeStopLossClientOrderIndex:
+              executionResult.protectiveOrders
+                ?.stopLossClientOrderIndex,
+            exchangeTakeProfitClientOrderIndex:
+              executionResult.protectiveOrders
+                ?.takeProfitClientOrderIndex,
+            metadata: {
+              regime,
+              macdCrossUp:
+                indicators?.macdCrossUp ??
+                false,
+              macdCrossDown:
+                indicators?.macdCrossDown ??
+                false,
+              lastRsi:
+                indicators?.lastRsi ?? 0,
+              lastAtr:
+                indicators?.lastAtr ?? 0,
+              adx:
+                indicators?.regimeIndicators?.adx ??
+                0,
+              bbWidth:
+                indicators?.regimeIndicators?.bbWidth ??
+                0,
+              atrPct:
+                indicators?.regimeIndicators?.atrPct ??
+                0,
+              ema20:
+                indicators?.regimeIndicators?.ema20 ??
+                0,
+              ema50:
+                indicators?.regimeIndicators?.ema50 ??
+                0,
+              ema200:
+                indicators?.regimeIndicators?.ema200 ??
+                0,
+              entryExtensionAtr:
+                indicators?.entryExtensionAtr ??
+                0,
+              maxEntryExtensionAtr:
+                indicators?.maxEntryExtensionAtr ??
+                0,
+              entryTooExtended:
+                indicators?.entryTooExtended ??
+                false
+            },
+            executionOrderId:
+              executionResult.orderId,
+            clientOrderId
+          });
 
         if (!openResult.ok) {
-          if (!PAPER_TRADING && signerClient) {
+          if (
+            !PAPER_TRADING &&
+            signerClient
+          ) {
             const accountIndex =
               Number(
-                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+                process.env.LIGHTER_ACCOUNT_INDEX ??
+                  0
               );
 
             const verification =
@@ -819,9 +968,9 @@ async function checkSignals(): Promise<void> {
             if (!verification.ok) {
               markFatalError(
                 `${symbol}: execution fill confirmed but ` +
-                `local position state failed AND ` +
-                `reconciliation verification failed: ` +
-                `${verification.mismatch}`
+                  `local position state failed AND ` +
+                  `reconciliation verification failed: ` +
+                  `${verification.mismatch}`
               );
             } else {
               notifyError({
@@ -836,8 +985,8 @@ async function checkSignals(): Promise<void> {
           } else {
             markFatalError(
               `${symbol}: execution fill confirmed but ` +
-              `local position state failed: ` +
-              `${openResult.message ?? 'unknown error'}`
+                `local position state failed: ` +
+                `${openResult.message ?? 'unknown error'}`
             );
           }
 
@@ -861,7 +1010,8 @@ async function checkSignals(): Promise<void> {
         ) {
           const accountIndex =
             Number(
-              process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+              process.env.LIGHTER_ACCOUNT_INDEX ??
+                0
             );
 
           const verification =
@@ -874,11 +1024,10 @@ async function checkSignals(): Promise<void> {
             );
 
           if (!verification.ok) {
-            console.error(
-              `[${new Date().toISOString()}] ` +
+            markFatalError(
               `${symbol}: position verification failed ` +
-              `after successful open: ` +
-              `${verification.mismatch}`
+                `after successful open: ` +
+                `${verification.mismatch}`
             );
 
             notifyError({
@@ -891,14 +1040,15 @@ async function checkSignals(): Promise<void> {
           } else {
             console.log(
               `[${new Date().toISOString()}] ` +
-              `${symbol}: position verified on exchange successfully`
+                `${symbol}: position verified on ` +
+                `exchange successfully`
             );
           }
         } else if (PAPER_TRADING) {
           console.log(
             `[${new Date().toISOString()}] ` +
-            `${symbol}: paper trade; ` +
-            `exchange verification skipped`
+              `${symbol}: paper trade; ` +
+              `exchange verification skipped`
           );
         }
 
@@ -940,14 +1090,18 @@ async function checkSignals(): Promise<void> {
       }
     }
 
-    await sendTelegramSummary(signalResults);
+    await sendTelegramSummary(
+      signalResults
+    );
   } finally {
     signalCheckRunning = false;
   }
 }
 
 async function executeClose(
-  position: ReturnType<typeof getPositions>[number],
+  position: ReturnType<
+    typeof getPositions
+  >[number],
   currentPrice: number,
   reason:
     | 'take_profit'
@@ -956,10 +1110,21 @@ async function executeClose(
     | 'breakeven_stop'
     | 'dead_trade_mfe'
 ): Promise<boolean> {
-  const marketId = requireMarketId(
-    position.marketId,
-    `close ${position.symbol}`
-  );
+  const marketId =
+    requireMarketId(
+      position.marketId,
+      `close ${position.symbol}`
+    );
+
+  const activeMarket =
+    getActiveMarket(position.symbol);
+
+  if (!activeMarket) {
+    throw new Error(
+      `Active market metadata not found: ` +
+        `${position.symbol}`
+    );
+  }
 
   const clientOrderId =
     `${position.symbol}-${Date.now()}-${reason}`;
@@ -973,14 +1138,17 @@ async function executeClose(
       expectedPrice: currentPrice,
       reason,
       clientOrderId,
-      priceDecimals: 2,
-      sizeDecimals: 8
+      priceDecimals:
+        activeMarket.priceDecimals,
+      sizeDecimals:
+        activeMarket.sizeDecimals
     });
 
   if (!executionResult.ok) {
     throw new Error(
-      `Close execution failed for ${position.symbol}: ` +
-      `${executionResult.message ?? 'unknown error'}`
+      `Close execution failed for ` +
+        `${position.symbol}: ` +
+        `${executionResult.message ?? 'unknown error'}`
     );
   }
 
@@ -990,7 +1158,7 @@ async function executeClose(
   ) {
     throw new Error(
       `Close execution returned no confirmed fill for ` +
-      `${position.symbol}`
+        `${position.symbol}`
     );
   }
 
@@ -1000,37 +1168,132 @@ async function executeClose(
   ) {
     throw new Error(
       `Close fill exceeds local position quantity for ` +
-      `${position.symbol}: filled=` +
-      `${executionResult.filledQuantity}, ` +
-      `local=${position.quantity}`
+        `${position.symbol}: filled=` +
+        `${executionResult.filledQuantity}, ` +
+        `local=${position.quantity}`
     );
   }
 
-  const result = closePosition(
-    position.id,
-    executionResult.averageFillPrice,
-    reason,
-    {
-      executionOrderId:
-        executionResult.orderId,
-      clientOrderId,
-      fee: executionResult.fee
+  if (
+    executionResult.filledQuantity <
+    position.quantity * 0.999999
+  ) {
+    const partialResult =
+      partialClosePosition(
+        position.id,
+        executionResult.filledQuantity,
+        executionResult.averageFillPrice,
+        {
+          executionOrderId:
+            executionResult.orderId,
+          clientOrderId,
+          fee: executionResult.fee
+        }
+      );
+
+    if (!partialResult.ok) {
+      markFatalError(
+        `${position.symbol}: partial close fill confirmed ` +
+          `but local state failed: ` +
+          `${partialResult.message}`
+      );
+
+      throw new Error(
+        `Partial close state update failed for ` +
+          `${position.symbol}: ` +
+          `${partialResult.message}`
+      );
     }
-  );
+
+    return true;
+  }
+
+  if (
+    executionService.cancelProtectiveOrders &&
+    position.marketId != null
+  ) {
+    await executionService.cancelProtectiveOrders({
+      marketId: position.marketId,
+      stopLossOrderId:
+        position.exchangeStopLossOrderId,
+      takeProfitOrderId:
+        position.exchangeTakeProfitOrderId,
+      stopLossClientOrderIndex:
+        position.exchangeStopLossClientOrderIndex ??
+        0,
+      takeProfitClientOrderIndex:
+        position.exchangeTakeProfitClientOrderIndex ??
+        0
+    });
+  }
+
+  const result =
+    closePosition(
+      position.id,
+      executionResult.averageFillPrice,
+      reason,
+      {
+        executionOrderId:
+          executionResult.orderId,
+        clientOrderId,
+        fee: executionResult.fee
+      }
+    );
 
   if (!result.ok) {
     markFatalError(
       `${position.symbol}: close fill confirmed but ` +
-      `local close state failed: ${result.message}`
+        `local close state failed: ${result.message}`
     );
 
     throw new Error(
-      `Close state update failed for ${position.symbol}: ` +
-      `${result.message}`
+      `Close state update failed for ` +
+        `${position.symbol}: ` +
+        `${result.message}`
     );
   }
 
   return true;
+}
+
+async function verifyRemotePositionClosed(
+  symbol: string
+): Promise<void> {
+  if (
+    PAPER_TRADING ||
+    !signerClient
+  ) {
+    return;
+  }
+
+  const accountIndex =
+    Number(
+      process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+    );
+
+  const remotePositions =
+    await fetchAccountPositions(
+      signerClient,
+      accountIndex
+    );
+
+  const remote =
+    remotePositions.find(
+      (position: LighterPosition) =>
+        normalizeSymbol(position.symbol) ===
+        normalizeSymbol(symbol)
+    );
+
+  if (remote) {
+    notifyError({
+      context:
+        'position-close-verification',
+      symbol,
+      error:
+        `Position ${symbol} still exists ` +
+        `on exchange after close`
+    });
+  }
 }
 
 async function checkPositions(): Promise<void> {
@@ -1049,55 +1312,81 @@ async function checkPositions(): Promise<void> {
       return;
     }
 
-    for (const snapshotPosition of positions) {
+    for (
+      const snapshotPosition
+      of positions
+    ) {
       try {
         ensureSchedulerHealthy();
 
         const position =
           getPositions().find(
-            item => item.id === snapshotPosition.id
+            item =>
+              item.id === snapshotPosition.id
           );
 
         if (!position) {
           continue;
         }
 
-        const symbol = normalizeSymbol(
-          position.symbol
-        );
+        const symbol =
+          normalizeSymbol(position.symbol);
 
         if (!hasOpenPosition(symbol)) {
           continue;
         }
 
-        const currentPrice =
-          getCurrentPrice(symbol);
+        const markPrice =
+          getMarkPrice(symbol);
+
+        const exitPrice =
+          getExitPrice(
+            symbol,
+            position.side
+          );
 
         if (
-          currentPrice == null ||
-          !Number.isFinite(currentPrice) ||
-          currentPrice <= 0
+          markPrice == null ||
+          !Number.isFinite(markPrice) ||
+          markPrice <= 0
         ) {
           throw new Error(
-            `Current price unavailable for ${symbol}`
+            `Mark price unavailable for ${symbol}`
+          );
+        }
+
+        if (
+          exitPrice == null ||
+          !Number.isFinite(exitPrice) ||
+          exitPrice <= 0
+        ) {
+          throw new Error(
+            `Exit price unavailable for ${symbol}`
           );
         }
 
         const unrealizedPnL =
           position.side === 'long'
-            ? (currentPrice - position.entryPrice) *
-              position.quantity
-            : (position.entryPrice - currentPrice) *
-              position.quantity;
+            ? (
+                markPrice -
+                position.entryPrice
+              ) * position.quantity
+            : (
+                position.entryPrice -
+                markPrice
+              ) * position.quantity;
 
         const unrealizedPnLPercent =
           position.notional > 0
-            ? (unrealizedPnL / position.notional) *
-              100
+            ? (
+                unrealizedPnL /
+                position.notional
+              ) * 100
             : 0;
 
         const previousMaxPnL =
-          position.metadata?.maxUnrealizedPnL ??
+          position.metadata
+            ?.maxUnrealizedPnL ??
           Number.NEGATIVE_INFINITY;
 
         const previousMaxPnLPercent =
@@ -1106,7 +1395,8 @@ async function checkPositions(): Promise<void> {
           Number.NEGATIVE_INFINITY;
 
         const previousWorstPnL =
-          position.metadata?.worstUnrealizedPnL ??
+          position.metadata
+            ?.worstUnrealizedPnL ??
           Number.POSITIVE_INFINITY;
 
         const previousWorstPnLPercent =
@@ -1145,26 +1435,34 @@ async function checkPositions(): Promise<void> {
         );
 
         const openedAt =
-          new Date(position.openedAt).getTime();
+          new Date(
+            position.openedAt
+          ).getTime();
 
         const positionAgeSeconds =
           Math.max(
             0,
             Math.floor(
-              (Date.now() - openedAt) / 1000
+              (
+                Date.now() -
+                openedAt
+              ) / 1000
             )
           );
 
         const partialClosed =
-          position.metadata?.partialClosed ??
+          position.metadata
+            ?.partialClosed ??
           false;
 
         const trailingActive =
-          position.metadata?.trailingActive ??
+          position.metadata
+            ?.trailingActive ??
           false;
 
         const beTriggered =
-          position.metadata?.beTriggered ??
+          position.metadata
+            ?.beTriggered ??
           false;
 
         if (
@@ -1175,9 +1473,10 @@ async function checkPositions(): Promise<void> {
           const lockedPercent =
             Math.max(
               MIN_LOCKED_PERCENT,
-              (maxUnrealizedPnLPercent -
-                BE_THRESHOLD_PERCENT) *
-                LOCK_RATIO
+              (
+                maxUnrealizedPnLPercent -
+                BE_THRESHOLD_PERCENT
+              ) * LOCK_RATIO
             );
 
           const ratchetStop =
@@ -1209,7 +1508,8 @@ async function checkPositions(): Promise<void> {
               )
             ) {
               throw new Error(
-                `Failed to update ratchet stop for ${position.id}`
+                `Failed to update ratchet stop for ` +
+                  `${position.id}`
               );
             }
 
@@ -1230,12 +1530,14 @@ async function checkPositions(): Promise<void> {
         ) {
           const currentPosition =
             getPositions().find(
-              item => item.id === position.id
+              item =>
+                item.id === position.id
             );
 
           if (!currentPosition) {
             throw new Error(
-              `Position disappeared before partial close: ${symbol}`
+              `Position disappeared before partial close: ` +
+                `${symbol}`
             );
           }
 
@@ -1248,6 +1550,15 @@ async function checkPositions(): Promise<void> {
               `partial close ${symbol}`
             );
 
+          const activeMarket =
+            getActiveMarket(symbol);
+
+          if (!activeMarket) {
+            throw new Error(
+              `Active market metadata not found: ${symbol}`
+            );
+          }
+
           const clientOrderId =
             `${symbol}-${Date.now()}-partial`;
 
@@ -1258,17 +1569,19 @@ async function checkPositions(): Promise<void> {
               positionSide:
                 currentPosition.side,
               quantity: closeQuantity,
-              expectedPrice: currentPrice,
+              expectedPrice: exitPrice,
               reason: 'partial_close',
               clientOrderId,
-              priceDecimals: 2,
-              sizeDecimals: 8
+              priceDecimals:
+                activeMarket.priceDecimals,
+              sizeDecimals:
+                activeMarket.sizeDecimals
             });
 
           if (!partialExecution.ok) {
             throw new Error(
               `Partial close failed for ${symbol}: ` +
-              `${partialExecution.message ?? 'unknown error'}`
+                `${partialExecution.message ?? 'unknown error'}`
             );
           }
 
@@ -1278,7 +1591,8 @@ async function checkPositions(): Promise<void> {
               null
           ) {
             throw new Error(
-              `Partial close has no confirmed fill: ${symbol}`
+              `Partial close has no confirmed fill: ` +
+                `${symbol}`
             );
           }
 
@@ -1287,7 +1601,8 @@ async function checkPositions(): Promise<void> {
             currentPosition.quantity
           ) {
             throw new Error(
-              `Partial close filled entire position unexpectedly: ${symbol}`
+              `Partial close filled entire position unexpectedly: ` +
+                `${symbol}`
             );
           }
 
@@ -1307,12 +1622,14 @@ async function checkPositions(): Promise<void> {
           if (!partialResult.ok) {
             markFatalError(
               `${symbol}: partial close filled but ` +
-              `local state failed: ${partialResult.message}`
+                `local state failed: ` +
+                `${partialResult.message}`
             );
 
             throw new Error(
-              `Partial close state update failed for ${symbol}: ` +
-              `${partialResult.message}`
+              `Partial close state update failed for ` +
+                `${symbol}: ` +
+                `${partialResult.message}`
             );
           }
 
@@ -1329,13 +1646,15 @@ async function checkPositions(): Promise<void> {
           }
 
           const trailDistance =
-            currentPrice *
-            (TRAILING_DISTANCE_PERCENT / 100);
+            exitPrice *
+            (
+              TRAILING_DISTANCE_PERCENT / 100
+            );
 
           const proposedInitialTrail =
             remainingPosition.side === 'long'
-              ? currentPrice - trailDistance
-              : currentPrice + trailDistance;
+              ? exitPrice - trailDistance
+              : exitPrice + trailDistance;
 
           const initialTrailingStop =
             remainingPosition.side === 'long'
@@ -1355,7 +1674,8 @@ async function checkPositions(): Promise<void> {
             )
           ) {
             throw new Error(
-              `Failed to initialize trailing stop for ${symbol}`
+              `Failed to initialize trailing stop for ` +
+                `${symbol}`
             );
           }
 
@@ -1372,7 +1692,8 @@ async function checkPositions(): Promise<void> {
 
         const statePosition =
           getPositions().find(
-            item => item.id === position.id
+            item =>
+              item.id === position.id
           );
 
         if (!statePosition) {
@@ -1384,11 +1705,13 @@ async function checkPositions(): Promise<void> {
 
         const activePartialClosed =
           currentStatePosition.metadata
-            ?.partialClosed ?? false;
+            ?.partialClosed ??
+          false;
 
         const activeTrailing =
           currentStatePosition.metadata
-            ?.trailingActive ?? false;
+            ?.trailingActive ??
+          false;
 
         if (
           DEAD_TRADE_ENABLED &&
@@ -1399,22 +1722,30 @@ async function checkPositions(): Promise<void> {
         ) {
           const entryAtr =
             currentStatePosition.metadata
-              ?.lastAtr ?? 0;
+              ?.lastAtr ??
+            0;
 
           const mfeAtr =
             entryAtr > 0
               ? maxUnrealizedPnL /
-                (entryAtr *
-                  currentStatePosition.quantity)
+                (
+                  entryAtr *
+                  currentStatePosition.quantity
+                )
               : 0;
 
           if (
-            mfeAtr >= DEAD_TRADE_MIN_MFE_ATR
+            mfeAtr >=
+            DEAD_TRADE_MIN_MFE_ATR
           ) {
             await executeClose(
               currentStatePosition,
-              currentPrice,
+              exitPrice,
               'dead_trade_mfe'
+            );
+
+            await verifyRemotePositionClosed(
+              symbol
             );
 
             continue;
@@ -1435,8 +1766,12 @@ async function checkPositions(): Promise<void> {
         ) {
           await executeClose(
             currentStatePosition,
-            currentPrice,
+            exitPrice,
             'time_stop'
+          );
+
+          await verifyRemotePositionClosed(
+            symbol
           );
 
           continue;
@@ -1452,13 +1787,15 @@ async function checkPositions(): Promise<void> {
             currentStatePosition.stopLossPrice;
 
           const trailDistance =
-            currentPrice *
-            (TRAILING_DISTANCE_PERCENT / 100);
+            exitPrice *
+            (
+              TRAILING_DISTANCE_PERCENT / 100
+            );
 
           const candidateTrailingStop =
             currentStatePosition.side === 'long'
-              ? currentPrice - trailDistance
-              : currentPrice + trailDistance;
+              ? exitPrice - trailDistance
+              : exitPrice + trailDistance;
 
           const nextTrailingStop =
             currentStatePosition.side === 'long'
@@ -1484,7 +1821,8 @@ async function checkPositions(): Promise<void> {
               )
             ) {
               throw new Error(
-                `Failed to update trailing stop for ${symbol}`
+                `Failed to update trailing stop for ` +
+                  `${symbol}`
               );
             }
 
@@ -1500,7 +1838,8 @@ async function checkPositions(): Promise<void> {
 
         const finalPosition =
           getPositions().find(
-            item => item.id === position.id
+            item =>
+              item.id === position.id
           );
 
         if (!finalPosition) {
@@ -1523,16 +1862,17 @@ async function checkPositions(): Promise<void> {
 
         if (!tpValid || !slValid) {
           console.warn(
-            `[${new Date().toISOString()}] ${symbol}: ` +
-            `Invalid TP/SL levels detected: ` +
-            `TP=${finalPosition.takeProfitPrice}, ` +
-            `SL=${finalPosition.stopLossPrice}, ` +
-            `entry=${finalPosition.entryPrice}, ` +
-            `side=${finalPosition.side}`
+            `[${new Date().toISOString()}] ` +
+              `${symbol}: Invalid TP/SL levels detected: ` +
+              `TP=${finalPosition.takeProfitPrice}, ` +
+              `SL=${finalPosition.stopLossPrice}, ` +
+              `entry=${finalPosition.entryPrice}, ` +
+              `side=${finalPosition.side}`
           );
 
           logError({
-            timestamp: new Date().toISOString(),
+            timestamp:
+              new Date().toISOString(),
             context: 'position-check',
             symbol,
             positionId: finalPosition.id,
@@ -1548,78 +1888,44 @@ async function checkPositions(): Promise<void> {
 
         const hitTakeProfit =
           finalPosition.side === 'long'
-            ? currentPrice >=
+            ? markPrice >=
               finalPosition.takeProfitPrice
-            : currentPrice <=
+            : markPrice <=
               finalPosition.takeProfitPrice;
 
         const hitStopLoss =
           finalPosition.side === 'long'
-            ? currentPrice <=
+            ? markPrice <=
               finalPosition.stopLossPrice
-            : currentPrice >=
+            : markPrice >=
               finalPosition.stopLossPrice;
 
-        if (hitTakeProfit && hitStopLoss) {
-          throw new Error(
-            `TP and SL triggered simultaneously for ${symbol}`
-          );
+        if (
+          hitTakeProfit &&
+          hitStopLoss
+        ) {
+          logError({
+            timestamp:
+              new Date().toISOString(),
+            context: 'position-check',
+            symbol,
+            positionId: finalPosition.id,
+            error:
+              'TP and SL triggered simultaneously; ' +
+              'TP priority applied'
+          });
         }
 
         if (hitTakeProfit) {
           await executeClose(
             finalPosition,
-            currentPrice,
+            exitPrice,
             'take_profit'
           );
 
-          if (
-            !PAPER_TRADING &&
-            signerClient
-          ) {
-            const accountIndex =
-              Number(
-                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
-              );
-
-            try {
-              const remotePositions =
-                await fetchAccountPositions(
-                  signerClient,
-                  accountIndex
-                );
-
-              const closedPosition =
-                remotePositions.find(
-                  (p: LighterPosition) =>
-                    normalizeSymbol(p.symbol) ===
-                    normalizeSymbol(symbol)
-                );
-
-              if (closedPosition) {
-                console.warn(
-                  `[${new Date().toISOString()}] ` +
-                  `${symbol}: position still exists ` +
-                  `on exchange after close`
-                );
-
-                notifyError({
-                  context:
-                    'position-close-verification',
-                  symbol,
-                  error:
-                    `Position ${symbol} still exists ` +
-                    `on exchange after close`
-                });
-              }
-            } catch (error) {
-              console.error(
-                `[${new Date().toISOString()}] ` +
-                `Failed to verify close for ${symbol}:`,
-                error
-              );
-            }
-          }
+          await verifyRemotePositionClosed(
+            symbol
+          );
 
           continue;
         }
@@ -1627,60 +1933,16 @@ async function checkPositions(): Promise<void> {
         if (hitStopLoss) {
           await executeClose(
             finalPosition,
-            currentPrice,
+            exitPrice,
             finalPosition.metadata
               ?.beTriggered
               ? 'breakeven_stop'
               : 'stop_loss'
           );
 
-          if (
-            !PAPER_TRADING &&
-            signerClient
-          ) {
-            const accountIndex =
-              Number(
-                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
-              );
-
-            try {
-              const remotePositions =
-                await fetchAccountPositions(
-                  signerClient,
-                  accountIndex
-                );
-
-              const closedPosition =
-                remotePositions.find(
-                  p =>
-                    normalizeSymbol(p.symbol) ===
-                    normalizeSymbol(symbol)
-                );
-
-              if (closedPosition) {
-                console.warn(
-                  `[${new Date().toISOString()}] ` +
-                  `${symbol}: position still exists ` +
-                  `on exchange after SL close`
-                );
-
-                notifyError({
-                  context:
-                    'position-close-verification',
-                  symbol,
-                  error:
-                    `Position ${symbol} still exists ` +
-                    `on exchange after SL close`
-                });
-              }
-            } catch (error) {
-              console.error(
-                `[${new Date().toISOString()}] ` +
-                `Failed to verify SL close for ${symbol}:`,
-                error
-              );
-            }
-          }
+          await verifyRemotePositionClosed(
+            symbol
+          );
 
           continue;
         }
@@ -1688,24 +1950,26 @@ async function checkPositions(): Promise<void> {
         const distanceToTP =
           finalPosition.side === 'long'
             ? finalPosition.takeProfitPrice -
-              currentPrice
-            : currentPrice -
+              markPrice
+            : markPrice -
               finalPosition.takeProfitPrice;
 
         const distanceToSL =
           finalPosition.side === 'long'
-            ? currentPrice -
+            ? markPrice -
               finalPosition.stopLossPrice
             : finalPosition.stopLossPrice -
-              currentPrice;
+              markPrice;
 
         logPositionCheck({
-          timestamp: new Date().toISOString(),
+          timestamp:
+            new Date().toISOString(),
           positionId: finalPosition.id,
           symbol: finalPosition.symbol,
           side: finalPosition.side,
-          entryPrice: finalPosition.entryPrice,
-          currentPrice,
+          entryPrice:
+            finalPosition.entryPrice,
+          currentPrice: markPrice,
           takeProfitPrice:
             finalPosition.takeProfitPrice,
           stopLossPrice:
@@ -1714,10 +1978,16 @@ async function checkPositions(): Promise<void> {
           unrealizedPnLPercent,
           distanceToTP,
           distanceToTPPercent:
-            (distanceToTP / currentPrice) * 100,
+            (
+              distanceToTP /
+              markPrice
+            ) * 100,
           distanceToSL,
           distanceToSLPercent:
-            (distanceToSL / currentPrice) * 100,
+            (
+              distanceToSL /
+              markPrice
+            ) * 100,
           hitTakeProfit,
           hitStopLoss,
           action: 'hold',
@@ -1730,16 +2000,20 @@ async function checkPositions(): Promise<void> {
             : 'Unknown error';
 
         logError({
-          timestamp: new Date().toISOString(),
+          timestamp:
+            new Date().toISOString(),
           context: 'position-check',
-          symbol: snapshotPosition.symbol,
-          positionId: snapshotPosition.id,
+          symbol:
+            snapshotPosition.symbol,
+          positionId:
+            snapshotPosition.id,
           error: errorMsg
         });
 
         notifyError({
           context: 'position-check',
-          symbol: snapshotPosition.symbol,
+          symbol:
+            snapshotPosition.symbol,
           error: errorMsg
         });
       }
@@ -1759,6 +2033,9 @@ export async function startScheduler(): Promise<void> {
   schedulerFatalError = null;
 
   try {
+    executionService =
+      createExecutionService();
+
     initializeSignerClient();
 
     await refreshTopMarkets();
@@ -1769,12 +2046,13 @@ export async function startScheduler(): Promise<void> {
     ) {
       const accountIndex =
         Number(
-          process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+          process.env.LIGHTER_ACCOUNT_INDEX ??
+            0
         );
 
       console.log(
         `[${new Date().toISOString()}] ` +
-        `Running state reconciliation...`
+          `Running state reconciliation...`
       );
 
       const restore =
@@ -1785,10 +2063,10 @@ export async function startScheduler(): Promise<void> {
 
       console.log(
         `[${new Date().toISOString()}] ` +
-        `Reconciliation: ` +
-        `restored=${restore.restored}, ` +
-        `closed=${restore.closed}, ` +
-        `errors=${restore.errors}`
+          `Reconciliation: ` +
+          `restored=${restore.restored}, ` +
+          `closed=${restore.closed}, ` +
+          `errors=${restore.errors}`
       );
 
       if (restore.errors > 0) {
@@ -1808,8 +2086,8 @@ export async function startScheduler(): Promise<void> {
     } else if (PAPER_TRADING) {
       console.log(
         `[${new Date().toISOString()}] ` +
-        `Paper trading enabled; ` +
-        `state reconciliation skipped`
+          `Paper trading enabled; ` +
+          `state reconciliation skipped`
       );
     }
 
@@ -1818,31 +2096,37 @@ export async function startScheduler(): Promise<void> {
     await checkSignals();
     await checkPositions();
 
-    signalCheckInterval = setInterval(
-      () => {
-        void checkSignals().catch(error => {
-          console.error(
-            `[${new Date().toISOString()}] ` +
-            `Signal interval error:`,
-            error
+    signalCheckInterval =
+      setInterval(
+        () => {
+          void checkSignals().catch(
+            error => {
+              console.error(
+                `[${new Date().toISOString()}] ` +
+                  `Signal interval error:`,
+                error
+              );
+            }
           );
-        });
-      },
-      SIGNAL_CHECK_INTERVAL_MS
-    );
+        },
+        SIGNAL_CHECK_INTERVAL_MS
+      );
 
-    positionCheckInterval = setInterval(
-      () => {
-        void checkPositions().catch(error => {
-          console.error(
-            `[${new Date().toISOString()}] ` +
-            `Position interval error:`,
-            error
+    positionCheckInterval =
+      setInterval(
+        () => {
+          void checkPositions().catch(
+            error => {
+              console.error(
+                `[${new Date().toISOString()}] ` +
+                  `Position interval error:`,
+                error
+              );
+            }
           );
-        });
-      },
-      POSITION_CHECK_INTERVAL_MS
-    );
+        },
+        POSITION_CHECK_INTERVAL_MS
+      );
 
     const activeTradingPairs =
       getActiveTradingPairs();
@@ -1850,7 +2134,8 @@ export async function startScheduler(): Promise<void> {
     notifyStartup({
       port:
         Number(process.env.PORT) || 3006,
-      tradingPairs: activeTradingPairs,
+      tradingPairs:
+        activeTradingPairs,
       signalInterval:
         SIGNAL_CHECK_INTERVAL_MS / 1000,
       positionInterval:
@@ -1860,6 +2145,8 @@ export async function startScheduler(): Promise<void> {
     schedulerStarted = false;
     stopMarketRefresh();
     stopReconciliationLoop();
+
+    executionService?.stop?.();
 
     throw error;
   }
@@ -1876,9 +2163,14 @@ export function stopScheduler(): void {
   }
 
   if (positionCheckInterval) {
-    clearInterval(positionCheckInterval);
+    clearInterval(
+      positionCheckInterval
+    );
+
     positionCheckInterval = null;
   }
+
+  executionService?.stop?.();
 
   if (!schedulerStopping) {
     schedulerStopping = true;
@@ -1899,7 +2191,8 @@ export function stopScheduler(): void {
       } catch (error) {
         console.error(
           `[${new Date().toISOString()}] ` +
-          `Failed to stop market data for ${symbol}:`,
+            `Failed to stop market data for ` +
+            `${symbol}:`,
           error
         );
       }
