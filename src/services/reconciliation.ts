@@ -976,23 +976,20 @@ export async function verifyPositionAfterFill(
 export async function syncLiveBalance(
   accountIndex: number
 ): Promise<void> {
-  const response =
-    await fetch(
-      `${LIGHTER_API_URL}/api/v1/account?` +
-        new URLSearchParams({
-          by: 'index',
-          value:
-            String(accountIndex)
-        }).toString(),
-      {
-        headers: {
-          Accept: 'application/json'
-        }
+  const response = await fetch(
+    `${LIGHTER_API_URL}/api/v1/account?` +
+      new URLSearchParams({
+        by: 'index',
+        value: String(accountIndex)
+      }).toString(),
+    {
+      headers: {
+        Accept: 'application/json'
       }
-    );
+    }
+  );
 
-  const body =
-    await response.text();
+  const body = await response.text();
 
   if (!response.ok) {
     throw new Error(
@@ -1004,36 +1001,38 @@ export async function syncLiveBalance(
   let parsed: unknown;
 
   try {
-    parsed =
-      JSON.parse(body);
+    parsed = JSON.parse(body);
   } catch {
     throw new Error(
       'Invalid JSON while fetching live balance'
     );
   }
 
-  const root =
-    getRecord(parsed);
+  const root = getRecord(parsed);
+  const account = getRecord(root?.account) ?? root;
 
-  const account =
-    getRecord(root?.account) ??
-    root;
-
+  // Правильные поля из Lighter API
   const balance =
     toNumber(
-      account?.balance ??
-        account?.collateral ??
-        account?.available_balance ??
-        account?.availableBalance
+      account?.collateral ??           // ✅ Основное поле
+        account?.total_collateral ??   // ✅ Альтернатива
+        account?.balance ??            // ✅ На случай изменений
+        account?.available_balance ??  // ✅ Доступный баланс
+        account?.availableBalance      // ✅ camelCase версия
     );
 
   if (
     balance == null ||
     balance < 0
   ) {
-    throw new Error(
-      'Live balance field was not found in account response'
+    console.warn(
+      `[${new Date().toISOString()}] ` +
+        `Live balance field not found in account response. ` +
+        `Response keys: ${Object.keys(account ?? {}).join(', ')}`
     );
+
+    // Не падаем, а просто пропускаем синхронизацию
+    return;
   }
 
   updateLiveAccountState({
