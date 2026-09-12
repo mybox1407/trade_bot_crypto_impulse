@@ -505,7 +505,15 @@ export function openPosition(data: {
 export function closePosition(
   positionId: string,
   exitPrice: number,
-  reason: PositionCloseReason,
+  reason:
+    | 'take_profit'
+    | 'stop_loss'
+    | 'manual'
+    | 'time_stop'
+    | 'breakeven_stop'
+    | 'dead_trade_mfe'
+    | 'reconciliation_missing_remote'
+    | 'reconciliation_severe_mismatch',
   options?: {
     executionOrderId?: string;
     clientOrderId?: string;
@@ -601,7 +609,7 @@ export function closePosition(
     netPnL,
     openedAt: position.openedAt,
     closedAt,
-    reason,
+    reason: reason as any,
     executionOrderId:
       options?.executionOrderId ??
       position.executionOrderId,
