@@ -28,7 +28,8 @@ import {
   updatePositionMetadata,
   partialClosePosition,
   updatePositionStopLoss,
-  flushPositionPersistence
+  flushPositionPersistence,
+  VirtualPosition
 } from './positionState';
 
 import {
@@ -358,6 +359,26 @@ let schedulerStopping = false;
 let schedulerStarted = false;
 let schedulerFatalError: string | null = null;
 
+// Блокировка символов при UNKNOWN
+const symbolLocks = new Map<string, number>();
+
+function isSymbolLocked(symbol: string): boolean {
+  const unlockAt = symbolLocks.get(normalizeSymbol(symbol));
+  if (!unlockAt) {
+    return false;
+  }
+  if (Date.now() >= unlockAt) {
+    symbolLocks.delete(normalizeSymbol(symbol));
+    return false;
+  }
+  return true;
+}
+
+function lockSymbol(symbol: string, durationMs: number = 5 * 60_000) {
+  const normalized = normalizeSymbol(symbol);
+  symbolLocks.set(normalized, Date.now() + durationMs);
+}
+
 function formatPrice(price: number): string {
   return Number.isFinite(price)
     ? price.toFixed(4)
@@ -630,6 +651,18 @@ async function checkSignals(): Promise<void> {
       try {
         ensureSchedulerHealthy();
 
+        // Пропускаем заблокированные символы
+        if (isSymbolLocked(symbol)) {
+          signalResults.push({
+            symbol,
+            status: 'no-signal',
+            regime: 'locked',
+            hasSignal: false,
+            reason: 'Symbol temporarily locked after unknown execution'
+          });
+          continue;
+        }
+
         if (hasOpenPosition(symbol)) {
           signalResults.push({
             symbol,
@@ -867,6 +900,19 @@ async function checkSignals(): Promise<void> {
           });
 
         if (!executionResult.ok) {
+          // Блокируем символ при UNKNOWN
+          if (executionResult.status === 'unknown') {
+            lockSymbol(symbol, 5 * 60_000);
+
+            notifyError({
+              context: 'signal-check',
+              symbol,
+              error:
+                `Execution outcome unknown for ${symbol}. ` +
+                `Symbol locked for 5 minutes. No new orders.`
+            });
+          }
+
           signalResults.push({
             symbol,
             status: 'signal',
@@ -895,10 +941,23 @@ async function checkSignals(): Promise<void> {
           !PAPER_TRADING &&
           !executionResult.protectiveOrders
         ) {
-          throw new Error(
-            `Live execution returned no protective ` +
-              `SL/TP orders for ${symbol}`
-          );
+          // Критично: позиция открылась без SL/TP на бирже
+          logError({
+            timestamp: new Date().toISOString(),
+            context: 'signal-check',
+            symbol,
+            error:
+              `Live execution returned no protective SL/TP orders for ${symbol}. ` +
+              `Position opened without exchange protection.`
+          });
+
+          notifyError({
+            context: 'signal-check',
+            symbol,
+            error:
+              `Position ${symbol} opened without SL/TP on exchange. ` +
+              `Manual protection required.`
+          });
         }
 
         const openResult =
@@ -1073,7 +1132,6 @@ async function checkSignals(): Promise<void> {
             );
           }
 
-          // Синхронизировать баланс после открытия
           await syncLiveBalance(accountIndex).catch(error => {
             console.error(
               `[${new Date().toISOString()}] ` +
@@ -1242,7 +1300,6 @@ async function executeClose(
       );
     }
 
-    // Синхронизировать баланс после частичного закрытия
     if (!PAPER_TRADING && signerClient) {
       const accountIndex =
         Number(
@@ -1261,9 +1318,14 @@ async function executeClose(
     return true;
   }
 
+  // Отменяем SL/TP только если они есть
   if (
     executionService.cancelProtectiveOrders &&
-    position.marketId != null
+    position.marketId != null &&
+    (
+      position.exchangeStopLossOrderId ||
+      position.exchangeTakeProfitOrderId
+    )
   ) {
     await executionService.cancelProtectiveOrders({
       marketId: position.marketId,
@@ -1306,7 +1368,6 @@ async function executeClose(
     );
   }
 
-  // Синхронизировать баланс после закрытия
   if (!PAPER_TRADING && signerClient) {
     const accountIndex =
       Number(
@@ -1702,7 +1763,6 @@ async function checkPositions(): Promise<void> {
             );
           }
 
-          // Синхронизировать баланс после частичного закрытия
           if (!PAPER_TRADING && signerClient) {
             const accountIndex =
               Number(
@@ -1798,10 +1858,16 @@ async function checkPositions(): Promise<void> {
             ?.trailingActive ??
           false;
 
+        const activeBeTriggered =
+          currentStatePosition.metadata
+            ?.beTriggered ??
+          false;
+
+        // DEAD_TRADE: закрываем только если позиция без partial и без BE
         if (
           DEAD_TRADE_ENABLED &&
           !activePartialClosed &&
-          !beTriggered &&
+          !activeBeTriggered &&
           positionAgeSeconds >=
             DEAD_TRADE_CHECK_AFTER_SEC
         ) {
@@ -1837,9 +1903,10 @@ async function checkPositions(): Promise<void> {
           }
         }
 
+        // TIME_STOP: закрываем только если позиция без partial и без BE
         if (
           !activePartialClosed &&
-          !beTriggered &&
+          !activeBeTriggered &&
           positionAgeSeconds >=
             TIME_STOP_SECONDS &&
           (
@@ -2135,7 +2202,6 @@ export async function startScheduler(): Promise<void> {
             0
         );
 
-      // Синхронизировать баланс при старте
       await syncLiveBalance(accountIndex);
 
       console.log(
@@ -2172,7 +2238,6 @@ export async function startScheduler(): Promise<void> {
         15 * 60 * 1000
       );
 
-      // Периодическая синхронизация баланса (каждые 5 минут)
       startBalanceSyncLoop(
         accountIndex,
         5 * 60 * 1000
@@ -2296,7 +2361,6 @@ export async function stopScheduler(): Promise<void> {
     }
   }
 
-  // Ждём завершения очереди персистентности
   await flushPositionPersistence().catch(error => {
     console.error(
       `[${new Date().toISOString()}] ` +
