@@ -64,7 +64,8 @@ import {
   restoreStateAfterRestart,
   reconcileAccount,
   fetchAccountPositions,
-  verifyPositionAfterFill
+  verifyPositionAfterFill,
+  LighterPosition
 } from './reconciliation';
 
 const executionService: ExecutionService =
@@ -1589,34 +1590,35 @@ async function checkPositions(): Promise<void> {
           if (signerClient) {
             const accountIndex =
               Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-
+          
             try {
               const remotePositions =
                 await fetchAccountPositions(
                   signerClient,
                   accountIndex
                 );
-
+          
               const closedPosition = remotePositions.find(
-                p => normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
+                (p: LighterPosition) =>
+                  normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
               );
-
+          
               if (closedPosition) {
                 console.warn(
                   `[${new Date().toISOString()}] ${symbol}: ` +
-                  `position still exists on exchange after TP close`
+                  `position still exists on exchange after close`
                 );
-
+          
                 notifyError({
                   context: 'position-close-verification',
                   symbol,
                   error:
-                    `Position ${symbol} still exists on exchange after TP close`
+                    `Position ${symbol} still exists on exchange after close`
                 });
               }
             } catch (error) {
               console.error(
-                `[${new Date().toISOString()}] Failed to verify TP close for ${symbol}:`,
+                `[${new Date().toISOString()}] Failed to verify close for ${symbol}:`,
                 error
               );
             }
