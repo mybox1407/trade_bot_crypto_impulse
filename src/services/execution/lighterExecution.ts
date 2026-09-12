@@ -769,7 +769,13 @@ export class LighterExecutionService
             // REST fallback вместо сразу unknown
             try {
               const expectedSide: 'BUY' | 'SELL' =
-                req.side === 'long' ? 'BUY' : 'SELL';
+                'side' in req
+                  ? (req as OpenExecutionRequest).side === 'long'
+                    ? 'BUY'
+                    : 'SELL'
+                  : (req as CloseExecutionRequest).positionSide === 'long'
+                    ? 'SELL'
+                    : 'BUY';
 
               const reconciled = await this.reconcileOrderViaRest(
                 marketId,
