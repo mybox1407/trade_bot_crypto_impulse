@@ -15,6 +15,10 @@ import {
   notifyPositionClose
 } from './telegram';
 
+import {
+  saveOpenPositions
+} from './persistence';
+
 export const POSITION_PERCENT = 0.30;
 export const MAX_PARALLEL_POSITIONS = 3;
 
@@ -99,6 +103,9 @@ let balance = STARTING_BALANCE;
 let reservedCapital = 0;
 let currentPositions: VirtualPosition[] = [];
 let lastClosedTrade: ClosedTrade | null = null;
+
+let persistenceQueue: Promise<void> =
+  Promise.resolve();
 
 function isFinitePositive(
   value: number
@@ -185,6 +192,29 @@ function syncReservedCapital(): void {
   }
 }
 
+function schedulePersistence(): void {
+  const snapshot = getPositions();
+
+  persistenceQueue =
+    persistenceQueue
+      .then(() =>
+        saveOpenPositions(snapshot)
+      )
+      .catch(error => {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `Failed to persist position state:`,
+          error
+        );
+
+        throw error;
+      });
+}
+
+export async function flushPositionPersistence(): Promise<void> {
+  await persistenceQueue;
+}
+
 export function getBalance(): number {
   return balance;
 }
@@ -232,7 +262,9 @@ export function getPositions(): VirtualPosition[] {
     position => ({
       ...position,
       metadata: position.metadata
-        ? { ...position.metadata }
+        ? {
+            ...position.metadata
+          }
         : undefined
     })
   );
@@ -328,10 +360,8 @@ export function openPosition(data: {
     normalizeSymbol(data.symbol);
 
   const balanceBefore = balance;
-
   const reservedCapitalBefore =
     reservedCapital;
-
   const availableBalanceBefore =
     getAvailableBalance();
 
@@ -348,8 +378,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -368,8 +397,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -390,8 +418,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -415,8 +442,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -432,8 +458,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -465,8 +490,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -490,8 +514,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -509,8 +532,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter:
-        reservedCapital,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter:
         getAvailableBalance()
@@ -556,6 +578,7 @@ export function openPosition(data: {
   ];
 
   syncReservedCapital();
+  schedulePersistence();
 
   const availableBalanceAfter =
     getAvailableBalance();
@@ -717,10 +740,8 @@ export function closePosition(
     currentPositions[index];
 
   const balanceBefore = balance;
-
   const reservedCapitalBefore =
     reservedCapital;
-
   const availableBalanceBefore =
     getAvailableBalance();
 
@@ -830,8 +851,8 @@ export function closePosition(
     );
 
   syncReservedCapital();
-
   balance += netPnL;
+  schedulePersistence();
 
   const availableBalanceAfter =
     getAvailableBalance();
@@ -964,7 +985,9 @@ export function partialClosePosition(
     currentPositions[index];
 
   if (
-    !isFinitePositive(quantityToClose) ||
+    !isFinitePositive(
+      quantityToClose
+    ) ||
     quantityToClose >= position.quantity
   ) {
     return {
@@ -1061,8 +1084,8 @@ export function partialClosePosition(
     );
 
   balance += netPnL;
-
   syncReservedCapital();
+  schedulePersistence();
 
   logPartialClose({
     timestamp:
@@ -1152,6 +1175,7 @@ export function updatePositionMetadata(
       }
     );
 
+  schedulePersistence();
   return true;
 }
 
@@ -1187,5 +1211,6 @@ export function updatePositionStopLoss(
           : position
     );
 
+  schedulePersistence();
   return true;
 }
