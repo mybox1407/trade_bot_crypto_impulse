@@ -8,10 +8,10 @@ const server = app.listen(port, '0.0.0.0', () => {
   startScheduler();
 });
 
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   console.log(`[${new Date().toISOString()}] Received ${signal}, shutting down gracefully...`);
   
-  stopScheduler();
+  await stopScheduler();
   
   server.close(() => {
     console.log(`[${new Date().toISOString()}] HTTP server closed`);
