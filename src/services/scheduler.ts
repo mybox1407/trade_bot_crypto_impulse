@@ -900,10 +900,9 @@ async function checkSignals(): Promise<void> {
           });
 
         if (!executionResult.ok) {
-          // Блокируем символ при UNKNOWN
           if (executionResult.status === 'unknown') {
             lockSymbol(symbol, 5 * 60_000);
-
+        
             notifyError({
               context: 'signal-check',
               symbol,
@@ -911,8 +910,21 @@ async function checkSignals(): Promise<void> {
                 `Execution outcome unknown for ${symbol}. ` +
                 `Symbol locked for 5 minutes. No new orders.`
             });
+          } else if (executionResult.status === 'rejected') {
+            // Ордер отменён (например, из-за slippage) - просто логируем
+            console.log(
+              `[${new Date().toISOString()}] ` +
+                `[SCHEDULER] Order rejected for ${symbol}: ${executionResult.message}`
+            );
+        
+            // Можно отправить уведомление, но не как ошибку, а как инфо
+            // notifyError({
+            //   context: 'signal-check',
+            //   symbol,
+            //   error: `Order rejected for ${symbol}: ${executionResult.message}`
+            // });
           }
-
+        
           signalResults.push({
             symbol,
             status: 'signal',
@@ -920,11 +932,9 @@ async function checkSignals(): Promise<void> {
             hasSignal: true,
             side,
             price: expectedPrice,
-            reason:
-              executionResult.message ??
-              'Execution failed'
+            reason: executionResult.message ?? 'Execution failed'
           });
-
+        
           continue;
         }
 
