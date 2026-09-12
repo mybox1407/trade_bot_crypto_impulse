@@ -4,7 +4,7 @@ services:
     container_name: lighter_live
     restart: unless-stopped
     ports:
-      - "3006:3006"
+      - "3007:3007"
 
     environment:
       - PORT=3006
@@ -31,7 +31,7 @@ services:
           "--no-verbose",
           "--tries=1",
           "--spider",
-          "http://localhost:3006/health"
+          "http://localhost:3007/health"
         ]
       interval: 30s
       timeout: 10s
