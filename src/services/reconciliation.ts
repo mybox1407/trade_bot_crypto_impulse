@@ -26,7 +26,7 @@ const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-type LighterPosition = {
+export type LighterPosition = {
   symbol: string;
   marketId: number;
   side: 'long' | 'short';
@@ -68,24 +68,25 @@ export async function fetchAccountPositions(
 ): Promise<LighterPosition[]> {
   try {
     const [
-      accountData,
+      positionsData,
       error
-    ] = await signerClient.get_account(
+    ] = await signerClient.get_account_positions(
       accountIndex
     );
 
-    if (error || !accountData) {
-      throw new Error(
-        `Failed to fetch account positions: ` +
+    if (error || !positionsData) {
+      console.warn(
+        `[${new Date().toISOString()}] fetchAccountPositions: ` +
         `${error ?? 'unknown error'}`
       );
+
+      return [];
     }
 
     const positions: LighterPosition[] = [];
 
-    const account = accountData as Record<string, unknown>;
     const positionsRaw =
-      account.positions as Array<Record<string, unknown>> | undefined;
+      positionsData as Array<Record<string, unknown>>;
 
     if (!Array.isArray(positionsRaw)) {
       return [];
@@ -138,9 +139,11 @@ export async function fetchAccountPositions(
         ? error.message
         : 'Unknown error';
 
-    throw new Error(
-      `Reconciliation: failed to fetch account positions: ${errorMsg}`
+    console.warn(
+      `[${new Date().toISOString()}] fetchAccountPositions: ${errorMsg}`
     );
+
+    return [];
   }
 }
 
@@ -295,7 +298,7 @@ export async function reconcileAccount(
           closePosition(
             local.id,
             local.entryPrice,
-            'manual'
+            'reconciliation_missing_remote'
           );
         } else if (mismatch.reason === 'missing_local') {
           const remote = mismatch.remote!;
@@ -345,7 +348,7 @@ export async function reconcileAccount(
             closePosition(
               local.id,
               local.entryPrice,
-              'manual'
+              'reconciliation_severe_mismatch'
             );
           }
 
