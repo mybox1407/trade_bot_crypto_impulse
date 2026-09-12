@@ -384,7 +384,7 @@ export function openPosition(data: {
       balanceBefore,
       balanceAfter: balance,
       reservedCapitalBefore,
-      reservedCapitalAfter,
+      reservedCapitalAfter: reservedCapital,
       availableBalanceBefore,
       availableBalanceAfter: getAvailableBalance()
     };
