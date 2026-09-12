@@ -1422,27 +1422,14 @@ export class LighterExecutionService
     );
   }
 
-  private createClientOrderIndex(): number {
-    const timestamp =
-      Date.now() * 1000;
-
-    this.orderSequence =
-      (this.orderSequence + 1) % 1000;
-
-    const value =
-      timestamp + this.orderSequence;
-
-    const maxUint48 =
-      Number((2n ** 48n) - 1n);
-
-    if (value > maxUint48) {
-      throw new Error(
-        'client_order_index exceeds uint48'
-      );
-    }
-
-    return value;
-  }
+private createClientOrderIndex(): number {
+  // 40 бит timestamp (секунды) + 8 бит sequence
+  const timestamp = Math.floor(Date.now() / 1000) & 0xFFFFFFFFFF;  // 40 бит максимум
+  const sequence = this.orderSequence++ & 0xFF;  // 8 бит (0-255)
+  
+  // Сдвигаем timestamp на 8 бит влево и добавляем sequence
+  return (timestamp << 8) | sequence;  // 48 бит всего
+}
 
   private toNumber(
     value: unknown
