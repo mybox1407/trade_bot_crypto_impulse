@@ -888,33 +888,33 @@ export class LighterExecutionService
       `orderId=${orderId ?? 'n/a'}`
     );
     
-    if (!this.authToken) {
+    if (!this.authToken || this.authToken.length < 10) {
       console.log(
         `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Creating auth token...`
+          `[LIGHTER] Auth token missing or invalid, creating new one...`
       );
-  
+    
       try {
         const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
           60 * 60,
           undefined,
           this.apiKeyIndex
         );
-  
+    
         console.log(
           `[${new Date().toISOString()}] ` +
             `[LIGHTER] Auth token result: auth=${auth ? 'OK' : 'NULL'}, authError=${authError ?? 'null'}`
         );
-  
+    
         if (authError || !auth) {
           throw new Error(authError ?? 'Failed to create auth token');
         }
-  
+    
         this.authToken = auth;
-  
+    
         console.log(
           `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Auth token created successfully`
+            `[LIGHTER] Auth token created successfully, length=${auth.length}`
         );
       } catch (error) {
         console.error(
@@ -922,7 +922,7 @@ export class LighterExecutionService
             `[LIGHTER] Failed to create auth token:`,
           error
         );
-  
+    
         return {
           status: 'UNKNOWN',
           filledQuantity: 0,
