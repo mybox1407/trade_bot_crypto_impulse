@@ -16,14 +16,19 @@ export class PaperExecutionService
     req: OpenExecutionRequest
   ): Promise<ExecutionResult> {
     console.log(
-      `[${new Date().toISOString()}] 📄 [PAPER] OPEN ` +
-        `${req.symbol} ${req.side.toUpperCase()} ` +
+      `[${new Date().toISOString()}] ` +
+        `📄 [PAPER] OPEN ` +
+        `${req.symbol} ` +
+        `${req.side.toUpperCase()} ` +
         `qty=${req.quantity.toFixed(8)} ` +
         `@ ${req.expectedPrice.toFixed(6)}`
     );
 
-    const notional = req.quantity * req.expectedPrice;
-    const fee = notional * TRADE_FEE_RATE;
+    const notional =
+      req.quantity * req.expectedPrice;
+
+    const fee =
+      notional * TRADE_FEE_RATE;
 
     return {
       ok: true,
@@ -40,15 +45,20 @@ export class PaperExecutionService
     req: CloseExecutionRequest
   ): Promise<ExecutionResult> {
     console.log(
-      `[${new Date().toISOString()}] 📄 [PAPER] CLOSE ` +
-        `${req.symbol} ${req.positionSide.toUpperCase()} ` +
+      `[${new Date().toISOString()}] ` +
+        `📄 [PAPER] CLOSE ` +
+        `${req.symbol} ` +
+        `${req.positionSide.toUpperCase()} ` +
         `qty=${req.quantity.toFixed(8)} ` +
         `@ ${req.expectedPrice.toFixed(6)} ` +
         `reason=${req.reason}`
     );
 
-    const notional = req.quantity * req.expectedPrice;
-    const fee = notional * TRADE_FEE_RATE;
+    const notional =
+      req.quantity * req.expectedPrice;
+
+    const fee =
+      notional * TRADE_FEE_RATE;
 
     return {
       ok: true,
