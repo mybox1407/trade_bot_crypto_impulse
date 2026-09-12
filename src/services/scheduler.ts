@@ -823,11 +823,50 @@ async function checkSignals(): Promise<void> {
         });
 
         if (!openResult.ok) {
-          markFatalError(
-            `${symbol}: execution fill confirmed ` +
-            `but local position state failed: ` +
-            `${openResult.message ?? 'unknown error'}`
-          );
+          if (signerClient) {
+            const apiKeyIndex =
+              Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+
+            const accountIndex =
+              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+            const verification =
+              await verifyPositionAfterFill(
+                signerClient,
+                accountIndex,
+                symbol,
+                side,
+                executionResult.filledQuantity
+              );
+
+            if (!verification.ok) {
+              markFatalError(
+                `${symbol}: execution fill confirmed but ` +
+                `local position state failed AND reconciliation verification failed: ` +
+                `${verification.mismatch}`
+              );
+            } else {
+              console.warn(
+                `[${new Date().toISOString()}] ${symbol}: ` +
+                `execution fill confirmed but local position state failed. ` +
+                `Reconciliation shows position exists on exchange.`
+              );
+
+              notifyError({
+                context: 'signal-check',
+                symbol,
+                error:
+                  `Execution filled but local state failed. ` +
+                  `Position exists on exchange, manual reconciliation required.`
+              });
+            }
+          } else {
+            markFatalError(
+              `${symbol}: execution fill confirmed ` +
+              `but local position state failed: ` +
+              `${openResult.message ?? 'unknown error'}`
+            );
+          }
 
           signalResults.push({
             symbol,
@@ -841,6 +880,43 @@ async function checkSignals(): Promise<void> {
           });
 
           continue;
+        }
+
+        if (signerClient) {
+          const apiKeyIndex =
+            Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+
+          const accountIndex =
+            Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+          const verification =
+            await verifyPositionAfterFill(
+              signerClient,
+              accountIndex,
+              symbol,
+              side,
+              executionResult.filledQuantity
+            );
+
+          if (!verification.ok) {
+            console.error(
+              `[${new Date().toISOString()}] ${symbol}: ` +
+              `position verification failed after successful open: ` +
+              `${verification.mismatch}`
+            );
+
+            notifyError({
+              context: 'signal-check',
+              symbol,
+              error:
+                `Position verification failed: ${verification.mismatch}`
+            });
+          } else {
+            console.log(
+              `[${new Date().toISOString()}] ${symbol}: ` +
+              `position verified on exchange successfully`
+            );
+          }
         }
 
         signalResults.push({
@@ -1447,6 +1523,40 @@ async function checkPositions(): Promise<void> {
           continue;
         }
 
+        const tpValid =
+          finalPosition.side === 'long'
+            ? finalPosition.takeProfitPrice > finalPosition.entryPrice
+            : finalPosition.takeProfitPrice < finalPosition.entryPrice;
+
+        const slValid =
+          finalPosition.side === 'long'
+            ? finalPosition.stopLossPrice < finalPosition.entryPrice
+            : finalPosition.stopLossPrice > finalPosition.entryPrice;
+
+        if (!tpValid || !slValid) {
+          console.warn(
+            `[${new Date().toISOString()}] ${symbol}: ` +
+            `Invalid TP/SL levels detected: ` +
+            `TP=${finalPosition.takeProfitPrice}, ` +
+            `SL=${finalPosition.stopLossPrice}, ` +
+            `entry=${finalPosition.entryPrice}, ` +
+            `side=${finalPosition.side}`
+          );
+
+          logError({
+            timestamp: new Date().toISOString(),
+            context: 'position-check',
+            symbol,
+            positionId: finalPosition.id,
+            error:
+              `Invalid TP/SL levels: TP=${finalPosition.takeProfitPrice}, ` +
+              `SL=${finalPosition.stopLossPrice}, ` +
+              `entry=${finalPosition.entryPrice}`
+          });
+
+          continue;
+        }
+
         const hitTakeProfit =
           finalPosition.side === 'long'
             ? currentPrice >=
@@ -1474,6 +1584,42 @@ async function checkPositions(): Promise<void> {
             'take_profit'
           );
 
+          if (signerClient) {
+            const accountIndex =
+              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+            try {
+              const remotePositions =
+                await fetchAccountPositions(
+                  signerClient,
+                  accountIndex
+                );
+
+              const closedPosition = remotePositions.find(
+                p => normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
+              );
+
+              if (closedPosition) {
+                console.warn(
+                  `[${new Date().toISOString()}] ${symbol}: ` +
+                  `position still exists on exchange after TP close`
+                );
+
+                notifyError({
+                  context: 'position-close-verification',
+                  symbol,
+                  error:
+                    `Position ${symbol} still exists on exchange after TP close`
+                });
+              }
+            } catch (error) {
+              console.error(
+                `[${new Date().toISOString()}] Failed to verify TP close for ${symbol}:`,
+                error
+              );
+            }
+          }
+
           continue;
         }
 
@@ -1486,6 +1632,42 @@ async function checkPositions(): Promise<void> {
               ? 'breakeven_stop'
               : 'stop_loss'
           );
+
+          if (signerClient) {
+            const accountIndex =
+              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
+            try {
+              const remotePositions =
+                await fetchAccountPositions(
+                  signerClient,
+                  accountIndex
+                );
+
+              const closedPosition = remotePositions.find(
+                p => normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
+              );
+
+              if (closedPosition) {
+                console.warn(
+                  `[${new Date().toISOString()}] ${symbol}: ` +
+                  `position still exists on exchange after SL close`
+                );
+
+                notifyError({
+                  context: 'position-close-verification',
+                  symbol,
+                  error:
+                    `Position ${symbol} still exists on exchange after SL close`
+                });
+              }
+            } catch (error) {
+              console.error(
+                `[${new Date().toISOString()}] Failed to verify SL close for ${symbol}:`,
+                error
+              );
+            }
+          }
 
           continue;
         }
