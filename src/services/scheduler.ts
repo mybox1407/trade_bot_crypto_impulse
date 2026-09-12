@@ -68,9 +68,11 @@ import {
   LighterPosition
 } from './reconciliation';
 
+const PAPER_TRADING =
+  process.env.PAPER_TRADING !== 'false';
+
 const executionService: ExecutionService =
   new PaperExecutionService();
-
 
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
@@ -80,36 +82,78 @@ let signerClient: SignerClient | null = null;
 let reconciliationInterval: NodeJS.Timeout | null = null;
 
 function initializeSignerClient(): void {
+  if (PAPER_TRADING) {
+    console.log(
+      `[${new Date().toISOString()}] ` +
+      `Paper trading enabled; signer initialization ` +
+      `skipped`
+    );
+
+    signerClient = null;
+
+    return;
+  }
+
   const apiKeySecret =
     process.env.LIGHTER_API_SECRET ?? '';
 
   const apiKeyIndex =
-    Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+    Number(
+      process.env.LIGHTER_API_KEY_INDEX ?? 0
+    );
 
   const accountIndex =
-    Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-
-  if (apiKeySecret) {
-    const normalizedKey =
-      apiKeySecret.startsWith('0x')
-        ? apiKeySecret.slice(2)
-        : apiKeySecret;
-
-    signerClient = new SignerClient(
-      LIGHTER_API_URL,
-      normalizedKey,
-      apiKeyIndex,
-      accountIndex
+    Number(
+      process.env.LIGHTER_ACCOUNT_INDEX ?? 0
     );
 
-    console.log(
-      `[${new Date().toISOString()}] SignerClient initialized for reconciliation`
-    );
-  } else {
+  if (!apiKeySecret) {
     console.warn(
-      `[${new Date().toISOString()}] LIGHTER_API_SECRET not configured, reconciliation disabled`
+      `[${new Date().toISOString()}] ` +
+      `LIGHTER_API_SECRET not configured, ` +
+      `reconciliation disabled`
+    );
+
+    signerClient = null;
+
+    return;
+  }
+
+  if (
+    !Number.isInteger(apiKeyIndex) ||
+    apiKeyIndex < 0 ||
+    apiKeyIndex > 254
+  ) {
+    throw new Error(
+      `Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`
     );
   }
+
+  if (
+    !Number.isInteger(accountIndex) ||
+    accountIndex < 0
+  ) {
+    throw new Error(
+      `Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`
+    );
+  }
+
+  const normalizedKey =
+    apiKeySecret.startsWith('0x')
+      ? apiKeySecret.slice(2)
+      : apiKeySecret;
+
+  signerClient = new SignerClient(
+    LIGHTER_API_URL,
+    normalizedKey,
+    apiKeyIndex,
+    accountIndex
+  );
+
+  console.log(
+    `[${new Date().toISOString()}] ` +
+    `SignerClient initialized for reconciliation`
+  );
 }
 
 function startReconciliationLoop(
@@ -117,9 +161,13 @@ function startReconciliationLoop(
   accountIndex: number,
   intervalMs: number
 ): void {
-  reconciliationInterval = setInterval(() => {
-    void reconcileAccountPeriodic(client, accountIndex);
-  }, intervalMs);
+  reconciliationInterval =
+    setInterval(() => {
+      void reconcileAccountPeriodic(
+        client,
+        accountIndex
+      );
+    }, intervalMs);
 }
 
 async function reconcileAccountPeriodic(
@@ -132,25 +180,44 @@ async function reconcileAccountPeriodic(
       accountIndex,
       {
         autoFix: false,
-        dryRun: false
+        dryRun: true
       }
     );
 
+    if (result.error) {
+      console.error(
+        `[${new Date().toISOString()}] ` +
+        `Periodic reconciliation API error: ` +
+        `${result.error}`
+      );
+
+      notifyError({
+        context: 'reconciliation-periodic',
+        error: result.error
+      });
+
+      return;
+    }
+
     if (!result.ok) {
       console.warn(
-        `[${new Date().toISOString()}] Reconciliation check: ` +
-        `${result.mismatches.length} mismatches detected`
+        `[${new Date().toISOString()}] ` +
+        `Reconciliation check: ` +
+        `${result.mismatches.length} ` +
+        `mismatches detected`
       );
 
       notifyError({
         context: 'reconciliation-periodic',
         error:
-          `${result.mismatches.length} position mismatches detected`
+          `${result.mismatches.length} ` +
+          `position mismatches detected`
       });
     }
   } catch (error) {
     console.error(
-      `[${new Date().toISOString()}] Reconciliation check error:`,
+      `[${new Date().toISOString()}] ` +
+      `Reconciliation check error:`,
       error
     );
   }
@@ -227,14 +294,16 @@ function markFatalError(message: string): void {
   schedulerFatalError = message;
 
   console.error(
-    `[${new Date().toISOString()}] FATAL SCHEDULER STATE ERROR: ${message}`
+    `[${new Date().toISOString()}] ` +
+    `FATAL SCHEDULER STATE ERROR: ${message}`
   );
 }
 
 function ensureSchedulerHealthy(): void {
   if (schedulerFatalError) {
     throw new Error(
-      `Scheduler is blocked after fatal state error: ${schedulerFatalError}`
+      `Scheduler is blocked after fatal state error: ` +
+      `${schedulerFatalError}`
     );
   }
 }
@@ -249,7 +318,9 @@ function formatOpenPositionsForTelegram(): string {
   return positions
     .map(position => {
       const sideEmoji =
-        position.side === 'long' ? '🟢' : '🔴';
+        position.side === 'long'
+          ? '🟢'
+          : '🔴';
 
       return (
         `${sideEmoji} ${position.symbol} ` +
@@ -394,7 +465,8 @@ async function sendTelegramSummary(
     );
   } catch (error) {
     console.error(
-      `[${new Date().toISOString()}] Failed to send summary:`,
+      `[${new Date().toISOString()}] ` +
+      `Failed to send summary:`,
       error instanceof Error
         ? error.message
         : 'Unknown'
@@ -502,6 +574,7 @@ async function checkSignals(): Promise<void> {
 
         const buy = (result as any).buy as boolean;
         const sell = (result as any).sell as boolean;
+
         const side =
           (result as any).side as
             | 'long'
@@ -518,11 +591,6 @@ async function checkSignals(): Promise<void> {
 
         const stopLossPrice =
           (result as any).stopLossPrice as
-            | number
-            | null;
-
-        const positionSize =
-          (result as any).positionSize as
             | number
             | null;
 
@@ -546,52 +614,6 @@ async function checkSignals(): Promise<void> {
             reason: skipReason
           });
 
-          logSignalCheck({
-            timestamp: new Date().toISOString(),
-            symbol,
-            timeframe: '15m',
-            side: 'none',
-            price: price ?? 0,
-            regime: regime ?? 'unknown',
-            takeProfitPrice: null,
-            stopLossPrice: null,
-            positionSize: null,
-            macdCrossUp:
-              indicators?.macdCrossUp ?? false,
-            macdCrossDown:
-              indicators?.macdCrossDown ?? false,
-            lastRsi: indicators?.lastRsi ?? 0,
-            lastAtr: indicators?.lastAtr ?? 0,
-            rsiBull: indicators?.rsiBull ?? false,
-            rsiBear: indicators?.rsiBear ?? false,
-            bbUpper: indicators?.bbUpper ?? 0,
-            bbMiddle: indicators?.bbMiddle ?? 0,
-            bbLower: indicators?.bbLower ?? 0,
-            adx:
-              indicators?.regimeIndicators?.adx ??
-              0,
-            adxRising:
-              indicators?.regimeIndicators?.adxRising ??
-              false,
-            ema20:
-              indicators?.regimeIndicators?.ema20 ??
-              0,
-            ema50:
-              indicators?.regimeIndicators?.ema50 ??
-              0,
-            ema200:
-              indicators?.regimeIndicators?.ema200 ??
-              0,
-            bbWidth:
-              indicators?.regimeIndicators?.bbWidth ??
-              0,
-            atrPct:
-              indicators?.regimeIndicators?.atrPct ??
-              0,
-            signalTriggered: false,
-            positionOpened: false
-          });
-
           continue;
         }
 
@@ -602,55 +624,6 @@ async function checkSignals(): Promise<void> {
             regime,
             hasSignal: false,
             reason: 'No signal'
-          });
-
-          logSignalCheck({
-            timestamp: new Date().toISOString(),
-            symbol,
-            timeframe: '15m',
-            side: 'none',
-            price: price ?? 0,
-            regime: regime ?? 'unknown',
-            takeProfitPrice:
-              takeProfitPrice ?? null,
-            stopLossPrice:
-              stopLossPrice ?? null,
-            positionSize:
-              positionSize ?? null,
-            macdCrossUp:
-              indicators?.macdCrossUp ?? false,
-            macdCrossDown:
-              indicators?.macdCrossDown ?? false,
-            lastRsi: indicators?.lastRsi ?? 0,
-            lastAtr: indicators?.lastAtr ?? 0,
-            rsiBull: indicators?.rsiBull ?? false,
-            rsiBear: indicators?.rsiBear ?? false,
-            bbUpper: indicators?.bbUpper ?? 0,
-            bbMiddle: indicators?.bbMiddle ?? 0,
-            bbLower: indicators?.bbLower ?? 0,
-            adx:
-              indicators?.regimeIndicators?.adx ??
-              0,
-            adxRising:
-              indicators?.regimeIndicators?.adxRising ??
-              false,
-            ema20:
-              indicators?.regimeIndicators?.ema20 ??
-              0,
-            ema50:
-              indicators?.regimeIndicators?.ema50 ??
-              0,
-            ema200:
-              indicators?.regimeIndicators?.ema200 ??
-              0,
-            bbWidth:
-              indicators?.regimeIndicators?.bbWidth ??
-              0,
-            atrPct:
-              indicators?.regimeIndicators?.atrPct ??
-              0,
-            signalTriggered: false,
-            positionOpened: false
           });
 
           continue;
@@ -713,11 +686,13 @@ async function checkSignals(): Promise<void> {
           totalRiskPerUnit <= 0
         ) {
           throw new Error(
-            `Invalid total risk per unit: ${totalRiskPerUnit}`
+            `Invalid total risk per unit: ` +
+            `${totalRiskPerUnit}`
           );
         }
 
         const riskCapital = getRiskCapital();
+
         const maxNotionalByPercent =
           getPositionNotional();
 
@@ -826,12 +801,11 @@ async function checkSignals(): Promise<void> {
         });
 
         if (!openResult.ok) {
-          if (signerClient) {
-            const apiKeyIndex =
-              Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-
+          if (!PAPER_TRADING && signerClient) {
             const accountIndex =
-              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+              Number(
+                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+              );
 
             const verification =
               await verifyPositionAfterFill(
@@ -845,28 +819,24 @@ async function checkSignals(): Promise<void> {
             if (!verification.ok) {
               markFatalError(
                 `${symbol}: execution fill confirmed but ` +
-                `local position state failed AND reconciliation verification failed: ` +
+                `local position state failed AND ` +
+                `reconciliation verification failed: ` +
                 `${verification.mismatch}`
               );
             } else {
-              console.warn(
-                `[${new Date().toISOString()}] ${symbol}: ` +
-                `execution fill confirmed but local position state failed. ` +
-                `Reconciliation shows position exists on exchange.`
-              );
-
               notifyError({
                 context: 'signal-check',
                 symbol,
                 error:
                   `Execution filled but local state failed. ` +
-                  `Position exists on exchange, manual reconciliation required.`
+                  `Position exists on exchange, ` +
+                  `manual reconciliation required.`
               });
             }
           } else {
             markFatalError(
-              `${symbol}: execution fill confirmed ` +
-              `but local position state failed: ` +
+              `${symbol}: execution fill confirmed but ` +
+              `local position state failed: ` +
               `${openResult.message ?? 'unknown error'}`
             );
           }
@@ -885,12 +855,14 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        if (signerClient) {
-          const apiKeyIndex =
-            Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-
+        if (
+          !PAPER_TRADING &&
+          signerClient
+        ) {
           const accountIndex =
-            Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+            Number(
+              process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+            );
 
           const verification =
             await verifyPositionAfterFill(
@@ -903,8 +875,9 @@ async function checkSignals(): Promise<void> {
 
           if (!verification.ok) {
             console.error(
-              `[${new Date().toISOString()}] ${symbol}: ` +
-              `position verification failed after successful open: ` +
+              `[${new Date().toISOString()}] ` +
+              `${symbol}: position verification failed ` +
+              `after successful open: ` +
               `${verification.mismatch}`
             );
 
@@ -912,14 +885,21 @@ async function checkSignals(): Promise<void> {
               context: 'signal-check',
               symbol,
               error:
-                `Position verification failed: ${verification.mismatch}`
+                `Position verification failed: ` +
+                `${verification.mismatch}`
             });
           } else {
             console.log(
-              `[${new Date().toISOString()}] ${symbol}: ` +
-              `position verified on exchange successfully`
+              `[${new Date().toISOString()}] ` +
+              `${symbol}: position verified on exchange successfully`
             );
           }
+        } else if (PAPER_TRADING) {
+          console.log(
+            `[${new Date().toISOString()}] ` +
+            `${symbol}: paper trade; ` +
+            `exchange verification skipped`
+          );
         }
 
         signalResults.push({
@@ -1020,7 +1000,8 @@ async function executeClose(
   ) {
     throw new Error(
       `Close fill exceeds local position quantity for ` +
-      `${position.symbol}: filled=${executionResult.filledQuantity}, ` +
+      `${position.symbol}: filled=` +
+      `${executionResult.filledQuantity}, ` +
       `local=${position.quantity}`
     );
   }
@@ -1325,8 +1306,8 @@ async function checkPositions(): Promise<void> {
 
           if (!partialResult.ok) {
             markFatalError(
-              `${symbol}: partial close filled but local state failed: ` +
-              `${partialResult.message}`
+              `${symbol}: partial close filled but ` +
+              `local state failed: ${partialResult.message}`
             );
 
             throw new Error(
@@ -1528,13 +1509,17 @@ async function checkPositions(): Promise<void> {
 
         const tpValid =
           finalPosition.side === 'long'
-            ? finalPosition.takeProfitPrice > finalPosition.entryPrice
-            : finalPosition.takeProfitPrice < finalPosition.entryPrice;
+            ? finalPosition.takeProfitPrice >
+              finalPosition.entryPrice
+            : finalPosition.takeProfitPrice <
+              finalPosition.entryPrice;
 
         const slValid =
           finalPosition.side === 'long'
-            ? finalPosition.stopLossPrice < finalPosition.entryPrice
-            : finalPosition.stopLossPrice > finalPosition.entryPrice;
+            ? finalPosition.stopLossPrice <
+              finalPosition.entryPrice
+            : finalPosition.stopLossPrice >
+              finalPosition.entryPrice;
 
         if (!tpValid || !slValid) {
           console.warn(
@@ -1552,7 +1537,8 @@ async function checkPositions(): Promise<void> {
             symbol,
             positionId: finalPosition.id,
             error:
-              `Invalid TP/SL levels: TP=${finalPosition.takeProfitPrice}, ` +
+              `Invalid TP/SL levels: ` +
+              `TP=${finalPosition.takeProfitPrice}, ` +
               `SL=${finalPosition.stopLossPrice}, ` +
               `entry=${finalPosition.entryPrice}`
           });
@@ -1587,38 +1573,49 @@ async function checkPositions(): Promise<void> {
             'take_profit'
           );
 
-          if (signerClient) {
+          if (
+            !PAPER_TRADING &&
+            signerClient
+          ) {
             const accountIndex =
-              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-          
+              Number(
+                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+              );
+
             try {
               const remotePositions =
                 await fetchAccountPositions(
                   signerClient,
                   accountIndex
                 );
-          
-              const closedPosition = remotePositions.find(
-                (p: LighterPosition) =>
-                  normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
-              );
-          
+
+              const closedPosition =
+                remotePositions.find(
+                  (p: LighterPosition) =>
+                    normalizeSymbol(p.symbol) ===
+                    normalizeSymbol(symbol)
+                );
+
               if (closedPosition) {
                 console.warn(
-                  `[${new Date().toISOString()}] ${symbol}: ` +
-                  `position still exists on exchange after close`
+                  `[${new Date().toISOString()}] ` +
+                  `${symbol}: position still exists ` +
+                  `on exchange after close`
                 );
-          
+
                 notifyError({
-                  context: 'position-close-verification',
+                  context:
+                    'position-close-verification',
                   symbol,
                   error:
-                    `Position ${symbol} still exists on exchange after close`
+                    `Position ${symbol} still exists ` +
+                    `on exchange after close`
                 });
               }
             } catch (error) {
               console.error(
-                `[${new Date().toISOString()}] Failed to verify close for ${symbol}:`,
+                `[${new Date().toISOString()}] ` +
+                `Failed to verify close for ${symbol}:`,
                 error
               );
             }
@@ -1637,9 +1634,14 @@ async function checkPositions(): Promise<void> {
               : 'stop_loss'
           );
 
-          if (signerClient) {
+          if (
+            !PAPER_TRADING &&
+            signerClient
+          ) {
             const accountIndex =
-              Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+              Number(
+                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+              );
 
             try {
               const remotePositions =
@@ -1648,26 +1650,33 @@ async function checkPositions(): Promise<void> {
                   accountIndex
                 );
 
-              const closedPosition = remotePositions.find(
-                p => normalizeSymbol(p.symbol) === normalizeSymbol(symbol)
-              );
+              const closedPosition =
+                remotePositions.find(
+                  p =>
+                    normalizeSymbol(p.symbol) ===
+                    normalizeSymbol(symbol)
+                );
 
               if (closedPosition) {
                 console.warn(
-                  `[${new Date().toISOString()}] ${symbol}: ` +
-                  `position still exists on exchange after SL close`
+                  `[${new Date().toISOString()}] ` +
+                  `${symbol}: position still exists ` +
+                  `on exchange after SL close`
                 );
 
                 notifyError({
-                  context: 'position-close-verification',
+                  context:
+                    'position-close-verification',
                   symbol,
                   error:
-                    `Position ${symbol} still exists on exchange after SL close`
+                    `Position ${symbol} still exists ` +
+                    `on exchange after SL close`
                 });
               }
             } catch (error) {
               console.error(
-                `[${new Date().toISOString()}] Failed to verify SL close for ${symbol}:`,
+                `[${new Date().toISOString()}] ` +
+                `Failed to verify SL close for ${symbol}:`,
                 error
               );
             }
@@ -1754,15 +1763,18 @@ export async function startScheduler(): Promise<void> {
 
     await refreshTopMarkets();
 
-    if (signerClient) {
-      const apiKeyIndex =
-        Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-
+    if (
+      !PAPER_TRADING &&
+      signerClient
+    ) {
       const accountIndex =
-        Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+        Number(
+          process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+        );
 
       console.log(
-        `[${new Date().toISOString()}] Running state reconciliation...`
+        `[${new Date().toISOString()}] ` +
+        `Running state reconciliation...`
       );
 
       const restore =
@@ -1772,7 +1784,8 @@ export async function startScheduler(): Promise<void> {
         );
 
       console.log(
-        `[${new Date().toISOString()}] Reconciliation: ` +
+        `[${new Date().toISOString()}] ` +
+        `Reconciliation: ` +
         `restored=${restore.restored}, ` +
         `closed=${restore.closed}, ` +
         `errors=${restore.errors}`
@@ -1782,7 +1795,8 @@ export async function startScheduler(): Promise<void> {
         notifyError({
           context: 'reconciliation',
           error:
-            `State reconciliation completed with ${restore.errors} severe mismatches`
+            `State reconciliation completed with ` +
+            `${restore.errors} errors`
         });
       }
 
@@ -1790,6 +1804,12 @@ export async function startScheduler(): Promise<void> {
         signerClient,
         accountIndex,
         15 * 60 * 1000
+      );
+    } else if (PAPER_TRADING) {
+      console.log(
+        `[${new Date().toISOString()}] ` +
+        `Paper trading enabled; ` +
+        `state reconciliation skipped`
       );
     }
 
@@ -1802,7 +1822,8 @@ export async function startScheduler(): Promise<void> {
       () => {
         void checkSignals().catch(error => {
           console.error(
-            `[${new Date().toISOString()}] Signal interval error:`,
+            `[${new Date().toISOString()}] ` +
+            `Signal interval error:`,
             error
           );
         });
@@ -1814,7 +1835,8 @@ export async function startScheduler(): Promise<void> {
       () => {
         void checkPositions().catch(error => {
           console.error(
-            `[${new Date().toISOString()}] Position interval error:`,
+            `[${new Date().toISOString()}] ` +
+            `Position interval error:`,
             error
           );
         });
@@ -1826,7 +1848,8 @@ export async function startScheduler(): Promise<void> {
       getActiveTradingPairs();
 
     notifyStartup({
-      port: Number(process.env.PORT) || 3002,
+      port:
+        Number(process.env.PORT) || 3006,
       tradingPairs: activeTradingPairs,
       signalInterval:
         SIGNAL_CHECK_INTERVAL_MS / 1000,
@@ -1862,9 +1885,12 @@ export function stopScheduler(): void {
 
     const symbols = new Set([
       ...getPositions().map(
-        position => normalizeSymbol(position.symbol)
+        position =>
+          normalizeSymbol(position.symbol)
       ),
-      ...getActiveTradingPairs().map(normalizeSymbol)
+      ...getActiveTradingPairs().map(
+        normalizeSymbol
+      )
     ]);
 
     for (const symbol of symbols) {
