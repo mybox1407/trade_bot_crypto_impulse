@@ -1028,7 +1028,7 @@ export class LighterExecutionService
       const inactiveResp = await fetch(inactiveUrl, {
         headers: {
           Accept: 'application/json',
-          Authorization: `Bearer ${this.authToken}`
+          Authorization: this.authToken
         }
       });
   
