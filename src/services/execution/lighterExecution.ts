@@ -888,9 +888,9 @@ export class LighterExecutionService
         `orderId=${orderId ?? 'n/a'}`
     );
     // ===============================
-
+  
     const start = Date.now();
-
+  
     while (Date.now() - start < timeoutMs) {
       // 1. Активные ордера
       const activeUrl = new URL(
@@ -898,18 +898,26 @@ export class LighterExecutionService
       );
       activeUrl.searchParams.set('account_index', String(this.accountIndex));
       activeUrl.searchParams.set('limit', '100');
-
+  
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Active orders URL: ${activeUrl.toString()}`
+      );
+  
       const activeResp = await fetch(activeUrl, {
-        headers: { Accept: 'application/json' }
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.authToken}`
+        }
       });
-
+  
       // === Лог HTTP статуса ===
       console.log(
         `[${new Date().toISOString()}] ` +
           `[LIGHTER] Active orders HTTP status: ${activeResp.status}`
       );
       // =======================
-
+  
       let activeData: unknown = null;
       if (activeResp.ok) {
         try {
@@ -927,18 +935,18 @@ export class LighterExecutionService
           );
         }
       }
-
+  
       const activeOrders = this.parseOrdersList(activeData);
-
+  
       const activeOrder = activeOrders.find(
         o =>
           (orderId && String(o.order_index) === orderId) ||
           Number(o.client_order_index) === clientOrderIndex
       );
-
+  
       if (activeOrder) {
         const status = String(activeOrder.status ?? '').toLowerCase();
-
+  
         if (status === 'filled' || status.startsWith('filled')) {
           const fills = await this.fetchOrderFills(marketId, Number(activeOrder.order_index));
           const filledQuantity = fills.reduce((sum, f) => sum + Number(f.size ?? 0), 0);
@@ -948,7 +956,7 @@ export class LighterExecutionService
               : undefined;
           const fee = fills.reduce((sum, f) => sum + Number(f.taker_fee ?? f.maker_fee ?? 0), 0);
           const position = await this.fetchPosition(marketId);
-
+  
           return {
             status: 'FILLED',
             filledQuantity,
@@ -957,29 +965,37 @@ export class LighterExecutionService
             position
           };
         }
-
+  
         await this.sleep(pollIntervalMs);
         continue;
       }
-
+  
       // 2. Неактивные ордера
       const inactiveUrl = new URL(
         `${LIGHTER_API_URL}/api/v1/accountInactiveOrders`
       );
       inactiveUrl.searchParams.set('account_index', String(this.accountIndex));
       inactiveUrl.searchParams.set('limit', '100');
-
+  
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Inactive orders URL: ${inactiveUrl.toString()}`
+      );
+  
       const inactiveResp = await fetch(inactiveUrl, {
-        headers: { Accept: 'application/json' }
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.authToken}`
+        }
       });
-
+  
       // === Лог HTTP статуса ===
       console.log(
         `[${new Date().toISOString()}] ` +
           `[LIGHTER] Inactive orders HTTP status: ${inactiveResp.status}`
       );
       // =======================
-
+  
       let inactiveData: unknown = null;
       if (inactiveResp.ok) {
         try {
@@ -997,25 +1013,25 @@ export class LighterExecutionService
           );
         }
       }
-
+  
       const inactiveOrders = this.parseOrdersList(inactiveData);
-
+  
       const inactiveOrder = inactiveOrders.find(
         o =>
           (orderId && String(o.order_index) === orderId) ||
           Number(o.client_order_index) === clientOrderIndex
       );
-
+  
       if (inactiveOrder) {
         const status = String(inactiveOrder.status ?? '').toLowerCase();
-
+  
         if (status === 'filled' || status.startsWith('filled')) {
           const filledQty = Number(inactiveOrder.filled_base_amount ?? 0);
           const filledQuote = Number(inactiveOrder.filled_quote_amount ?? 0);
           const avgPrice = filledQty > 0 ? filledQuote / filledQty : undefined;
           const fee = 0;
           const position = await this.fetchPosition(marketId);
-
+  
           return {
             status: 'FILLED',
             filledQuantity: filledQty,
@@ -1024,12 +1040,19 @@ export class LighterExecutionService
             position
           };
         }
-
+  
         if (
           status.startsWith('cancel') ||
           status === 'rejected' ||
           status === 'failed'
         ) {
+          console.log(
+            `[${new Date().toISOString()}] ` +
+              `[LIGHTER] Order canceled: status=${inactiveOrder.status}, ` +
+              `clientOrderIndex=${clientOrderIndex}, ` +
+              `marketId=${marketId}`
+          );
+  
           return {
             status: 'CANCELED',
             filledQuantity: 0,
@@ -1038,10 +1061,10 @@ export class LighterExecutionService
           };
         }
       }
-
+  
       await this.sleep(pollIntervalMs);
     }
-
+  
     return {
       status: 'UNKNOWN',
       filledQuantity: 0,
