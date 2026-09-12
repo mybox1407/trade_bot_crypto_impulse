@@ -74,7 +74,25 @@ function getRecord(
   return value as Record<string, unknown>;
 }
 
-function getArrayFromAccountResponse(
+function getString(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (
+      typeof value === 'string' &&
+      value.trim().length > 0
+    ) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function getPositionRecords(
   response: unknown
 ): Array<Record<string, unknown>> {
   const root = getRecord(response);
@@ -97,7 +115,7 @@ function getArrayFromAccountResponse(
           (
             item
           ): item is Record<string, unknown> =>
-            item != null
+            item !== null
         );
     }
 
@@ -114,13 +132,13 @@ function getArrayFromAccountResponse(
           (
             item
           ): item is Record<string, unknown> =>
-            item != null
+            item !== null
         );
     }
 
     if (Array.isArray(nested.accounts)) {
-      for (const accountCandidate of nested.accounts) {
-        const account = getRecord(accountCandidate);
+      for (const accountItem of nested.accounts) {
+        const account = getRecord(accountItem);
 
         if (
           account &&
@@ -132,7 +150,7 @@ function getArrayFromAccountResponse(
               (
                 item
               ): item is Record<string, unknown> =>
-                item != null
+                item !== null
             );
         }
       }
@@ -142,42 +160,27 @@ function getArrayFromAccountResponse(
   return [];
 }
 
-function getString(
-  record: Record<string, unknown>,
-  ...keys: string[]
-): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'string' && value.length > 0) {
-      return value;
-    }
-  }
-
-  return undefined;
-}
-
 function parsePosition(
-  pos: Record<string, unknown>
+  rawPosition: Record<string, unknown>
 ): LighterPosition | null {
   const marketId = toNumber(
-    pos.market_index ??
-    pos.market_id ??
-    pos.marketId
+    rawPosition.market_id ??
+    rawPosition.market_index ??
+    rawPosition.marketId
   );
 
   const rawSize = toNumber(
-    pos.size ??
-    pos.position_size ??
-    pos.position ??
-    pos.quantity
+    rawPosition.position ??
+    rawPosition.position_size ??
+    rawPosition.size ??
+    rawPosition.quantity
   );
 
   const entryPrice = toNumber(
-    pos.entry_price ??
-    pos.avg_entry_price ??
-    pos.average_entry_price ??
-    pos.entryPrice
+    rawPosition.avg_entry_price ??
+    rawPosition.entry_price ??
+    rawPosition.average_entry_price ??
+    rawPosition.entryPrice
   );
 
   if (
@@ -190,19 +193,27 @@ function parsePosition(
     return null;
   }
 
-  const sideValue = getString(
-    pos,
-    'side',
-    'position_side'
+  const explicitSide = getString(
+    rawPosition,
+    'position_side',
+    'side'
   )?.toLowerCase();
+
+  const sign = toNumber(
+    rawPosition.sign
+  );
 
   let side: 'long' | 'short';
 
   if (
-    sideValue === 'long' ||
-    sideValue === 'short'
+    explicitSide === 'long' ||
+    explicitSide === 'short'
   ) {
-    side = sideValue;
+    side = explicitSide;
+  } else if (sign != null && sign !== 0) {
+    side = sign > 0
+      ? 'long'
+      : 'short';
   } else {
     side = rawSize > 0
       ? 'long'
@@ -211,7 +222,7 @@ function parsePosition(
 
   const symbol =
     getString(
-      pos,
+      rawPosition,
       'symbol',
       'market_symbol',
       'marketSymbol'
@@ -231,6 +242,15 @@ export async function fetchAccountPositions(
   _signerClient: SignerClient,
   accountIndex: number
 ): Promise<LighterPosition[]> {
+  if (
+    !Number.isInteger(accountIndex) ||
+    accountIndex < 0
+  ) {
+    throw new Error(
+      `Invalid Lighter account index: ${accountIndex}`
+    );
+  }
+
   try {
     const url = new URL(
       `${LIGHTER_API_URL}/api/v1/account`
@@ -250,7 +270,7 @@ export async function fetchAccountPositions(
 
     const responseText = await response.text();
 
-    let responseData: unknown;
+    let responseData: unknown = null;
 
     try {
       responseData = responseText
@@ -258,30 +278,35 @@ export async function fetchAccountPositions(
         : null;
     } catch {
       throw new Error(
-        `Invalid JSON response from Lighter ` +
-        `account endpoint: ${responseText.slice(0, 300)}`
+        `Invalid JSON from Lighter account endpoint: ` +
+        `${responseText.slice(0, 300)}`
       );
     }
 
     if (!response.ok) {
-      const errorMessage =
-        getRecord(responseData)?.message ??
-        getRecord(responseData)?.error ??
+      const responseRecord =
+        getRecord(responseData);
+
+      const apiError =
+        responseRecord?.message ??
+        responseRecord?.error ??
+        responseRecord?.code ??
         response.statusText;
 
       throw new Error(
         `Lighter account request failed ` +
-        `(${response.status}): ${String(errorMessage)}`
+        `(${response.status}): ${String(apiError)}`
       );
     }
 
-    const positionsRaw =
-      getArrayFromAccountResponse(responseData);
+    const positionRecords =
+      getPositionRecords(responseData);
 
     const positions: LighterPosition[] = [];
 
-    for (const positionRaw of positionsRaw) {
-      const position = parsePosition(positionRaw);
+    for (const positionRecord of positionRecords) {
+      const position =
+        parsePosition(positionRecord);
 
       if (position) {
         positions.push(position);
@@ -306,6 +331,63 @@ export async function fetchAccountPositions(
   }
 }
 
+function getReconciliationLevels(
+  position: LighterPosition
+): {
+  takeProfitPrice: number;
+  stopLossPrice: number;
+} {
+  if (position.side === 'long') {
+    return {
+      takeProfitPrice:
+        position.entryPrice * 1.1,
+      stopLossPrice:
+        position.entryPrice * 0.9
+    };
+  }
+
+  return {
+    takeProfitPrice:
+      position.entryPrice * 0.9,
+    stopLossPrice:
+      position.entryPrice * 1.1
+  };
+}
+
+function restoreRemotePosition(
+  remote: LighterPosition
+): void {
+  const levels =
+    getReconciliationLevels(remote);
+
+  const result = openPosition({
+    symbol: remote.symbol,
+    marketId: remote.marketId,
+    side: remote.side,
+    entryPrice: remote.entryPrice,
+    quantity: remote.quantity,
+    takeProfitPrice: levels.takeProfitPrice,
+    stopLossPrice: levels.stopLossPrice,
+    metadata: {
+      regime: 'reconciliation',
+      macdCrossUp: false,
+      macdCrossDown: false,
+      lastRsi: 0,
+      lastAtr: 0,
+      adx: 0,
+      bbWidth: 0,
+      atrPct: 0
+    }
+  });
+
+  if (!result.ok) {
+    throw new Error(
+      `Failed to restore ${remote.symbol}: ` +
+      result.message
+    );
+  }
+}
+
 export async function reconcileAccount(
   signerClient: SignerClient,
   accountIndex: number,
@@ -314,8 +396,11 @@ export async function reconcileAccount(
     dryRun?: boolean;
   }
 ): Promise<ReconciliationResult> {
-  const autoFix = options?.autoFix ?? false;
-  const dryRun = options?.dryRun ?? false;
+  const autoFix =
+    options?.autoFix ?? false;
+
+  const dryRun =
+    options?.dryRun ?? false;
 
   const localPositions = getPositions();
 
@@ -390,8 +475,9 @@ export async function reconcileAccount(
       Math.max(local.quantity * 0.01, 1e-12);
 
     if (
-      Math.abs(local.quantity - remote.quantity) >
-      quantityTolerance
+      Math.abs(
+        local.quantity - remote.quantity
+      ) > quantityTolerance
     ) {
       mismatches.push({
         symbol,
@@ -407,8 +493,9 @@ export async function reconcileAccount(
       Math.max(local.entryPrice * 0.01, 1e-12);
 
     if (
-      Math.abs(local.entryPrice - remote.entryPrice) >
-      priceTolerance
+      Math.abs(
+        local.entryPrice - remote.entryPrice
+      ) > priceTolerance
     ) {
       mismatches.push({
         symbol,
@@ -449,7 +536,11 @@ export async function reconcileAccount(
         if (
           mismatch.reason === 'missing_remote'
         ) {
-          const local = mismatch.local!;
+          const local = mismatch.local;
+
+          if (!local) {
+            continue;
+          }
 
           console.warn(
             `[${new Date().toISOString()}] ` +
@@ -458,15 +549,23 @@ export async function reconcileAccount(
             `closing local state`
           );
 
-          closePosition(
+          const result = closePosition(
             local.id,
             local.entryPrice,
             'reconciliation_missing_remote'
           );
+
+          if (!result.ok) {
+            throw new Error(result.message);
+          }
         } else if (
           mismatch.reason === 'missing_local'
         ) {
-          const remote = mismatch.remote!;
+          const remote = mismatch.remote;
+
+          if (!remote) {
+            continue;
+          }
 
           console.warn(
             `[${new Date().toISOString()}] ` +
@@ -475,31 +574,7 @@ export async function reconcileAccount(
             `creating local state`
           );
 
-          openPosition({
-            symbol: remote.symbol,
-            marketId: remote.marketId,
-            side: remote.side,
-            entryPrice: remote.entryPrice,
-            quantity: remote.quantity,
-            takeProfitPrice:
-              remote.side === 'long'
-                ? remote.entryPrice * 1.1
-                : remote.entryPrice * 0.9,
-            stopLossPrice:
-              remote.side === 'long'
-                ? remote.entryPrice * 0.9
-                : remote.entryPrice * 1.1,
-            metadata: {
-              regime: 'reconciliation',
-              macdCrossUp: false,
-              macdCrossDown: false,
-              lastRsi: 0,
-              lastAtr: 0,
-              adx: 0,
-              bbWidth: 0,
-              atrPct: 0
-            }
-          });
+          restoreRemotePosition(remote);
         } else if (
           mismatch.reason === 'quantity_mismatch' ||
           mismatch.reason === 'side_mismatch' ||
@@ -526,39 +601,21 @@ export async function reconcileAccount(
           );
 
           if (local) {
-            closePosition(
+            const closeResult = closePosition(
               local.id,
               local.entryPrice,
               'reconciliation_severe_mismatch'
             );
+
+            if (!closeResult.ok) {
+              throw new Error(
+                closeResult.message
+              );
+            }
           }
 
           if (remote) {
-            openPosition({
-              symbol: remote.symbol,
-              marketId: remote.marketId,
-              side: remote.side,
-              entryPrice: remote.entryPrice,
-              quantity: remote.quantity,
-              takeProfitPrice:
-                remote.side === 'long'
-                  ? remote.entryPrice * 1.1
-                  : remote.entryPrice * 0.9,
-              stopLossPrice:
-                remote.side === 'long'
-                  ? remote.entryPrice * 0.9
-                  : remote.entryPrice * 1.1,
-              metadata: {
-                regime: 'reconciliation',
-                macdCrossUp: false,
-                macdCrossDown: false,
-                lastRsi: 0,
-                lastAtr: 0,
-                adx: 0,
-                bbWidth: 0,
-                atrPct: 0
-              }
-            });
+            restoreRemotePosition(remote);
           }
         }
       } catch (error) {
@@ -616,7 +673,9 @@ export async function restoreStateAfterRestart(
   let errors = 0;
 
   for (const mismatch of result.mismatches) {
-    if (mismatch.reason === 'missing_local') {
+    if (
+      mismatch.reason === 'missing_local'
+    ) {
       restored++;
     } else if (
       mismatch.reason === 'missing_remote'
@@ -651,7 +710,8 @@ export async function verifyPositionAfterFill(
         accountIndex
       );
 
-    const normalizedSymbol = normalizeSymbol(symbol);
+    const normalizedSymbol =
+      normalizeSymbol(symbol);
 
     const remote = remotePositions.find(
       position =>
