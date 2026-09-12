@@ -10,4 +10,4 @@ npm install
 docker compose up -d --build
 
 
-docker compose logs -f lighter_live
+docker compose logs -f trade_bot
