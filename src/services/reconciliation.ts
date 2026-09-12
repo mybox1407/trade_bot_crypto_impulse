@@ -6,7 +6,8 @@ import {
   getPositions,
   openPosition,
   closePosition,
-  VirtualPosition
+  VirtualPosition,
+  updatePositionMetadata
 } from './positionState';
 
 import {
@@ -698,18 +699,32 @@ export async function reconcileAccount(
             continue;
           }
 
-          const result =
-            closePosition(
-              local.id,
-              local.entryPrice,
-              'reconciliation_missing_remote'
-            );
+          // НЕ закрываем автоматически — только лог и уведомление
+          logError({
+            timestamp: new Date().toISOString(),
+            context: 'reconciliation',
+            symbol: mismatch.symbol,
+            error:
+              `Local position ${local.symbol} (${local.id}) ` +
+              `not found on exchange. ` +
+              `Manual check required. Auto-close disabled.`
+          });
 
-          if (!result.ok) {
-            throw new Error(
-              result.message
-            );
-          }
+          notifyError({
+            context: 'reconciliation',
+            symbol: mismatch.symbol,
+            error:
+              `Local position ${local.symbol} ` +
+              `missing on exchange. ` +
+              `Do NOT send compensating orders manually.`
+          });
+
+          // Помечаем позицию как проблемную в metadata
+          updatePositionMetadata(local.id, {
+            reconciliationIssue: 'missing_remote'
+          });
+
+          continue;
         } else if (
           mismatch.reason ===
           'missing_local'
@@ -738,11 +753,25 @@ export async function reconcileAccount(
           if (
             !persistedPosition
           ) {
-            throw new Error(
-              `Remote position ${remote.symbol} ` +
-                `cannot be restored: persisted state ` +
-                `not found`
-            );
+            logError({
+              timestamp: new Date().toISOString(),
+              context: 'reconciliation',
+              symbol: mismatch.symbol,
+              error:
+                `Remote position ${remote.symbol} detected, ` +
+                `but no persisted state found. ` +
+                `Manual reconciliation required.`
+            });
+
+            notifyError({
+              context: 'reconciliation',
+              symbol: mismatch.symbol,
+              error:
+                `Orphan position on exchange: ${remote.symbol}. ` +
+                `No local state. Manual action required.`
+            });
+
+            continue;
           }
 
           const restored =
@@ -756,12 +785,19 @@ export async function reconcileAccount(
                 `${restored.message}`
             );
           }
+
+          continue;
         } else {
-          throw new Error(
-            `Severe reconciliation mismatch for ` +
-              `${mismatch.symbol}: ` +
-              `${mismatch.reason}`
-          );
+          // Остальные mismatches — только лог
+          logError({
+            timestamp: new Date().toISOString(),
+            context: 'reconciliation',
+            symbol: mismatch.symbol,
+            error:
+              `Severe reconciliation mismatch for ` +
+                `${mismatch.symbol}: ` +
+                `${mismatch.reason}`
+          });
         }
       } catch (error) {
         const errorMsg =
@@ -873,6 +909,7 @@ export async function restoreStateAfterRestart(
       mismatch.reason ===
       'missing_remote'
     ) {
+      // Не закрываем, просто считаем как closed для статистики
       closed++;
     } else {
       errors++;
@@ -1014,7 +1051,6 @@ export async function syncLiveBalance(
     throw new Error('Invalid account response structure');
   }
 
-  // Ищем аккаунт в массиве accounts
   let account: Record<string, unknown> | null = null;
 
   const accounts = root?.accounts;
@@ -1027,12 +1063,10 @@ export async function syncLiveBalance(
     ) as Record<string, unknown> | null;
   }
 
-  // Fallback: пробуем account (объект)
   if (!account) {
     account = getRecord(root?.account);
   }
 
-  // Fallback: data.account
   if (!account) {
     const data = getRecord(root?.data);
     account = getRecord(data?.account);
@@ -1048,7 +1082,6 @@ export async function syncLiveBalance(
     return;
   }
 
-  // Ищем баланс в разных полях
   const balance =
     toNumber(
       account?.collateral ??
