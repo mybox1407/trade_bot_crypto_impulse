@@ -880,13 +880,14 @@ export class LighterExecutionService
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
 
-    console.log(
-      `[${new Date().toISOString()}] ` +
+  console.log(
+    `[${new Date().toISOString()}] ` +
       `[LIGHTER] REST reconciliation START: ` +
       `marketId=${marketId}, ` +
       `clientOrderIndex=${clientOrderIndex}, ` +
-      `orderId=${orderId ?? 'n/a'}`
-    );
+      `orderId=${orderId ?? 'n/a'}, ` +
+      `authToken=${this.authToken ? this.authToken.substring(0, 30) + '...' : 'MISSING'}`
+  );
     
     if (!this.authToken || this.authToken.length < 10) {
       console.log(
