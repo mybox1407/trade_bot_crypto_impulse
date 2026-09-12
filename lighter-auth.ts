@@ -1,52 +1,78 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { SignerClient } from 'zklighter-sdk';
+
+dotenv.config();
 
 const apiUrl =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-const secret =
+const apiKeySecret =
   process.env.LIGHTER_API_SECRET ?? '';
 
 const apiKeyIndex =
-  Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+  Number(
+    process.env.LIGHTER_API_KEY_INDEX ?? 0
+  );
 
 const accountIndex =
-  Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 746073);
+  Number(
+    process.env.LIGHTER_ACCOUNT_INDEX ?? 746073
+  );
 
-if (!secret) {
+if (!apiKeySecret) {
   throw new Error(
     'LIGHTER_API_SECRET is not set'
   );
 }
 
-const normalizedSecret =
-  secret.startsWith('0x')
-    ? secret.slice(2)
-    : secret;
+if (
+  !Number.isInteger(apiKeyIndex) ||
+  apiKeyIndex < 0 ||
+  apiKeyIndex > 254
+) {
+  throw new Error(
+    `Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`
+  );
+}
 
-const client =
+if (
+  !Number.isInteger(accountIndex) ||
+  accountIndex < 0
+) {
+  throw new Error(
+    `Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`
+  );
+}
+
+const normalizedKey =
+  apiKeySecret.startsWith('0x')
+    ? apiKeySecret.slice(2)
+    : apiKeySecret;
+
+const signerClient =
   new SignerClient(
     apiUrl,
-    normalizedSecret,
+    normalizedKey,
     apiKeyIndex,
     accountIndex
   );
 
 const [
-  token,
-  error
+  authToken,
+  authError
 ] =
-  client.create_auth_token_with_expiry(
+  signerClient.create_auth_token_with_expiry(
     60 * 60,
     undefined,
     apiKeyIndex
   );
 
-if (error || !token) {
+if (authError || !authToken) {
   throw new Error(
-    error ?? 'Auth token was not created'
+    authError ??
+      'Failed to create Lighter auth token'
   );
 }
 
-console.log(token);
+console.log(authToken);
