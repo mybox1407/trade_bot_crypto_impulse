@@ -104,12 +104,13 @@ function getPositionRecords(
   const candidates: unknown[] = [
     root.positions,
     root.data,
-    root.account
+    root.account,
+    root.accounts
   ];
 
   for (const candidate of candidates) {
     if (Array.isArray(candidate)) {
-      return candidate
+      const directRecords = candidate
         .map(getRecord)
         .filter(
           (
@@ -117,6 +118,33 @@ function getPositionRecords(
           ): item is Record<string, unknown> =>
             item !== null
         );
+
+      const nestedPositions: Array<
+        Record<string, unknown>
+      > = [];
+
+      for (const item of directRecords) {
+        if (Array.isArray(item.positions)) {
+          nestedPositions.push(
+            ...item.positions
+              .map(getRecord)
+              .filter(
+                (
+                  position
+                ): position is Record<string, unknown> =>
+                  position !== null
+              )
+          );
+        }
+      }
+
+      if (nestedPositions.length > 0) {
+        return nestedPositions;
+      }
+
+      if (candidate === root.positions) {
+        return directRecords;
+      }
     }
 
     const nested = getRecord(candidate);
@@ -257,7 +285,12 @@ export async function fetchAccountPositions(
     );
 
     url.searchParams.set(
-      'account_index',
+      'by',
+      'index'
+    );
+
+    url.searchParams.set(
+      'value',
       String(accountIndex)
     );
 
@@ -296,6 +329,19 @@ export async function fetchAccountPositions(
       throw new Error(
         `Lighter account request failed ` +
         `(${response.status}): ${String(apiError)}`
+      );
+    }
+
+    const responseRecord =
+      getRecord(responseData);
+
+    if (
+      responseRecord?.code != null &&
+      Number(responseRecord.code) !== 200
+    ) {
+      throw new Error(
+        `Lighter account API error: ` +
+        `${String(responseRecord.message ?? responseRecord.code)}`
       );
     }
 
@@ -530,7 +576,7 @@ export async function reconcileAccount(
     };
   }
 
-  if (autoFix && !dryRun) {
+  if (autoFix && !dryRun && remoteError == null) {
     for (const mismatch of mismatches) {
       try {
         if (
@@ -667,6 +713,14 @@ export async function restoreStateAfterRestart(
       dryRun: false
     }
   );
+
+  if (result.error) {
+    return {
+      restored: 0,
+      closed: 0,
+      errors: 1
+    };
+  }
 
   let restored = 0;
   let closed = 0;
