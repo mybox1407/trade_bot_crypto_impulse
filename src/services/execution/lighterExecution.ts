@@ -880,57 +880,56 @@ export class LighterExecutionService
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
 
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `[LIGHTER] REST reconciliation START: ` +
-      `marketId=${marketId}, ` +
-      `clientOrderIndex=${clientOrderIndex}, ` +
-      `orderId=${orderId ?? 'n/a'}, ` +
-      `authToken=${this.authToken ? this.authToken.substring(0, 30) + '...' : 'MISSING'}`
-  );
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `[LIGHTER] REST reconciliation START: ` +
+        `marketId=${marketId}, ` +
+        `clientOrderIndex=${clientOrderIndex}, ` +
+        `orderId=${orderId ?? 'n/a'}, ` +
+        `authToken=${this.authToken ? this.authToken.substring(0, 30) + '...' : 'MISSING'}`
+    );
     
-    if (!this.authToken || this.authToken.length < 10) {
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Auth token missing or invalid, creating new one...`
+    // Всегда создаём новый токен для REST запросов
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `[LIGHTER] Creating fresh auth token for REST reconciliation...`
+    );
+    
+    try {
+      const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
+        60 * 60,
+        undefined,
+        this.apiKeyIndex
       );
     
-      try {
-        const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
-          60 * 60,
-          undefined,
-          this.apiKeyIndex
-        );
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Auth token created: length=${auth?.length ?? 0}`
+      );
     
-        console.log(
-          `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Auth token result: auth=${auth ? 'OK' : 'NULL'}, authError=${authError ?? 'null'}`
-        );
-    
-        if (authError || !auth) {
-          throw new Error(authError ?? 'Failed to create auth token');
-        }
-    
-        this.authToken = auth;
-    
-        console.log(
-          `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Auth token created successfully, length=${auth.length}`
-        );
-      } catch (error) {
-        console.error(
-          `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Failed to create auth token:`,
-          error
-        );
-    
-        return {
-          status: 'UNKNOWN',
-          filledQuantity: 0,
-          fee: 0,
-          position: { size: 0, side: 'FLAT' as const }
-        };
+      if (authError || !auth) {
+        throw new Error(authError ?? 'Failed to create auth token');
       }
+    
+      this.authToken = auth;
+    
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Using new auth token for REST requests`
+      );
+    } catch (error) {
+      console.error(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Failed to create auth token:`,
+        error
+      );
+    
+      return {
+        status: 'UNKNOWN',
+        filledQuantity: 0,
+        fee: 0,
+        position: { size: 0, side: 'FLAT' as const }
+      };
     }
   
     const start = Date.now();
