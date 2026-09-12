@@ -879,51 +879,20 @@ export class LighterExecutionService
     fee: number;
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
-
     console.log(
       `[${new Date().toISOString()}] ` +
         `[LIGHTER] REST reconciliation START: ` +
         `marketId=${marketId}, ` +
         `clientOrderIndex=${clientOrderIndex}, ` +
-        `orderId=${orderId ?? 'n/a'}, ` +
-        `authToken=${this.authToken ? this.authToken.substring(0, 30) + '...' : 'MISSING'}`
+        `orderId=${orderId ?? 'n/a'}`
     );
-    
-    // Всегда создаём новый токен для REST запросов
-    console.log(
-      `[${new Date().toISOString()}] ` +
-        `[LIGHTER] Creating fresh auth token for REST reconciliation...`
-    );
-    
-    try {
-      const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
-        60 * 60,
-        undefined,
-        this.apiKeyIndex
-      );
-    
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Auth token created: length=${auth?.length ?? 0}`
-      );
-    
-      if (authError || !auth) {
-        throw new Error(authError ?? 'Failed to create auth token');
-      }
-    
-      this.authToken = auth;
-    
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Using new auth token for REST requests`
-      );
-    } catch (error) {
+  
+    // Токен уже создан в WebSocket при старте, используем его
+    if (!this.authToken) {
       console.error(
         `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Failed to create auth token:`,
-        error
+          `[LIGHTER] No auth token available`
       );
-    
       return {
         status: 'UNKNOWN',
         filledQuantity: 0,
@@ -942,11 +911,6 @@ export class LighterExecutionService
       activeUrl.searchParams.set('account_index', String(this.accountIndex));
       activeUrl.searchParams.set('limit', '100');
   
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Active orders URL: ${activeUrl.toString()}`
-      );
-  
       const activeResp = await fetch(activeUrl, {
         headers: {
           Accept: 'application/json',
@@ -954,29 +918,17 @@ export class LighterExecutionService
         }
       });
   
-      // === Лог HTTP статуса ===
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Active orders HTTP status: ${activeResp.status}`
-      );
-      // =======================
+      if (!activeResp.ok) {
+        await this.sleep(pollIntervalMs);
+        continue;
+      }
   
       let activeData: unknown = null;
-      if (activeResp.ok) {
-        try {
-          activeData = await activeResp.json();
-          const keys = Object.keys((activeData as Record<string, unknown>) || {});
-          console.log(
-            `[${new Date().toISOString()}] ` +
-              `[LIGHTER] Active orders response keys: ${keys.join(', ')}`
-          );
-        } catch (e) {
-          console.error(
-            `[${new Date().toISOString()}] ` +
-              `[LIGHTER] Failed to parse active orders JSON:`,
-            e
-          );
-        }
+      try {
+        activeData = await activeResp.json();
+      } catch {
+        await this.sleep(pollIntervalMs);
+        continue;
       }
   
       const activeOrders = this.parseOrdersList(activeData);
@@ -1013,48 +965,29 @@ export class LighterExecutionService
         continue;
       }
   
-      // 2. Неактивные ордера
+      // 2. Неактивные ордера — токен через query param
       const inactiveUrl = new URL(
         `${LIGHTER_API_URL}/api/v1/accountInactiveOrders`
       );
       inactiveUrl.searchParams.set('account_index', String(this.accountIndex));
       inactiveUrl.searchParams.set('limit', '100');
-  
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Inactive orders URL: ${inactiveUrl.toString()}`
-      );
+      inactiveUrl.searchParams.set('auth', this.authToken);
   
       const inactiveResp = await fetch(inactiveUrl, {
-        headers: {
-          Accept: 'application/json',
-          Authorization: this.authToken
-        }
+        headers: { Accept: 'application/json' }
       });
   
-      // === Лог HTTP статуса ===
-      console.log(
-        `[${new Date().toISOString()}] ` +
-          `[LIGHTER] Inactive orders HTTP status: ${inactiveResp.status}`
-      );
-      // =======================
+      if (!inactiveResp.ok) {
+        await this.sleep(pollIntervalMs);
+        continue;
+      }
   
       let inactiveData: unknown = null;
-      if (inactiveResp.ok) {
-        try {
-          inactiveData = await inactiveResp.json();
-          const keys = Object.keys((inactiveData as Record<string, unknown>) || {});
-          console.log(
-            `[${new Date().toISOString()}] ` +
-              `[LIGHTER] Inactive orders response keys: ${keys.join(', ')}`
-          );
-        } catch (e) {
-          console.error(
-            `[${new Date().toISOString()}] ` +
-              `[LIGHTER] Failed to parse inactive orders JSON:`,
-            e
-          );
-        }
+      try {
+        inactiveData = await inactiveResp.json();
+      } catch {
+        await this.sleep(pollIntervalMs);
+        continue;
       }
   
       const inactiveOrders = this.parseOrdersList(inactiveData);
@@ -1072,14 +1005,13 @@ export class LighterExecutionService
           const filledQty = Number(inactiveOrder.filled_base_amount ?? 0);
           const filledQuote = Number(inactiveOrder.filled_quote_amount ?? 0);
           const avgPrice = filledQty > 0 ? filledQuote / filledQty : undefined;
-          const fee = 0;
           const position = await this.fetchPosition(marketId);
   
           return {
             status: 'FILLED',
             filledQuantity: filledQty,
             averageFillPrice: avgPrice,
-            fee,
+            fee: 0,
             position
           };
         }
@@ -1092,8 +1024,7 @@ export class LighterExecutionService
           console.log(
             `[${new Date().toISOString()}] ` +
               `[LIGHTER] Order canceled: status=${inactiveOrder.status}, ` +
-              `clientOrderIndex=${clientOrderIndex}, ` +
-              `marketId=${marketId}`
+              `clientOrderIndex=${clientOrderIndex}, marketId=${marketId}`
           );
   
           return {
