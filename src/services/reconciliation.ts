@@ -991,6 +991,34 @@ export async function syncLiveBalance(
 
   const body = await response.text();
 
+  // Полное логирование ответа
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Account API Response Status: ${response.status}`
+  );
+  
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Account API Response Body:`,
+    body
+  );
+  
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(
+      'Invalid JSON while fetching live balance'
+    );
+  }
+  
+  // Логирование распарсенного объекта
+  console.log(
+    `[${new Date().toISOString()}] ` +
+      `Account API Parsed:`,
+    JSON.stringify(parsed, null, 2)
+  );  
+
   if (!response.ok) {
     throw new Error(
       `Failed to fetch live balance: ` +
