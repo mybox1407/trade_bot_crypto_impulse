@@ -27,7 +27,8 @@ import {
   getPositionNotional,
   updatePositionMetadata,
   partialClosePosition,
-  updatePositionStopLoss
+  updatePositionStopLoss,
+  flushPositionPersistence
 } from './positionState';
 
 import {
@@ -69,7 +70,8 @@ import {
   reconcileAccount,
   fetchAccountPositions,
   verifyPositionAfterFill,
-  LighterPosition
+  LighterPosition,
+  syncLiveBalance
 } from './reconciliation';
 
 const PAPER_TRADING =
@@ -84,6 +86,9 @@ let executionService: ExecutionService;
 let signerClient: SignerClient | null = null;
 
 let reconciliationInterval:
+  NodeJS.Timeout | null = null;
+
+let balanceSyncInterval:
   NodeJS.Timeout | null = null;
 
 function createExecutionService(): ExecutionService {
@@ -287,6 +292,29 @@ function stopReconciliationLoop(): void {
   if (reconciliationInterval) {
     clearInterval(reconciliationInterval);
     reconciliationInterval = null;
+  }
+}
+
+function startBalanceSyncLoop(
+  accountIndex: number,
+  intervalMs: number
+): void {
+  balanceSyncInterval =
+    setInterval(() => {
+      void syncLiveBalance(accountIndex).catch(error => {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `Failed to sync live balance:`,
+          error
+        );
+      });
+    }, intervalMs);
+}
+
+function stopBalanceSyncLoop(): void {
+  if (balanceSyncInterval) {
+    clearInterval(balanceSyncInterval);
+    balanceSyncInterval = null;
   }
 }
 
@@ -1044,6 +1072,15 @@ async function checkSignals(): Promise<void> {
                 `exchange successfully`
             );
           }
+
+          // Синхронизировать баланс после открытия
+          await syncLiveBalance(accountIndex).catch(error => {
+            console.error(
+              `[${new Date().toISOString()}] ` +
+                `Failed to sync balance after open:`,
+              error
+            );
+          });
         } else if (PAPER_TRADING) {
           console.log(
             `[${new Date().toISOString()}] ` +
@@ -1205,6 +1242,22 @@ async function executeClose(
       );
     }
 
+    // Синхронизировать баланс после частичного закрытия
+    if (!PAPER_TRADING && signerClient) {
+      const accountIndex =
+        Number(
+          process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+        );
+
+      await syncLiveBalance(accountIndex).catch(error => {
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `Failed to sync balance after partial close:`,
+          error
+        );
+      });
+    }
+
     return true;
   }
 
@@ -1251,6 +1304,22 @@ async function executeClose(
         `${position.symbol}: ` +
         `${result.message}`
     );
+  }
+
+  // Синхронизировать баланс после закрытия
+  if (!PAPER_TRADING && signerClient) {
+    const accountIndex =
+      Number(
+        process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+      );
+
+    await syncLiveBalance(accountIndex).catch(error => {
+      console.error(
+        `[${new Date().toISOString()}] ` +
+          `Failed to sync balance after close:`,
+        error
+      );
+    });
   }
 
   return true;
@@ -1633,6 +1702,22 @@ async function checkPositions(): Promise<void> {
             );
           }
 
+          // Синхронизировать баланс после частичного закрытия
+          if (!PAPER_TRADING && signerClient) {
+            const accountIndex =
+              Number(
+                process.env.LIGHTER_ACCOUNT_INDEX ?? 0
+              );
+
+            await syncLiveBalance(accountIndex).catch(error => {
+              console.error(
+                `[${new Date().toISOString()}] ` +
+                  `Failed to sync balance after partial close:`,
+                error
+              );
+            });
+          }
+
           const remainingPosition =
             getPositions().find(
               item =>
@@ -1762,19 +1847,19 @@ async function checkPositions(): Promise<void> {
               TIME_STOP_MFE_PERCENT ||
             unrealizedPnLPercent <
               TIME_STOP_MAX_LOSS_PERCENT
-          )
-        ) {
-          await executeClose(
-            currentStatePosition,
-            exitPrice,
-            'time_stop'
-          );
+          ) {
+            await executeClose(
+              currentStatePosition,
+              exitPrice,
+              'time_stop'
+            );
 
-          await verifyRemotePositionClosed(
-            symbol
-          );
+            await verifyRemotePositionClosed(
+              symbol
+            );
 
-          continue;
+            continue;
+          }
         }
 
         if (
@@ -2050,6 +2135,9 @@ export async function startScheduler(): Promise<void> {
             0
         );
 
+      // Синхронизировать баланс при старте
+      await syncLiveBalance(accountIndex);
+
       console.log(
         `[${new Date().toISOString()}] ` +
           `Running state reconciliation...`
@@ -2082,6 +2170,12 @@ export async function startScheduler(): Promise<void> {
         signerClient,
         accountIndex,
         15 * 60 * 1000
+      );
+
+      // Периодическая синхронизация баланса (каждые 5 минут)
+      startBalanceSyncLoop(
+        accountIndex,
+        5 * 60 * 1000
       );
     } else if (PAPER_TRADING) {
       console.log(
@@ -2145,6 +2239,7 @@ export async function startScheduler(): Promise<void> {
     schedulerStarted = false;
     stopMarketRefresh();
     stopReconciliationLoop();
+    stopBalanceSyncLoop();
 
     executionService?.stop?.();
 
@@ -2152,8 +2247,10 @@ export async function startScheduler(): Promise<void> {
   }
 }
 
-export function stopScheduler(): void {
+export async function stopScheduler(): Promise<void> {
   stopReconciliationLoop();
+
+  stopBalanceSyncLoop();
 
   stopMarketRefresh();
 
@@ -2198,6 +2295,15 @@ export function stopScheduler(): void {
       }
     }
   }
+
+  // Ждём завершения очереди персистентности
+  await flushPositionPersistence().catch(error => {
+    console.error(
+      `[${new Date().toISOString()}] ` +
+        `Failed to flush position persistence:`,
+      error
+    );
+  });
 
   schedulerStarted = false;
 }
