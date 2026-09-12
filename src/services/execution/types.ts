@@ -29,6 +29,8 @@ export interface OpenExecutionRequest {
   clientOrderId: string;
   priceDecimals?: number;
   sizeDecimals?: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
 }
 
 export interface CloseExecutionRequest {
@@ -43,6 +45,14 @@ export interface CloseExecutionRequest {
   sizeDecimals?: number;
 }
 
+export interface ProtectiveOrders {
+  marketId: number;
+  stopLossOrderId?: string;
+  takeProfitOrderId?: string;
+  stopLossClientOrderIndex: number;
+  takeProfitClientOrderIndex: number;
+}
+
 export interface ExecutionResult {
   ok: boolean;
   status: ExecutionStatus;
@@ -52,6 +62,7 @@ export interface ExecutionResult {
   filledQuantity: number;
   averageFillPrice?: number;
   fee?: number;
+  protectiveOrders?: ProtectiveOrders;
   message?: string;
 }
 
@@ -63,6 +74,10 @@ export interface ExecutionService {
   closePosition(
     req: CloseExecutionRequest
   ): Promise<ExecutionResult>;
+
+  cancelProtectiveOrders?(
+    orders: ProtectiveOrders
+  ): Promise<void>;
 
   stop?(): void;
 }
