@@ -95,6 +95,15 @@ function toNumber(
     : 0;
 }
 
+function isValidDecimals(
+  value: number
+): boolean {
+  return (
+    Number.isInteger(value) &&
+    value >= 0
+  );
+}
+
 function isEligibleMarket(
   market: ApiMarket
 ): boolean {
@@ -128,12 +137,6 @@ function isEligibleMarket(
   return true;
 }
 
-export function toTradingPair(
-  market: LighterMarket
-): string {
-  return `${market.symbol}/USDT`;
-}
-
 export function normalizeSymbol(
   symbol: string
 ): string {
@@ -142,6 +145,12 @@ export function normalizeSymbol(
   return value.endsWith('/USDT')
     ? value
     : `${value}/USDT`;
+}
+
+export function toTradingPair(
+  market: LighterMarket
+): string {
+  return normalizeSymbol(market.symbol);
 }
 
 export function validateOrderSize(
@@ -155,61 +164,109 @@ export function validateOrderSize(
   ok: false;
   reason: string;
 } {
-  if (!Number.isFinite(quantity) || quantity <= 0) {
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
     return {
       ok: false,
       reason: 'Invalid quantity'
     };
   }
 
-  if (!Number.isFinite(price) || price <= 0) {
+  if (
+    !Number.isFinite(price) ||
+    price <= 0
+  ) {
     return {
       ok: false,
       reason: 'Invalid price'
     };
   }
 
-  if (quantity < market.minBaseAmount) {
+  if (
+    !isValidDecimals(market.sizeDecimals)
+  ) {
     return {
       ok: false,
       reason:
-        `Quantity ${quantity.toFixed(8)} ` +
-        `is below min_base_amount ${market.minBaseAmount}`
+        `Invalid size decimals: ` +
+        `${market.sizeDecimals}`
     };
   }
 
-  const quoteAmount = quantity * price;
-
-  if (quoteAmount < market.minQuoteAmount) {
+  if (
+    !isValidDecimals(market.priceDecimals)
+  ) {
     return {
       ok: false,
       reason:
-        `Quote amount ${quoteAmount.toFixed(4)} ` +
-        `is below min_quote_amount ${market.minQuoteAmount}`
+        `Invalid price decimals: ` +
+        `${market.priceDecimals}`
     };
   }
 
-  const sizeFactor = Math.pow(10, market.sizeDecimals);
+  const sizeFactor =
+    10 ** market.sizeDecimals;
+
   const roundedQuantity =
-    Math.floor(quantity * sizeFactor) / sizeFactor;
+    Math.floor(quantity * sizeFactor) /
+    sizeFactor;
 
-  if (roundedQuantity < market.minBaseAmount) {
+  if (
+    !Number.isFinite(roundedQuantity) ||
+    roundedQuantity <= 0
+  ) {
     return {
       ok: false,
       reason:
-        `Rounded quantity ${roundedQuantity.toFixed(8)} ` +
-        `is below min_base_amount ${market.minBaseAmount}`
+        `Quantity becomes zero after rounding ` +
+        `with sizeDecimals=${market.sizeDecimals}`
     };
   }
 
-  const roundedQuote = roundedQuantity * price;
-
-  if (roundedQuote < market.minQuoteAmount) {
+  if (
+    roundedQuantity < market.minBaseAmount
+  ) {
     return {
       ok: false,
       reason:
-        `Rounded quote ${roundedQuote.toFixed(4)} ` +
-        `is below min_quote_amount ${market.minQuoteAmount}`
+        `Rounded quantity ` +
+        `${roundedQuantity.toFixed(8)} ` +
+        `is below min_base_amount ` +
+        `${market.minBaseAmount}`
+    };
+  }
+
+  const roundedPrice =
+    Math.floor(price * 10 ** market.priceDecimals) /
+    10 ** market.priceDecimals;
+
+  if (
+    !Number.isFinite(roundedPrice) ||
+    roundedPrice <= 0
+  ) {
+    return {
+      ok: false,
+      reason:
+        `Price becomes zero after rounding ` +
+        `with priceDecimals=${market.priceDecimals}`
+    };
+  }
+
+  const roundedQuote =
+    roundedQuantity * roundedPrice;
+
+  if (
+    roundedQuote < market.minQuoteAmount
+  ) {
+    return {
+      ok: false,
+      reason:
+        `Rounded quote ` +
+        `${roundedQuote.toFixed(4)} ` +
+        `is below min_quote_amount ` +
+        `${market.minQuoteAmount}`
     };
   }
 
@@ -240,17 +297,26 @@ export async function fetchTopLighterMarkets(
   if (!response.ok) {
     throw new Error(
       `Lighter markets HTTP ` +
-        `${response.status}: ${body}`
+      `${response.status}: ${body}`
     );
   }
 
-  const data = JSON.parse(body) as ApiResponse;
+  let data: ApiResponse;
+
+  try {
+    data = JSON.parse(body) as ApiResponse;
+  } catch {
+    throw new Error(
+      `Invalid JSON from Lighter markets endpoint: ` +
+      `${body.slice(0, 300)}`
+    );
+  }
 
   if (data.code !== 200) {
     throw new Error(
       `Lighter markets API error ` +
-        `${data.code}: ` +
-        `${data.message ?? 'unknown error'}`
+      `${data.code}: ` +
+      `${data.message ?? 'unknown error'}`
     );
   }
 
@@ -262,7 +328,7 @@ export async function fetchTopLighterMarkets(
 
   const markets = eligibleMarkets
     .map(market => ({
-      symbol: market.symbol,
+      symbol: market.symbol.trim().toUpperCase(),
       marketId: market.market_id,
       priceDecimals: market.price_decimals,
       sizeDecimals: market.size_decimals,
@@ -284,8 +350,37 @@ export async function fetchTopLighterMarkets(
     }))
     .filter(market => {
       if (
-        market.priceDecimals <= 0 ||
-        market.sizeDecimals <= 0
+        !Number.isInteger(market.marketId) ||
+        market.marketId < 0
+      ) {
+        console.warn(
+          `[${new Date().toISOString()}] ` +
+            `Skipping market ${market.symbol} ` +
+            `with invalid marketId: ` +
+            `${market.marketId}`
+        );
+
+        return false;
+      }
+
+      if (
+        market.symbol.length === 0
+      ) {
+        console.warn(
+          `[${new Date().toISOString()}] ` +
+            `Skipping market with empty symbol`
+        );
+
+        return false;
+      }
+
+      if (
+        !isValidDecimals(
+          market.priceDecimals
+        ) ||
+        !isValidDecimals(
+          market.sizeDecimals
+        )
       ) {
         console.warn(
           `[${new Date().toISOString()}] ` +
@@ -299,7 +394,9 @@ export async function fetchTopLighterMarkets(
       }
 
       if (
+        !Number.isFinite(market.minBaseAmount) ||
         market.minBaseAmount <= 0 ||
+        !Number.isFinite(market.minQuoteAmount) ||
         market.minQuoteAmount <= 0
       ) {
         console.warn(
@@ -308,6 +405,29 @@ export async function fetchTopLighterMarkets(
             `with invalid min amounts: ` +
             `minBaseAmount=${market.minBaseAmount}, ` +
             `minQuoteAmount=${market.minQuoteAmount}`
+        );
+
+        return false;
+      }
+
+      if (
+        !Number.isFinite(
+          market.dailyQuoteTokenVolume
+        ) ||
+        market.dailyQuoteTokenVolume < 0 ||
+        !Number.isFinite(
+          market.dailyTradesCount
+        ) ||
+        market.dailyTradesCount < 0 ||
+        !Number.isFinite(
+          market.openInterest
+        ) ||
+        market.openInterest < 0
+      ) {
+        console.warn(
+          `[${new Date().toISOString()}] ` +
+            `Skipping market ${market.symbol} ` +
+            `with invalid market statistics`
         );
 
         return false;
@@ -371,7 +491,9 @@ export async function fetchTopLighterMarkets(
 export async function saveMarketsSnapshot(
   markets: LighterMarket[]
 ): Promise<void> {
-  mkdirSync('runtime', { recursive: true });
+  mkdirSync('runtime', {
+    recursive: true
+  });
 
   const snapshot = {
     updatedAt: new Date().toISOString(),
