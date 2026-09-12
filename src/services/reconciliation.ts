@@ -1026,7 +1026,7 @@ export async function syncLiveBalance(
     );
   }
 
-  let parsed: unknown;
+ // let parsed: unknown;
 
   try {
     parsed = JSON.parse(body);
