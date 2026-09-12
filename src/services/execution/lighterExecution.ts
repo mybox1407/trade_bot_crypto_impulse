@@ -4,7 +4,8 @@ import {
   ExecutionService,
   OpenExecutionRequest,
   CloseExecutionRequest,
-  ExecutionResult
+  ExecutionResult,
+  ProtectiveOrders
 } from './types';
 
 import {
@@ -27,10 +28,10 @@ type LighterOrder = {
   client_order_index?: number | string;
   client_order_id?: string;
   market_index?: number;
-  initial_base_amount?: string;
-  remaining_base_amount?: string;
-  filled_base_amount?: string;
-  filled_quote_amount?: string;
+  initial_base_amount?: string | number;
+  remaining_base_amount?: string | number;
+  filled_base_amount?: string | number;
+  filled_quote_amount?: string | number;
   status?: string;
   type?: string;
   is_ask?: boolean;
@@ -41,17 +42,17 @@ type LighterTrade = {
   trade_id?: number | string;
   tx_hash?: string;
   market_id?: number;
-  size?: string;
-  price?: string;
-  usd_amount?: string;
+  size?: string | number;
+  price?: string | number;
+  usd_amount?: string | number;
   ask_id?: number | string;
   bid_id?: number | string;
   ask_client_id?: number | string;
   bid_client_id?: number | string;
   ask_account_id?: number;
   bid_account_id?: number;
-  taker_fee?: number;
-  maker_fee?: number;
+  taker_fee?: number | string;
+  maker_fee?: number | string;
   timestamp?: number;
 };
 
@@ -59,8 +60,14 @@ type AccountMessage = {
   type?: string;
   channel?: string;
   account?: number;
-  orders?: LighterOrder[];
-  trades?: LighterTrade[] | Record<string, LighterTrade[]>;
+
+  orders?:
+    | LighterOrder[]
+    | Record<string, LighterOrder[]>;
+
+  trades?:
+    | LighterTrade[]
+    | Record<string, LighterTrade[]>;
 };
 
 type PendingOrder = {
@@ -74,11 +81,12 @@ type PendingOrder = {
     result: ExecutionResult
   ) => void;
   timer: NodeJS.Timeout;
-  fills: {
+  fills: Array<{
     quantity: number;
     price: number;
     fee: number;
-  }[];
+  }>;
+  seenTradeIds: Set<string>;
   lastStatus?: string;
   orderId?: string;
 };
@@ -91,12 +99,16 @@ export class LighterExecutionService
   private accountWs?: WebSocket;
   private accountWsReconnectTimer?: NodeJS.Timeout;
   private accountWsPingTimer?: NodeJS.Timeout;
+
   private accountWsStopped = false;
   private accountWsConnecting = false;
+
   private authToken?: string;
 
   private readonly pendingOrders =
     new Map<number, PendingOrder>();
+
+  private orderSequence = 0;
 
   constructor(
     apiKeySecret: string,
@@ -106,7 +118,7 @@ export class LighterExecutionService
     if (!apiKeySecret) {
       throw new Error(
         'LighterExecutionService: ' +
-          'LIGHTER_API_SECRET (private key) is required'
+          'LIGHTER_API_SECRET is required'
       );
     }
 
@@ -159,10 +171,18 @@ export class LighterExecutionService
     );
 
     try {
+      this.validateProtectiveLevels(req);
+
+      const priceDecimals =
+        req.priceDecimals ?? 2;
+
+      const sizeDecimals =
+        req.sizeDecimals ?? 8;
+
       const baseAmount =
         this.toBaseAmount(
           req.quantity,
-          req.sizeDecimals ?? 8
+          sizeDecimals
         );
 
       if (baseAmount <= 0) {
@@ -173,24 +193,25 @@ export class LighterExecutionService
         );
       }
 
-      const clientOrderIndex =
+      const executableQuantity =
+        baseAmount /
+        Math.pow(10, sizeDecimals);
+
+      const marketClientOrderIndex =
         this.createClientOrderIndex();
 
       const isAsk =
-        req.side === 'long'
-          ? false
-          : true;
+        req.side === 'short';
 
       const submitted =
         await this.submitMarketOrder(
           req.marketId,
-          clientOrderIndex,
+          marketClientOrderIndex,
           baseAmount,
           req.expectedPrice,
           isAsk,
           false,
-          req.priceDecimals ?? 2,
-          req.sizeDecimals ?? 8
+          priceDecimals
         );
 
       if (!submitted.ok) {
@@ -200,15 +221,47 @@ export class LighterExecutionService
         );
       }
 
-      return await this.waitForOrderExecution(
-        req,
-        req.marketId,
-        clientOrderIndex,
-        submitted.orderId,
-        req.quantity,
-        req.priceDecimals ?? 2,
-        req.sizeDecimals ?? 8
-      );
+      const execution =
+        await this.waitForOrderExecution(
+          req,
+          req.marketId,
+          marketClientOrderIndex,
+          submitted.orderId,
+          executableQuantity,
+          priceDecimals,
+          sizeDecimals
+        );
+
+      if (!execution.ok) {
+        return execution;
+      }
+
+      const actualBaseAmount =
+        this.toBaseAmount(
+          execution.filledQuantity,
+          sizeDecimals
+        );
+
+      if (actualBaseAmount <= 0) {
+        return {
+          ...execution,
+          ok: false,
+          status: 'unknown',
+          message:
+            'Execution returned invalid filled quantity'
+        };
+      }
+
+      const protectiveOrders =
+        await this.createProtectiveOrders(
+          req,
+          actualBaseAmount
+        );
+
+      return {
+        ...execution,
+        protectiveOrders
+      };
     } catch (error) {
       console.error(
         `[${new Date().toISOString()}] ` +
@@ -240,10 +293,16 @@ export class LighterExecutionService
     );
 
     try {
+      const priceDecimals =
+        req.priceDecimals ?? 2;
+
+      const sizeDecimals =
+        req.sizeDecimals ?? 8;
+
       const baseAmount =
         this.toBaseAmount(
           req.quantity,
-          req.sizeDecimals ?? 8
+          sizeDecimals
         );
 
       if (baseAmount <= 0) {
@@ -254,13 +313,15 @@ export class LighterExecutionService
         );
       }
 
+      const executableQuantity =
+        baseAmount /
+        Math.pow(10, sizeDecimals);
+
       const clientOrderIndex =
         this.createClientOrderIndex();
 
       const isAsk =
-        req.positionSide === 'long'
-          ? true
-          : false;
+        req.positionSide === 'long';
 
       const submitted =
         await this.submitMarketOrder(
@@ -270,8 +331,7 @@ export class LighterExecutionService
           req.expectedPrice,
           isAsk,
           true,
-          req.priceDecimals ?? 2,
-          req.sizeDecimals ?? 8
+          priceDecimals
         );
 
       if (!submitted.ok) {
@@ -286,9 +346,9 @@ export class LighterExecutionService
         req.marketId,
         clientOrderIndex,
         submitted.orderId,
-        req.quantity,
-        req.priceDecimals ?? 2,
-        req.sizeDecimals ?? 8
+        executableQuantity,
+        priceDecimals,
+        sizeDecimals
       );
     } catch (error) {
       console.error(
@@ -306,6 +366,254 @@ export class LighterExecutionService
     }
   }
 
+  async cancelProtectiveOrders(
+    orders: ProtectiveOrders
+  ): Promise<void> {
+    const orderIds = [
+      orders.stopLossOrderId,
+      orders.takeProfitOrderId
+    ];
+
+    for (const orderId of orderIds) {
+      if (!orderId) {
+        continue;
+      }
+
+      const parsedOrderIndex =
+        Number(orderId);
+
+      if (
+        !Number.isSafeInteger(
+          parsedOrderIndex
+        ) ||
+        parsedOrderIndex < 0
+      ) {
+        throw new Error(
+          `Invalid exchange order index: ${orderId}`
+        );
+      }
+
+      const [
+        ,
+        ,
+        sdkError
+      ] =
+        await this.signerClient.cancel_order(
+          orders.marketId,
+          BigInt(parsedOrderIndex),
+          -1,
+          this.apiKeyIndex
+        );
+
+      if (sdkError) {
+        throw new Error(
+          `Failed to cancel protective order ` +
+            `${orderId}: ${sdkError}`
+        );
+      }
+
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Protective order canceled ` +
+          `marketId=${orders.marketId} ` +
+          `orderIndex=${parsedOrderIndex}`
+      );
+    }
+  }
+
+  private validateProtectiveLevels(
+    req: OpenExecutionRequest
+  ): void {
+    if (
+      !Number.isFinite(req.stopLossPrice) ||
+      !Number.isFinite(req.takeProfitPrice) ||
+      req.stopLossPrice <= 0 ||
+      req.takeProfitPrice <= 0
+    ) {
+      throw new Error(
+        'Invalid protective order prices'
+      );
+    }
+
+    if (req.side === 'long') {
+      if (
+        req.stopLossPrice >= req.expectedPrice ||
+        req.takeProfitPrice <= req.expectedPrice
+      ) {
+        throw new Error(
+          'Invalid LONG SL/TP levels'
+        );
+      }
+
+      return;
+    }
+
+    if (
+      req.stopLossPrice <= req.expectedPrice ||
+      req.takeProfitPrice >= req.expectedPrice
+    ) {
+      throw new Error(
+        'Invalid SHORT SL/TP levels'
+      );
+    }
+  }
+
+  private async createProtectiveOrders(
+    req: OpenExecutionRequest,
+    baseAmount: number
+  ): Promise<ProtectiveOrders> {
+    const priceDecimals =
+      req.priceDecimals ?? 2;
+
+    const slClientOrderIndex =
+      this.createClientOrderIndex();
+
+    const tpClientOrderIndex =
+      this.createClientOrderIndex();
+
+    const isAsk =
+      req.side === 'long';
+
+    const slTriggerPrice =
+      this.toPriceUnits(
+        req.stopLossPrice,
+        priceDecimals
+      );
+
+    const tpTriggerPrice =
+      this.toPriceUnits(
+        req.takeProfitPrice,
+        priceDecimals
+      );
+
+    const slExecutionPrice =
+      this.toPriceUnits(
+        this.getProtectiveExecutionPrice(
+          req,
+          req.stopLossPrice
+        ),
+        priceDecimals
+      );
+
+    const tpExecutionPrice =
+      this.toPriceUnits(
+        this.getProtectiveExecutionPrice(
+          req,
+          req.takeProfitPrice
+        ),
+        priceDecimals
+      );
+
+    const [
+      slOrder,
+      slTx,
+      slError
+    ] =
+      await this.signerClient.create_sl_order(
+        req.marketId,
+        slClientOrderIndex,
+        baseAmount,
+        slTriggerPrice,
+        slExecutionPrice,
+        isAsk,
+        true,
+        -1,
+        this.apiKeyIndex
+      );
+
+    if (slError) {
+      throw new Error(
+        `SL creation failed: ${slError}`
+      );
+    }
+
+    try {
+      const [
+        tpOrder,
+        tpTx,
+        tpError
+      ] =
+        await this.signerClient.create_tp_order(
+          req.marketId,
+          tpClientOrderIndex,
+          baseAmount,
+          tpTriggerPrice,
+          tpExecutionPrice,
+          isAsk,
+          true,
+          -1,
+          this.apiKeyIndex
+        );
+
+      if (tpError) {
+        throw new Error(
+          `TP creation failed: ${tpError}`
+        );
+      }
+
+      return {
+        marketId: req.marketId,
+        stopLossOrderId:
+          this.readExchangeOrderId(
+            slOrder as Record<
+              string,
+              unknown
+            > | null
+          ) ??
+          this.readTransactionId(slTx),
+        takeProfitOrderId:
+          this.readExchangeOrderId(
+            tpOrder as Record<
+              string,
+              unknown
+            > | null
+          ) ??
+          this.readTransactionId(tpTx),
+        stopLossClientOrderIndex:
+          slClientOrderIndex,
+        takeProfitClientOrderIndex:
+          tpClientOrderIndex
+      };
+    } catch (error) {
+      console.error(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] TP creation failed; ` +
+          `SL remains active`,
+        error
+      );
+
+      throw error;
+    }
+  }
+
+  private getProtectiveExecutionPrice(
+    req: OpenExecutionRequest,
+    triggerPrice: number
+  ): number {
+    const slippagePercent =
+      Number(
+        process.env.LIGHTER_PROTECTIVE_SLIPPAGE_PCT ??
+          0.5
+      ) / 100;
+
+    if (
+      !Number.isFinite(slippagePercent) ||
+      slippagePercent < 0
+    ) {
+      throw new Error(
+        'Invalid LIGHTER_PROTECTIVE_SLIPPAGE_PCT'
+      );
+    }
+
+    if (req.side === 'long') {
+      return triggerPrice *
+        (1 - slippagePercent);
+    }
+
+    return triggerPrice *
+      (1 + slippagePercent);
+  }
+
   private async submitMarketOrder(
     marketId: number,
     clientOrderIndex: number,
@@ -313,8 +621,7 @@ export class LighterExecutionService
     expectedPrice: number,
     isAsk: boolean,
     reduceOnly: boolean,
-    priceDecimals: number,
-    sizeDecimals: number
+    priceDecimals: number
   ): Promise<{
     ok: true;
     orderId?: string;
@@ -331,11 +638,14 @@ export class LighterExecutionService
         marketId,
         clientOrderIndex,
         baseAmount,
-        this.toPriceUnits(expectedPrice, priceDecimals),
+        this.toPriceUnits(
+          expectedPrice,
+          priceDecimals
+        ),
         isAsk,
         reduceOnly,
         -1,
-        -1
+        this.apiKeyIndex
       );
 
     if (sdkError) {
@@ -347,10 +657,12 @@ export class LighterExecutionService
 
     const orderId =
       this.readExchangeOrderId(
-        order as Record<string, unknown> | null
+        order as Record<
+          string,
+          unknown
+        > | null
       ) ??
-      (tx as unknown as Record<string, unknown>)?.tx_hash as string | undefined ??
-      (tx as unknown as Record<string, unknown>)?.txHash as string | undefined;
+      this.readTransactionId(tx);
 
     console.log(
       `[${new Date().toISOString()}] ` +
@@ -365,7 +677,7 @@ export class LighterExecutionService
     };
   }
 
-  private async waitForOrderExecution(
+  private waitForOrderExecution(
     req:
       | OpenExecutionRequest
       | CloseExecutionRequest,
@@ -376,24 +688,90 @@ export class LighterExecutionService
     priceDecimals: number,
     sizeDecimals: number
   ): Promise<ExecutionResult> {
-    return new Promise<ExecutionResult>(resolve => {
-      const timer =
-        setTimeout(() => {
-          const pending =
-            this.pendingOrders.get(
+    return new Promise<ExecutionResult>(
+      resolve => {
+        const timer =
+          setTimeout(() => {
+            const pending =
+              this.pendingOrders.get(
+                clientOrderIndex
+              );
+
+            this.pendingOrders.delete(
               clientOrderIndex
             );
 
-          this.pendingOrders.delete(
-            clientOrderIndex
-          );
+            if (!pending) {
+              resolve({
+                ok: false,
+                status: 'unknown',
+                orderId: orderId ?? '',
+                clientOrderId:
+                  req.clientOrderId,
+                requestedQuantity,
+                filledQuantity: 0,
+                message:
+                  `Order accepted but execution ` +
+                  `was not confirmed within ` +
+                  `${ORDER_WAIT_TIMEOUT_MS}ms`
+              });
 
-          if (!pending) {
+              return;
+            }
+
+            const totalFilled =
+              pending.fills.reduce(
+                (sum, fill) =>
+                  sum + fill.quantity,
+                0
+              );
+
+            if (totalFilled > 0) {
+              const totalQuote =
+                pending.fills.reduce(
+                  (sum, fill) =>
+                    sum +
+                    fill.quantity *
+                      fill.price,
+                  0
+                );
+
+              resolve({
+                ok: true,
+                status:
+                  totalFilled >=
+                  requestedQuantity
+                    ? 'filled'
+                    : 'partially_filled',
+                orderId:
+                  pending.orderId ??
+                  orderId ??
+                  '',
+                clientOrderId:
+                  req.clientOrderId,
+                requestedQuantity,
+                filledQuantity: totalFilled,
+                averageFillPrice:
+                  totalQuote / totalFilled,
+                fee:
+                  pending.fills.reduce(
+                    (sum, fill) =>
+                      sum + fill.fee,
+                    0
+                  ),
+                message:
+                  'Execution confirmed after timeout'
+              });
+
+              return;
+            }
+
             resolve({
               ok: false,
               status: 'unknown',
               orderId: orderId ?? '',
-              clientOrderId: req.clientOrderId ?? '',
+              clientOrderId:
+                req.clientOrderId,
               requestedQuantity,
               filledQuantity: 0,
               message:
@@ -401,75 +779,29 @@ export class LighterExecutionService
                 `was not confirmed within ` +
                 `${ORDER_WAIT_TIMEOUT_MS}ms`
             });
+          }, ORDER_WAIT_TIMEOUT_MS);
 
-            return;
-          }
-
-          const totalFilled =
-            pending.fills.reduce(
-              (sum, f) => sum + f.quantity,
-              0
-            );
-
-          if (totalFilled > 0) {
-            const totalQuote =
-              pending.fills.reduce(
-                (sum, f) =>
-                  sum + f.quantity * f.price,
-                0
-              );
-
-            const avgPrice =
-              totalQuote / totalFilled;
-
-            resolve({
-              ok: true,
-              status: 'filled',
-              orderId: pending.orderId ?? orderId ?? '',
-              clientOrderId: req.clientOrderId ?? '',
-              requestedQuantity,
-              filledQuantity: totalFilled,
-              averageFillPrice: avgPrice,
-              message:
-                `Partial fill confirmed after timeout`
-            });
-
-            return;
-          }
-
-          resolve({
-            ok: false,
-            status: 'unknown',
-            orderId: orderId ?? '',
-            clientOrderId: req.clientOrderId ?? '',
-            requestedQuantity,
-            filledQuantity: 0,
-            message:
-              `Order accepted but execution ` +
-              `was not confirmed within ` +
-              `${ORDER_WAIT_TIMEOUT_MS}ms`
-          });
-        }, ORDER_WAIT_TIMEOUT_MS);
-
-      this.pendingOrders.set(
-        clientOrderIndex,
-        {
-          marketId,
+        this.pendingOrders.set(
           clientOrderIndex,
-          clientOrderId: req.clientOrderId,
-          requestedQuantity,
-          priceDecimals,
-          sizeDecimals,
-          resolve,
-          timer,
-          fills: [],
-          lastStatus: undefined,
-          orderId
-        }
-      );
+          {
+            marketId,
+            clientOrderIndex,
+            clientOrderId:
+              req.clientOrderId,
+            requestedQuantity,
+            priceDecimals,
+            sizeDecimals,
+            resolve,
+            timer,
+            fills: [],
+            seenTradeIds: new Set<string>(),
+            orderId
+          }
+        );
 
-      this.ensureAccountWebSocket();
-    });
+        this.ensureAccountWebSocket();
+      }
+    );
   }
 
   private startAccountWebSocket(): void {
@@ -480,7 +812,8 @@ export class LighterExecutionService
   private ensureAccountWebSocket(): void {
     if (
       this.accountWsConnecting ||
-      this.accountWs?.readyState === WebSocket.OPEN
+      this.accountWs?.readyState ===
+        WebSocket.OPEN
     ) {
       return;
     }
@@ -497,7 +830,20 @@ export class LighterExecutionService
     this.accountWs = ws;
 
     ws.on('open', async () => {
+      if (this.accountWs !== ws) {
+        return;
+      }
+
       this.accountWsConnecting = false;
+
+      if (this.accountWsPingTimer) {
+        clearInterval(
+          this.accountWsPingTimer
+        );
+
+        this.accountWsPingTimer =
+          undefined;
+      }
 
       console.log(
         `[${new Date().toISOString()}] ` +
@@ -530,14 +876,16 @@ export class LighterExecutionService
         ws.send(
           JSON.stringify({
             type: 'subscribe',
-            channel: `account_all/${this.accountIndex}`,
+            channel:
+              `account_all/${this.accountIndex}`,
             auth: this.authToken
           })
         );
 
         console.log(
           `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Account channel subscribed: account_all/${this.accountIndex}`
+            `[LIGHTER] Account channel subscribed: ` +
+            `account_all/${this.accountIndex}`
         );
       } catch (error) {
         console.error(
@@ -547,6 +895,7 @@ export class LighterExecutionService
         );
 
         ws.close();
+        return;
       }
 
       this.accountWsPingTimer =
@@ -564,6 +913,10 @@ export class LighterExecutionService
     });
 
     ws.on('message', raw => {
+      if (this.accountWs !== ws) {
+        return;
+      }
+
       try {
         const message =
           JSON.parse(
@@ -583,6 +936,10 @@ export class LighterExecutionService
     });
 
     ws.on('error', error => {
+      if (this.accountWs !== ws) {
+        return;
+      }
+
       console.error(
         `[${new Date().toISOString()}] ` +
           `[LIGHTER] Account WebSocket error`,
@@ -591,7 +948,12 @@ export class LighterExecutionService
     });
 
     ws.on('close', (code, reason) => {
+      if (this.accountWs !== ws) {
+        return;
+      }
+
       this.accountWsConnecting = false;
+      this.accountWs = undefined;
 
       if (this.accountWsPingTimer) {
         clearInterval(
@@ -610,8 +972,17 @@ export class LighterExecutionService
       );
 
       if (!this.accountWsStopped) {
+        if (this.accountWsReconnectTimer) {
+          clearTimeout(
+            this.accountWsReconnectTimer
+          );
+        }
+
         this.accountWsReconnectTimer =
           setTimeout(() => {
+            this.accountWsReconnectTimer =
+              undefined;
+
             this.ensureAccountWebSocket();
           }, 3_000);
       }
@@ -621,19 +992,13 @@ export class LighterExecutionService
   private handleAccountMessage(
     message: AccountMessage
   ): void {
-    const orders =
-      Array.isArray(message.orders)
-        ? message.orders
-        : [];
-
-    for (const order of orders) {
+    for (const order of
+      this.flattenOrders(message.orders)) {
       this.handleOrderUpdate(order);
     }
 
-    const trades =
-      this.flattenTrades(message.trades);
-
-    for (const trade of trades) {
+    for (const trade of
+      this.flattenTrades(message.trades)) {
       this.handleTradeUpdate(trade);
     }
   }
@@ -659,72 +1024,71 @@ export class LighterExecutionService
       return;
     }
 
-    const filledBaseAmountRaw =
-      this.toNumber(
-        order.filled_base_amount
-      ) ?? 0;
-
-    const filledQuoteAmountRaw =
-      this.toNumber(
-        order.filled_quote_amount
-      ) ?? 0;
-
     const filledQuantity =
-      filledBaseAmountRaw /
-      Math.pow(10, pending.sizeDecimals);
+      this.readQuantity(
+        order.filled_base_amount
+      );
+
+    const filledQuote =
+      this.readQuantity(
+        order.filled_quote_amount
+      );
 
     const status =
-      order.status ?? '';
+      (order.status ?? '')
+        .toLowerCase();
 
     pending.lastStatus = status;
 
-    if (
-      filledQuantity <= 0
-    ) {
-      if (
-        status.startsWith('canceled') ||
-        status === 'filled'
-      ) {
-        this.resolvePendingOrder(
-          clientOrderIndex,
-          {
-            ok: false,
-            status:
-              status === 'filled'
-                ? 'unknown'
-                : 'rejected',
-            orderId:
-              this.readExchangeOrderId(
-                order as Record<
-                  string,
-                  unknown
-                >
-              ) ?? pending.orderId ?? '',
-            clientOrderId: pending.clientOrderId ?? '',
-            requestedQuantity:
-              pending.requestedQuantity,
-            filledQuantity: 0,
-            message:
-              `Order status: ${status}`
-          }
-        );
-      }
+    const isTerminal =
+      status === 'filled' ||
+      status.startsWith('canceled') ||
+      status.startsWith('cancelled') ||
+      status === 'rejected' ||
+      status === 'failed';
+
+    if (!isTerminal) {
+      return;
+    }
+
+    if (filledQuantity <= 0) {
+      this.resolvePendingOrder(
+        clientOrderIndex,
+        {
+          ok: false,
+          status:
+            status === 'filled'
+              ? 'unknown'
+              : 'rejected',
+          orderId:
+            this.readExchangeOrderId(
+              order as Record<
+                string,
+                unknown
+              >
+            ) ?? pending.orderId ?? '',
+          clientOrderId:
+            pending.clientOrderId ?? '',
+          requestedQuantity:
+            pending.requestedQuantity,
+          filledQuantity: 0,
+          message:
+            `Order status: ${status}`
+        }
+      );
 
       return;
     }
 
     const averageFillPrice =
-      filledQuoteAmountRaw > 0 && filledBaseAmountRaw > 0
-        ? (
-            filledQuoteAmountRaw /
-            filledBaseAmountRaw
-          )
-        : 0;
+      filledQuote > 0
+        ? filledQuote / filledQuantity
+        : this.averagePendingFillPrice(
+            pending
+          );
 
     if (
-      !Number.isFinite(
-        averageFillPrice
-      ) ||
+      !Number.isFinite(averageFillPrice) ||
       averageFillPrice <= 0
     ) {
       return;
@@ -734,7 +1098,10 @@ export class LighterExecutionService
       clientOrderIndex,
       {
         ok: true,
-        status: 'filled',
+        status:
+          status === 'filled'
+            ? 'filled'
+            : 'partially_filled',
         orderId:
           this.readExchangeOrderId(
             order as Record<
@@ -742,13 +1109,16 @@ export class LighterExecutionService
               unknown
             >
           ) ?? pending.orderId ?? '',
-        clientOrderId: pending.clientOrderId ?? '',
+        clientOrderId:
+          pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity,
         averageFillPrice,
+        fee:
+          this.sumPendingFees(pending),
         message:
-          order.status ?? 'filled'
+          `Order status: ${status}`
       }
     );
   }
@@ -764,9 +1134,7 @@ export class LighterExecutionService
         trade.bid_client_id
       );
 
-    if (
-      clientOrderIndex == null
-    ) {
+    if (clientOrderIndex == null) {
       return;
     }
 
@@ -779,46 +1147,53 @@ export class LighterExecutionService
       return;
     }
 
-    if (pending.marketId !== trade.market_id) {
+    if (
+      trade.market_id != null &&
+      pending.marketId !== trade.market_id
+    ) {
       console.warn(
-        `[${new Date().toISOString()}] Trade market_id mismatch: ` +
-          `pending=${pending.marketId}, trade=${trade.market_id}, ` +
+        `[${new Date().toISOString()}] ` +
+          `Trade market_id mismatch: ` +
+          `pending=${pending.marketId}, ` +
+          `trade=${trade.market_id}, ` +
           `clientOrderIndex=${clientOrderIndex}`
       );
 
       return;
     }
 
-    const filledQuantityRaw =
-      this.toNumber(trade.size);
-
-    const priceRaw =
-      this.toNumber(trade.price);
+    const tradeId =
+      this.readTradeId(trade);
 
     if (
-      filledQuantityRaw == null ||
-      filledQuantityRaw <= 0 ||
-      priceRaw == null ||
-      priceRaw <= 0
+      tradeId &&
+      pending.seenTradeIds.has(tradeId)
     ) {
       return;
     }
 
+    if (tradeId) {
+      pending.seenTradeIds.add(tradeId);
+    }
+
     const filledQuantity =
-      filledQuantityRaw /
-      Math.pow(10, pending.sizeDecimals);
+      this.toNumber(trade.size);
 
     const price =
-      priceRaw /
-      Math.pow(10, pending.priceDecimals);
+      this.toNumber(trade.price);
+
+    if (
+      filledQuantity == null ||
+      filledQuantity <= 0 ||
+      price == null ||
+      price <= 0
+    ) {
+      return;
+    }
 
     const fee =
-      this.toNumber(
-        trade.taker_fee
-      ) ??
-      this.toNumber(
-        trade.maker_fee
-      ) ??
+      this.toNumber(trade.taker_fee) ??
+      this.toNumber(trade.maker_fee) ??
       0;
 
     pending.fills.push({
@@ -826,44 +1201,6 @@ export class LighterExecutionService
       price,
       fee
     });
-
-    const totalFilled =
-      pending.fills.reduce(
-        (sum, f) => sum + f.quantity,
-        0
-      );
-
-    if (totalFilled >= pending.requestedQuantity * 0.95) {
-      const totalQuote =
-        pending.fills.reduce(
-          (sum, f) =>
-            sum + f.quantity * f.price,
-          0
-        );
-
-      const avgPrice =
-        totalQuote / totalFilled;
-
-      this.resolvePendingOrder(
-        clientOrderIndex,
-        {
-          ok: true,
-          status: 'filled',
-          orderId: pending.orderId ?? '',
-          clientOrderId: pending.clientOrderId ?? '',
-          requestedQuantity:
-            pending.requestedQuantity,
-          filledQuantity: totalFilled,
-          averageFillPrice: avgPrice,
-          fee:
-            pending.fills.reduce(
-              (sum, f) => sum + f.fee,
-              0
-            ),
-          message: 'Trade filled'
-        }
-      );
-    }
   }
 
   private resolvePendingOrder(
@@ -888,6 +1225,30 @@ export class LighterExecutionService
     pending.resolve(result);
   }
 
+  private flattenOrders(
+    orders:
+      | LighterOrder[]
+      | Record<string, LighterOrder[]>
+      | undefined
+  ): LighterOrder[] {
+    if (!orders) {
+      return [];
+    }
+
+    if (Array.isArray(orders)) {
+      return orders;
+    }
+
+    return Object.values(orders)
+      .flat()
+      .filter(
+        (
+          order
+        ): order is LighterOrder =>
+          order != null
+      );
+  }
+
   private flattenTrades(
     trades:
       | LighterTrade[]
@@ -905,8 +1266,57 @@ export class LighterExecutionService
     return Object.values(trades)
       .flat()
       .filter(
-        trade => trade != null
+        (
+          trade
+        ): trade is LighterTrade =>
+          trade != null
       );
+  }
+
+  private averagePendingFillPrice(
+    pending: PendingOrder
+  ): number {
+    const totalQuantity =
+      pending.fills.reduce(
+        (sum, fill) =>
+          sum + fill.quantity,
+        0
+      );
+
+    if (totalQuantity <= 0) {
+      return 0;
+    }
+
+    const totalQuote =
+      pending.fills.reduce(
+        (sum, fill) =>
+          sum +
+          fill.quantity * fill.price,
+        0
+      );
+
+    return totalQuote / totalQuantity;
+  }
+
+  private sumPendingFees(
+    pending: PendingOrder
+  ): number {
+    return pending.fills.reduce(
+      (sum, fill) =>
+        sum + fill.fee,
+      0
+    );
+  }
+
+  private readQuantity(
+    value: string | number | undefined
+  ): number {
+    const parsed =
+      this.toNumber(value);
+
+    return parsed != null && parsed > 0
+      ? parsed
+      : 0;
   }
 
   private readExchangeOrderId(
@@ -920,8 +1330,7 @@ export class LighterExecutionService
       'order_id',
       'order_index'
     ]) {
-      const value =
-        order[key];
+      const value = order[key];
 
       if (
         typeof value === 'string' &&
@@ -941,13 +1350,38 @@ export class LighterExecutionService
     return undefined;
   }
 
+  private readTransactionId(
+    tx: unknown
+  ): string | undefined {
+    const record =
+      tx as Record<string, unknown> | null;
+
+    if (!record) {
+      return undefined;
+    }
+
+    for (const key of [
+      'tx_hash',
+      'txHash'
+    ]) {
+      const value = record[key];
+
+      if (
+        typeof value === 'string' &&
+        value.length > 0
+      ) {
+        return value;
+      }
+    }
+
+    return undefined;
+  }
+
   private readTradeId(
     trade: LighterTrade
   ): string | undefined {
     return (
-      this.toString(
-        trade.trade_id
-      ) ??
+      this.toString(trade.trade_id) ??
       trade.tx_hash
     );
   }
@@ -965,10 +1399,7 @@ export class LighterExecutionService
 
     return Math.floor(
       quantity *
-        Math.pow(
-          10,
-          sizeDecimals
-        )
+        Math.pow(10, sizeDecimals)
     );
   }
 
@@ -987,21 +1418,30 @@ export class LighterExecutionService
 
     return Math.round(
       price *
-        Math.pow(
-          10,
-          priceDecimals
-        )
+        Math.pow(10, priceDecimals)
     );
   }
 
-  private orderSequence = 0;
-
   private createClientOrderIndex(): number {
-    const timestamp = Date.now() * 1000;
+    const timestamp =
+      Date.now() * 1000;
+
     this.orderSequence =
       (this.orderSequence + 1) % 1000;
 
-    return timestamp + this.orderSequence;
+    const value =
+      timestamp + this.orderSequence;
+
+    const maxUint48 =
+      Number((2n ** 48n) - 1n);
+
+    if (value > maxUint48) {
+      throw new Error(
+        'client_order_index exceeds uint48'
+      );
+    }
+
+    return value;
   }
 
   private toNumber(
@@ -1044,7 +1484,7 @@ export class LighterExecutionService
     return {
       ok: false,
       status: 'rejected',
-      clientOrderId: req.clientOrderId ?? '',
+      clientOrderId: req.clientOrderId,
       requestedQuantity: req.quantity,
       filledQuantity: 0,
       message
@@ -1060,7 +1500,7 @@ export class LighterExecutionService
     return {
       ok: false,
       status: 'unknown',
-      clientOrderId: req.clientOrderId ?? '',
+      clientOrderId: req.clientOrderId,
       requestedQuantity: req.quantity,
       filledQuantity: 0,
       message
@@ -1098,7 +1538,8 @@ export class LighterExecutionService
       pending.resolve({
         ok: false,
         status: 'unknown',
-        clientOrderId: pending.clientOrderId ?? '',
+        clientOrderId:
+          pending.clientOrderId ?? '',
         requestedQuantity:
           pending.requestedQuantity,
         filledQuantity: 0,
