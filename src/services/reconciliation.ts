@@ -7,16 +7,11 @@ import {
   openPosition,
   closePosition,
   hasOpenPosition,
-  getPosition,
-  getBalance,
-  getReservedCapital,
-  getAvailableBalance
+  getPosition
 } from './positionState';
 
 import {
-  logError,
-  logPositionOpen,
-  logPositionClose
+  logError
 } from './logger';
 
 import {
@@ -37,7 +32,6 @@ type LighterPosition = {
   side: 'long' | 'short';
   quantity: number;
   entryPrice: number;
-  unrealizedPnL?: number;
 };
 
 type ReconciliationResult = {
@@ -301,10 +295,7 @@ export async function reconcileAccount(
           closePosition(
             local.id,
             local.entryPrice,
-            'manual',
-            {
-              reason: 'reconciliation_missing_remote'
-            }
+            'manual'
           );
         } else if (mismatch.reason === 'missing_local') {
           const remote = mismatch.remote!;
@@ -354,10 +345,7 @@ export async function reconcileAccount(
             closePosition(
               local.id,
               local.entryPrice,
-              'manual',
-              {
-                reason: 'reconciliation_severe_mismatch'
-              }
+              'manual'
             );
           }
 
@@ -450,4 +438,72 @@ export async function restoreStateAfterRestart(
     closed,
     errors
   };
+}
+
+export async function verifyPositionAfterFill(
+  signerClient: SignerClient,
+  accountIndex: number,
+  symbol: string,
+  expectedSide: 'long' | 'short',
+  expectedQuantity: number
+): Promise<{
+  ok: boolean;
+  mismatch?: string;
+}> {
+  try {
+    const remotePositions =
+      await fetchAccountPositions(
+        signerClient,
+        accountIndex
+      );
+
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const remote = remotePositions.find(
+      p => normalizeSymbol(p.symbol) === normalizedSymbol
+    );
+
+    if (!remote) {
+      return {
+        ok: false,
+        mismatch: `Position ${symbol} not found on exchange after fill`
+      };
+    }
+
+    if (remote.side !== expectedSide) {
+      return {
+        ok: false,
+        mismatch:
+          `Side mismatch for ${symbol}: ` +
+          `expected=${expectedSide}, remote=${remote.side}`
+      };
+    }
+
+    const quantityTolerance = expectedQuantity * 0.02;
+
+    if (
+      Math.abs(remote.quantity - expectedQuantity) >
+      quantityTolerance
+    ) {
+      return {
+        ok: false,
+        mismatch:
+          `Quantity mismatch for ${symbol}: ` +
+          `expected=${expectedQuantity}, remote=${remote.quantity}`
+      };
+    }
+
+    return {
+      ok: true
+    };
+  } catch (error) {
+    const errorMsg =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
+
+    return {
+      ok: false,
+      mismatch: `Verification error: ${errorMsg}`
+    };
+  }
 }
