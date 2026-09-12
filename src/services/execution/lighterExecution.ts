@@ -950,7 +950,7 @@ export class LighterExecutionService
       const activeResp = await fetch(activeUrl, {
         headers: {
           Accept: 'application/json',
-          Authorization: `Bearer ${this.authToken}`
+          Authorization: this.authToken
         }
       });
   
