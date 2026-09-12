@@ -879,6 +879,16 @@ export class LighterExecutionService
     fee: number;
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
+    // === Логирование для отладки ===
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `[LIGHTER] REST reconciliation START: ` +
+        `marketId=${marketId}, ` +
+        `clientOrderIndex=${clientOrderIndex}, ` +
+        `orderId=${orderId ?? 'n/a'}`
+    );
+    // ===============================
+
     const start = Date.now();
 
     while (Date.now() - start < timeoutMs) {
@@ -893,12 +903,28 @@ export class LighterExecutionService
         headers: { Accept: 'application/json' }
       });
 
+      // === Лог HTTP статуса ===
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Active orders HTTP status: ${activeResp.status}`
+      );
+      // =======================
+
       let activeData: unknown = null;
       if (activeResp.ok) {
         try {
           activeData = await activeResp.json();
-        } catch {
-          // ignore
+          const keys = Object.keys((activeData as Record<string, unknown>) || {});
+          console.log(
+            `[${new Date().toISOString()}] ` +
+              `[LIGHTER] Active orders response keys: ${keys.join(', ')}`
+          );
+        } catch (e) {
+          console.error(
+            `[${new Date().toISOString()}] ` +
+              `[LIGHTER] Failed to parse active orders JSON:`,
+            e
+          );
         }
       }
 
@@ -947,12 +973,28 @@ export class LighterExecutionService
         headers: { Accept: 'application/json' }
       });
 
+      // === Лог HTTP статуса ===
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Inactive orders HTTP status: ${inactiveResp.status}`
+      );
+      // =======================
+
       let inactiveData: unknown = null;
       if (inactiveResp.ok) {
         try {
           inactiveData = await inactiveResp.json();
-        } catch {
-          // ignore
+          const keys = Object.keys((inactiveData as Record<string, unknown>) || {});
+          console.log(
+            `[${new Date().toISOString()}] ` +
+              `[LIGHTER] Inactive orders response keys: ${keys.join(', ')}`
+          );
+        } catch (e) {
+          console.error(
+            `[${new Date().toISOString()}] ` +
+              `[LIGHTER] Failed to parse inactive orders JSON:`,
+            e
+          );
         }
       }
 
