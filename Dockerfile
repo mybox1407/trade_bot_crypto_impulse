@@ -17,9 +17,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Обновить SSL сертификаты
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     wget \
+    ca-certificates \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
