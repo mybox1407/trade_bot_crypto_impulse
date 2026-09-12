@@ -879,13 +879,31 @@ export class LighterExecutionService
     fee: number;
     position: { size: number; side: 'LONG' | 'SHORT' | 'FLAT' };
   }> {
-    // Создаём токен, если не инициализирован
+
+    console.log(
+      `[${new Date().toISOString()}] ` +
+      `[LIGHTER] REST reconciliation START: ` +
+      `marketId=${marketId}, ` +
+      `clientOrderIndex=${clientOrderIndex}, ` +
+      `orderId=${orderId ?? 'n/a'}`
+    );
+    
     if (!this.authToken) {
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] Creating auth token...`
+      );
+  
       try {
         const [auth, authError] = this.signerClient.create_auth_token_with_expiry(
           60 * 60,
           undefined,
           this.apiKeyIndex
+        );
+  
+        console.log(
+          `[${new Date().toISOString()}] ` +
+            `[LIGHTER] Auth token result: auth=${auth ? 'OK' : 'NULL'}, authError=${authError ?? 'null'}`
         );
   
         if (authError || !auth) {
@@ -896,7 +914,7 @@ export class LighterExecutionService
   
         console.log(
           `[${new Date().toISOString()}] ` +
-            `[LIGHTER] Auth token created for REST reconciliation`
+            `[LIGHTER] Auth token created successfully`
         );
       } catch (error) {
         console.error(
@@ -913,14 +931,6 @@ export class LighterExecutionService
         };
       }
     }
-  
-    console.log(
-      `[${new Date().toISOString()}] ` +
-        `[LIGHTER] REST reconciliation START: ` +
-        `marketId=${marketId}, ` +
-        `clientOrderIndex=${clientOrderIndex}, ` +
-        `orderId=${orderId ?? 'n/a'}`
-    );
   
     const start = Date.now();
   
