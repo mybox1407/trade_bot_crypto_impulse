@@ -7,15 +7,17 @@ services:
       - "3007:3007"
 
     environment:
-      - PORT=3006
+      - PORT=3007
       - NODE_ENV=production
-      - PAPER_TRADING=${PAPER_TRADING:-true}
+      - PAPER_TRADING=${PAPER_TRADING:-false}
 
       - LIGHTER_API_KEY=${LIGHTER_API_KEY:-}
       - LIGHTER_API_SECRET=${LIGHTER_API_SECRET:-}
       - LIGHTER_API_KEY_INDEX=${LIGHTER_API_KEY_INDEX:-0}
       - LIGHTER_ACCOUNT_INDEX=${LIGHTER_ACCOUNT_INDEX:-0}
       - LIGHTER_API_URL=${LIGHTER_API_URL:-https://mainnet.zklighter.elliot.ai}
+      - LIGHTER_WS_URL=${LIGHTER_WS_URL:-wss://mainnet.zklighter.elliot.ai/stream}
+      - LIGHTER_PROTECTIVE_SLIPPAGE_PCT=${LIGHTER_PROTECTIVE_SLIPPAGE_PCT:-0.5}
 
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
