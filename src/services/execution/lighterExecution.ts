@@ -1102,30 +1102,37 @@ export class LighterExecutionService
       `${LIGHTER_API_URL}/api/v1/account/${this.accountIndex}/trades`
     );
     url.searchParams.set('market_id', String(marketId));
-
+  
     const resp = await fetch(url, {
-      headers: { Accept: 'application/json' }
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${this.authToken}`
+      }
     });
-
+  
     if (!resp.ok) {
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] fetchOrderFills HTTP status: ${resp.status}`
+      );
       return [];
     }
-
+  
     const data = (await resp.json()) as Record<string, unknown> | null;
     if (!data) {
       return [];
     }
-
+  
     const tradesRaw =
       (data.trades as unknown[]) ??
       (data.data as Record<string, unknown>)?.trades ??
       (data.account as Record<string, unknown>)?.trades ??
       [];
-
+  
     if (!Array.isArray(tradesRaw)) {
       return [];
     }
-
+  
     return tradesRaw.filter(
       (t): t is LighterTrade =>
         t != null &&
@@ -1145,49 +1152,62 @@ export class LighterExecutionService
     );
     url.searchParams.set('by', 'index');
     url.searchParams.set('value', String(this.accountIndex));
-
+  
     const resp = await fetch(url, {
-      headers: { Accept: 'application/json' }
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${this.authToken}`
+      }
     });
-
+  
     if (!resp.ok) {
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `[LIGHTER] fetchPosition HTTP status: ${resp.status}`
+      );
       return { size: 0, side: 'FLAT' as const };
     }
-
+  
     const data = (await resp.json()) as Record<string, unknown> | null;
     if (!data) {
       return { size: 0, side: 'FLAT' as const };
     }
-
-    const positionsRaw =
-      (data.positions as unknown[]) ??
-      (data.data as Record<string, unknown>)?.positions ??
-      (data.account as Record<string, unknown>)?.positions ??
-      [];
-
+  
+    // Позиции находятся в accounts[0].positions
+    const accounts = (data.accounts as unknown[]) || [];
+    const account = accounts[0] as Record<string, unknown> | undefined;
+  
+    if (!account) {
+      return { size: 0, side: 'FLAT' as const };
+    }
+  
+    const positionsRaw = (account.positions as unknown[]) || [];
+  
     if (!Array.isArray(positionsRaw)) {
       return { size: 0, side: 'FLAT' as const };
     }
-
+  
     const pos = positionsRaw.find(
       (p: any) =>
         Number(p.market_id ?? p.market_index ?? p.marketId) === marketId
     ) as Record<string, unknown> | undefined;
-
+  
     if (!pos) {
       return { size: 0, side: 'FLAT' as const };
     }
-
+  
     const rawSize =
       Number(pos.position ?? pos.position_size ?? pos.size ?? pos.quantity ?? 0);
-
+  
+    const sign = Number(pos.sign ?? 0);
+  
     const side =
       rawSize > 0
-        ? 'LONG'
-        : rawSize < 0
-          ? 'SHORT'
-          : 'FLAT';
-
+        ? sign > 0
+          ? 'LONG'
+          : 'SHORT'
+        : 'FLAT';
+  
     return {
       size: Math.abs(rawSize),
       side: side as 'LONG' | 'SHORT' | 'FLAT'
