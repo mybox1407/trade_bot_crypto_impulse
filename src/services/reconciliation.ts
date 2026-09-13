@@ -120,21 +120,36 @@ function parsePosition(rawInput: Record<string, unknown>): LighterPosition | nul
   };
 }
 
-async function fetchJson(url: URL): Promise<unknown> {
+async function fetchJson(url: URL, logContext: string): Promise<unknown> {
+  console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} START url=${url.toString()}`);
+
   const response = await fetch(url, { headers: { Accept: 'application/json' } });
   const text = await response.text();
+
+  console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} RESPONSE status=${response.status}`);
+  console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} RESPONSE body=${text.slice(0, 2000)}`);
+
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch {
+    console.error(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} JSON_PARSE_ERROR error=Invalid JSON`);
     throw new Error(`Invalid JSON from Lighter endpoint: ${text.slice(0, 300)}`);
   }
+
   if (!response.ok) {
     const record = getRecord(data);
-    throw new Error(`Lighter request failed (${response.status}): ${String(record?.message ?? record?.error ?? response.statusText)}`);
+    const errorMessage = String(record?.message ?? record?.error ?? response.statusText);
+    console.error(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} HTTP_ERROR status=${response.status} error=${errorMessage}`);
+    throw new Error(`Lighter request failed (${response.status}): ${errorMessage}`);
   }
+
   const record = getRecord(data);
   if (record?.code != null && Number(record.code) !== 200) {
-    throw new Error(`Lighter API error: ${String(record.message ?? record.code)}`);
+    const errorMessage = String(record.message ?? record.code);
+    console.error(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} API_ERROR code=${record.code} error=${errorMessage}`);
+    throw new Error(`Lighter API error: ${errorMessage}`);
   }
+
+  console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} OK`);
   return data;
 }
 
@@ -150,10 +165,13 @@ export async function fetchAccountPositions(
   url.searchParams.set('by', 'index');
   url.searchParams.set('value', String(accountIndex));
 
-  const data = await fetchJson(url);
-  return getPositionRecords(data)
+  const data = await fetchJson(url, `fetchAccountPositions accountIndex=${accountIndex}`);
+  const positions = getPositionRecords(data)
     .map(parsePosition)
     .filter((position): position is LighterPosition => position !== null);
+
+  console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchAccountPositions END accountIndex=${accountIndex} positionsCount=${positions.length}`);
+  return positions;
 }
 
 function getPositionKey(position: { marketId?: number; symbol: string }): string {
@@ -188,6 +206,8 @@ export async function reconcileAccount(
   accountIndex: number,
   options?: { autoFix?: boolean; dryRun?: boolean }
 ): Promise<ReconciliationResult> {
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] reconcileAccount START accountIndex=${accountIndex} autoFix=${options?.autoFix ?? false} dryRun=${options?.dryRun ?? false}`);
+
   const localPositions = getPositions();
   let remotePositions: LighterPosition[] = [];
   let remoteError: string | undefined;
@@ -196,6 +216,7 @@ export async function reconcileAccount(
     remotePositions = await fetchAccountPositions(signerClient, accountIndex);
   } catch (error) {
     remoteError = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[${new Date().toISOString()}] [RECONCILIATION] fetchAccountPositions ERROR accountIndex=${accountIndex} error=${remoteError}`);
     logError({ timestamp: new Date().toISOString(), context: 'reconciliation', error: remoteError });
     notifyError({ context: 'reconciliation', error: remoteError });
   }
@@ -230,12 +251,15 @@ export async function reconcileAccount(
   }
 
   if (options?.autoFix && !options.dryRun && !remoteError) {
+    console.log(`[${new Date().toISOString()}] [RECONCILIATION] autoFix START mismatchesCount=${mismatches.length}`);
     for (const mismatch of mismatches) {
       if (mismatch.reason === 'missing_remote' && mismatch.local) {
+        console.log(`[${new Date().toISOString()}] [RECONCILIATION] marking missing_remote symbol=${mismatch.symbol} positionId=${mismatch.local.id}`);
         updatePositionMetadata(mismatch.local.id, { reconciliationIssue: 'missing_remote' } as never);
       }
 
       if (mismatch.reason === 'missing_local' && mismatch.remote) {
+        console.log(`[${new Date().toISOString()}] [RECONCILIATION] restoring missing_local symbol=${mismatch.symbol} marketId=${mismatch.remote.marketId}`);
         const persisted = await loadOpenPositions();
         const persistedPosition = persisted.find(position => getPositionKey(position) === getPositionKey(mismatch.remote!));
         if (persistedPosition) {
@@ -247,29 +271,42 @@ export async function reconcileAccount(
             side: mismatch.remote.side
           });
           if (!restored.ok) {
+            console.error(`[${new Date().toISOString()}] [RECONCILIATION] restore FAILED symbol=${mismatch.symbol} error=${restored.message}`);
             throw new Error(`Failed to restore ${mismatch.remote.symbol}: ${restored.message}`);
           }
+          console.log(`[${new Date().toISOString()}] [RECONCILIATION] restore OK symbol=${mismatch.symbol}`);
+        } else {
+          console.warn(`[${new Date().toISOString()}] [RECONCILIATION] restore SKIP symbol=${mismatch.symbol} reason=no persisted state`);
         }
       }
     }
+    console.log(`[${new Date().toISOString()}] [RECONCILIATION] autoFix END`);
   }
 
-  return {
+  const result = {
     ok: mismatches.length === 0 && remoteError == null,
     localPositions,
     remotePositions,
     mismatches,
     error: remoteError
   };
+
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] reconcileAccount END accountIndex=${accountIndex} ok=${result.ok} mismatches=${mismatches.length} error=${remoteError ?? 'none'}`);
+  return result;
 }
 
 export async function restoreStateAfterRestart(
   signerClient: SignerClient,
   accountIndex: number
 ): Promise<{ restored: number; closed: number; errors: number }> {
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] restoreStateAfterRestart START accountIndex=${accountIndex}`);
+
   const persisted = await loadOpenPositions();
   const result = await reconcileAccount(signerClient, accountIndex, { autoFix: true, dryRun: false });
-  if (result.error) return { restored: 0, closed: 0, errors: 1 };
+  if (result.error) {
+    console.error(`[${new Date().toISOString()}] [RECONCILIATION] restoreStateAfterRestart ERROR accountIndex=${accountIndex} error=${result.error}`);
+    return { restored: 0, closed: 0, errors: 1 };
+  }
 
   let restored = 0;
   let errors = 0;
@@ -281,6 +318,8 @@ export async function restoreStateAfterRestart(
       errors++;
     }
   }
+
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] restoreStateAfterRestart END accountIndex=${accountIndex} restored=${restored} errors=${errors}`);
   return { restored, closed: 0, errors };
 }
 
@@ -296,46 +335,62 @@ export async function verifyPositionAfterFill(
   expectedSide: 'long' | 'short',
   expectedQuantity: number
 ): Promise<{ ok: boolean; pending?: boolean; mismatch?: string }> {
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill START marketId=${marketId} symbol=${symbol} side=${expectedSide} quantity=${expectedQuantity}`);
+
   let lastMismatch = `Position ${symbol} not found on exchange after fill`;
 
-  for (const delay of VERIFY_RETRY_DELAYS_MS) {
-    if (delay > 0) await sleep(delay);
+  for (let attempt = 0; attempt < VERIFY_RETRY_DELAYS_MS.length; attempt++) {
+    const delay = VERIFY_RETRY_DELAYS_MS[attempt];
+    if (delay > 0) {
+      console.log(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill RETRY attempt=${attempt} delay=${delay}ms`);
+      await sleep(delay);
+    }
 
     let remotePositions: LighterPosition[];
     try {
       remotePositions = await fetchAccountPositions(signerClient, accountIndex);
     } catch (error) {
       lastMismatch = error instanceof Error ? error.message : 'Remote account request failed';
+      console.warn(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill FETCH_ERROR attempt=${attempt} error=${lastMismatch}`);
       continue;
     }
 
     const remote = remotePositions.find(position => position.marketId === marketId)
       ?? remotePositions.find(position => normalizeSymbol(position.symbol) === normalizeSymbol(symbol));
 
-    if (!remote) continue;
+    if (!remote) {
+      console.log(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill NOT_FOUND attempt=${attempt} marketId=${marketId} symbol=${symbol}`);
+      continue;
+    }
 
     if (remote.side !== expectedSide) {
       lastMismatch = `Side mismatch for ${symbol}: expected=${expectedSide}, remote=${remote.side}`;
+      console.warn(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill SIDE_MISMATCH attempt=${attempt} ${lastMismatch}`);
       continue;
     }
 
     const tolerance = Math.max(expectedQuantity * 0.02, 1e-12);
     if (Math.abs(remote.quantity - expectedQuantity) > tolerance) {
       lastMismatch = `Quantity mismatch for ${symbol}: expected=${expectedQuantity}, remote=${remote.quantity}`;
+      console.warn(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill QUANTITY_MISMATCH attempt=${attempt} ${lastMismatch}`);
       continue;
     }
 
+    console.log(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill OK attempt=${attempt} marketId=${marketId} symbol=${symbol}`);
     return { ok: true };
   }
 
+  console.warn(`[${new Date().toISOString()}] [RECONCILIATION] verifyPositionAfterFill FAILED symbol=${symbol} marketId=${marketId} mismatch=${lastMismatch}`);
   return { ok: false, pending: true, mismatch: lastMismatch };
 }
 
 export async function syncLiveBalance(accountIndex: number): Promise<void> {
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] syncLiveBalance START accountIndex=${accountIndex}`);
+
   const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
   url.searchParams.set('by', 'index');
   url.searchParams.set('value', String(accountIndex));
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, `syncLiveBalance accountIndex=${accountIndex}`);
   const root = getRecord(data);
   if (!root) throw new Error('Invalid account response structure');
 
@@ -344,13 +399,19 @@ export async function syncLiveBalance(accountIndex: number): Promise<void> {
     record && (Number(record.index ?? record.account_index) === accountIndex)
   ) ?? getRecord(root.account));
 
-  if (!account) return;
+  if (!account) {
+    console.warn(`[${new Date().toISOString()}] [RECONCILIATION] syncLiveBalance NO_ACCOUNT accountIndex=${accountIndex}`);
+    return;
+  }
 
   const balance = toNumber(
     account.collateral ?? account.available_balance ?? account.availableBalance ?? account.balance ?? account.total_asset_value
   );
-  if (balance == null || balance < 0) return;
+  if (balance == null || balance < 0) {
+    console.warn(`[${new Date().toISOString()}] [RECONCILIATION] syncLiveBalance INVALID_BALANCE accountIndex=${accountIndex} balance=${balance}`);
+    return;
+  }
 
   updateLiveAccountState({ balance });
-  console.log(`[${new Date().toISOString()}] Balance synced: $${balance.toFixed(2)}`);
+  console.log(`[${new Date().toISOString()}] [RECONCILIATION] syncLiveBalance OK accountIndex=${accountIndex} balance=${balance.toFixed(2)}`);
 }
