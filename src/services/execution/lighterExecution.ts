@@ -103,7 +103,6 @@ export class LighterExecutionService implements ExecutionService {
       return this.rejectedResult(req, `Opening order already in progress for market ${req.marketId}`);
     }
 
-    // Пункт 3: проверка pending remote orders перед открытием
     const hasPending = await this.checkPendingRemoteOrders(req.marketId);
     if (hasPending) {
       console.log(`[${new Date().toISOString()}] [LIGHTER] openPosition REJECTED marketId=${req.marketId} reason=pending_remote_order`);
@@ -317,19 +316,35 @@ export class LighterExecutionService implements ExecutionService {
   }
 
   private async submitMarketOrder(marketId: number, clientOrderIndex: number, baseAmount: number, expectedPrice: number, isAsk: boolean, reduceOnly: boolean, priceDecimals: number): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
-    const priceUnits = this.toPriceUnits(expectedPrice, priceDecimals);
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order START marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} priceUnits=${priceUnits} isAsk=${isAsk} reduceOnly=${reduceOnly}`);
+    // Используем create_market_order_if_slippage() вместо create_market_order()
+    // Это FOK логика: если цена уходит за slippage bound - ордер не создаётся вообще
+    const maxSlippageBps = Number(process.env.LIGHTER_MARKET_SLIPPAGE_BPS ?? 50);
+    if (!Number.isFinite(maxSlippageBps) || maxSlippageBps <= 0) {
+      throw new Error(`Invalid LIGHTER_MARKET_SLIPPAGE_BPS: ${maxSlippageBps}`);
+    }
 
-    const [order, tx, sdkError] = await this.signerClient.create_market_order(marketId, clientOrderIndex, baseAmount, priceUnits, isAsk, reduceOnly, -1, this.apiKeyIndex);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage START marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} maxSlippageBps=${maxSlippageBps}`);
+
+    const [order, tx, sdkError] = await this.signerClient.create_market_order_if_slippage(
+      marketId,
+      clientOrderIndex,
+      baseAmount,
+      maxSlippageBps,
+      isAsk,
+      reduceOnly,
+      -1,
+      this.apiKeyIndex
+    );
+
     if (sdkError) {
-      console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order ERROR marketId=${marketId} clientOrderIndex=${clientOrderIndex} error=${sdkError}`);
+      console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage ERROR marketId=${marketId} clientOrderIndex=${clientOrderIndex} error=${sdkError}`);
       return { ok: false, message: sdkError };
     }
 
     const orderId = this.readExchangeOrderId(order as Record<string, unknown> | null) ?? this.readTransactionId(tx);
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order OK marketId=${marketId} clientOrderIndex=${clientOrderIndex} orderId=${orderId ?? 'n/a'}`);
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order RESPONSE order=`, JSON.stringify(order, null, 2));
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order RESPONSE tx=`, JSON.stringify(tx, null, 2));
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage OK marketId=${marketId} clientOrderIndex=${clientOrderIndex} orderId=${orderId ?? 'n/a'}`);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage RESPONSE order=`, JSON.stringify(order, null, 2));
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage RESPONSE tx=`, JSON.stringify(tx, null, 2));
 
     return { ok: true, orderId };
   }
@@ -409,6 +424,19 @@ export class LighterExecutionService implements ExecutionService {
           const status = String(order.status ?? '').toLowerCase();
           const filledQuantity = this.toNumber(order.filled_base_amount) ?? 0;
           const filledQuote = this.toNumber(order.filled_quote_amount) ?? 0;
+
+          // Критическое исправление: проверяем filled_base_amount ДО проверки статуса!
+          // Если filledQuantity > 0 - ордер исполнился (даже если статус "canceled...")
+          if (filledQuantity > 0) {
+            console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED (by volume) marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote} status=${status}`);
+            return {
+              status: 'FILLED',
+              filledQuantity,
+              averageFillPrice: filledQuantity > 0 ? filledQuote / filledQuantity : undefined,
+              fee: 0
+            };
+          }
+
           if (status === 'filled' || status.startsWith('filled')) {
             console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote}`);
             return {
@@ -475,7 +503,9 @@ export class LighterExecutionService implements ExecutionService {
     const filledQuantity = this.toNumber(order.filled_base_amount) ?? 0;
     const filledQuote = this.toNumber(order.filled_quote_amount) ?? 0;
     const status = String(order.status ?? '').toLowerCase();
-    if (filledQuantity > 0 && (status === 'filled' || status.startsWith('filled'))) {
+
+    // Критическое исправление: проверяем filled_base_amount ДО проверки статуса!
+    if (filledQuantity > 0) {
       const averageFillPrice = filledQuote > 0 ? filledQuote / filledQuantity : this.averagePendingFillPrice(pending);
       this.resolvePendingOrder(clientOrderIndex, {
         ok: true,
