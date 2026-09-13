@@ -61,6 +61,8 @@ import {
   syncLiveBalance
 } from './reconciliation';
 
+const LIGHTER_API_URL = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
+
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
 
