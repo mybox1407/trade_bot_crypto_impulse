@@ -505,6 +505,17 @@ async function executeClose(position: ReturnType<typeof getPositions>[number], c
     console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL symbol=${position.symbol} filled=${executionResult.filledQuantity} original=${position.quantity}`);
     const partial = partialClosePosition(position.id, executionResult.filledQuantity, executionResult.averageFillPrice, { executionOrderId: executionResult.orderId, clientOrderId, fee: executionResult.fee });
     if (!partial.ok) throw new Error(`Partial close state update failed for ${position.symbol}: ${partial.message}`);
+    
+    if (executionResult.filledQuantity < position.quantity * 0.9) {
+      console.warn(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL_CLOSE_RECONCILIATION symbol=${position.symbol} expected=${position.quantity} filled=${executionResult.filledQuantity}`);
+      updatePositionMetadata(position.id, {
+        partialClosePending: true,
+        partialCloseQuantity: position.quantity,
+        partialCloseExecutedQuantity: executionResult.filledQuantity,
+        reconciliationIssue: 'partial_close_reconciliation'
+      });
+    }
+    
     console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL_OK symbol=${position.symbol}`);
     return true;
   }
@@ -614,7 +625,6 @@ export async function startScheduler(): Promise<void> {
     initializeSignerClient();
     await refreshTopMarkets();
 
-    // Загрузка reconciliation pending символов из persistence
     await loadReconciliationPendingSymbols();
 
     if (!PAPER_TRADING && signerClient) {
