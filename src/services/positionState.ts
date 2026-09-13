@@ -31,7 +31,8 @@ export type PositionCloseReason =
   | 'breakeven_stop'
   | 'dead_trade_mfe'
   | 'reconciliation_missing_remote'
-  | 'reconciliation_severe_mismatch';
+  | 'reconciliation_severe_mismatch'
+  | 'partial_close_reconciliation';
 
 export interface VirtualPosition {
   id: string;
@@ -78,6 +79,9 @@ export interface VirtualPosition {
     trailingActive?: boolean;
     trailingStopPrice?: number;
     reconciliationIssue?: string;
+    partialClosePending?: boolean;
+    partialCloseQuantity?: number;
+    partialCloseExecutedQuantity?: number;
   };
 }
 
@@ -516,7 +520,14 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     quantity: newQuantity,
     notional: newNotional,
     reservedCapital: newNotional,
-    entryFee: Math.max(0, position.entryFee - proportionalEntryFee)
+    entryFee: Math.max(0, position.entryFee - proportionalEntryFee),
+    metadata: {
+      ...(position.metadata ?? {}),
+      partialClosed: true,
+      partialClosePending: false,
+      partialCloseQuantity: quantityToClose,
+      partialCloseExecutedQuantity: quantityToClose
+    }
   };
 
   currentPositions = currentPositions.map(current => current.id === positionId ? updatedPosition : current);
