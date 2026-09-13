@@ -18,7 +18,8 @@ export type CloseReason =
   | 'dead_trade_mfe'
   | 'partial_close'
   | 'reconciliation_missing_remote'
-  | 'reconciliation_severe_mismatch';
+  | 'reconciliation_severe_mismatch'
+  | 'partial_close_reconciliation';
 
 export interface OpenExecutionRequest {
   symbol: string;
