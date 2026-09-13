@@ -1,38 +1,13 @@
-import {
-  SignerClient
-} from 'zklighter-sdk';
+import { SignerClient } from 'zklighter-sdk';
+import { getPositions, openPosition, VirtualPosition, updatePositionMetadata } from './positionState';
+import { logError } from './logger';
+import { notifyError } from './telegram';
+import { normalizeSymbol } from './exchange';
+import { loadOpenPositions } from './persistence';
+import { updateLiveAccountState } from './liveState';
 
-import {
-  getPositions,
-  openPosition,
-  closePosition,
-  VirtualPosition,
-  updatePositionMetadata
-} from './positionState';
-
-import {
-  logError
-} from './logger';
-
-import {
-  notifyError
-} from './telegram';
-
-import {
-  normalizeSymbol
-} from './exchange';
-
-import {
-  loadOpenPositions
-} from './persistence';
-
-import {
-  updateLiveAccountState
-} from './liveState';
-
-const LIGHTER_API_URL =
-  process.env.LIGHTER_API_URL ??
-  'https://mainnet.zklighter.elliot.ai';
+const LIGHTER_API_URL = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
+const VERIFY_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000, 3000, 5000];
 
 export type LighterPosition = {
   symbol: string;
@@ -44,1069 +19,338 @@ export type LighterPosition = {
 
 type ReconciliationMismatch = {
   symbol: string;
-  local?: ReturnType<
-    typeof getPositions
-  >[number];
+  local?: ReturnType<typeof getPositions>[number];
   remote?: LighterPosition;
-  reason:
-    | 'missing_remote'
-    | 'missing_local'
-    | 'quantity_mismatch'
-    | 'side_mismatch'
-    | 'price_mismatch';
+  reason: 'missing_remote' | 'missing_local' | 'quantity_mismatch' | 'side_mismatch' | 'price_mismatch';
 };
 
 type ReconciliationResult = {
   ok: boolean;
-  localPositions: ReturnType<
-    typeof getPositions
-  >;
+  localPositions: ReturnType<typeof getPositions>;
   remotePositions: LighterPosition[];
   mismatches: ReconciliationMismatch[];
   error?: string;
 };
 
-function toNumber(
-  value: unknown
-): number | null {
-  const number =
-    Number(value);
+function toNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
-  return Number.isFinite(number)
-    ? number
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : null;
 }
 
-function getRecord(
-  value: unknown
-): Record<string, unknown> | null {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value)
-  ) {
-    return null;
-  }
-
-  return value as Record<
-    string,
-    unknown
-  >;
-}
-
-function getString(
-  record: Record<string, unknown>,
-  ...keys: string[]
-): string | undefined {
+function getString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
-    const value =
-      record[key];
-
-    if (
-      typeof value === 'string' &&
-      value.trim().length > 0
-    ) {
-      return value.trim();
-    }
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
   }
-
   return undefined;
 }
 
-function recordsFromValue(
-  value: unknown
-): Array<
-  Record<string, unknown>
-> {
+function recordsFromValue(value: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(value)) {
-    return value
-      .map(getRecord)
-      .filter(
-        (
-          item
-        ): item is Record<
-          string,
-          unknown
-        > =>
-          item !== null
-      );
+    return value.map(getRecord).filter((x): x is Record<string, unknown> => x !== null);
   }
-
-  const record =
-    getRecord(value);
-
-  if (!record) {
-    return [];
-  }
-
-  return Object.values(record)
-    .map(getRecord)
-    .filter(
-      (
-        item
-      ): item is Record<
-        string,
-        unknown
-      > =>
-        item !== null
-    );
+  const record = getRecord(value);
+  return record
+    ? Object.values(record).map(getRecord).filter((x): x is Record<string, unknown> => x !== null)
+    : [];
 }
 
-function getPositionRecords(
-  response: unknown
-): Array<
-  Record<string, unknown>
-> {
-  const root =
-    getRecord(response);
+function getPositionRecords(response: unknown): Array<Record<string, unknown>> {
+  const root = getRecord(response);
+  if (!root) return [];
 
-  if (!root) {
-    return [];
-  }
+  const direct = recordsFromValue(root.positions);
+  if (direct.length) return direct;
 
-  const directPositions =
-    recordsFromValue(
-      root.positions
-    );
+  const candidates = [root.account, root.accounts, root.data];
+  for (const candidate of candidates) {
+    const record = getRecord(candidate);
+    if (!record) continue;
 
-  if (
-    directPositions.length > 0
-  ) {
-    return directPositions;
-  }
+    const positions = recordsFromValue(record.positions);
+    if (positions.length) return positions;
 
-  const candidates: unknown[] = [
-    root.data,
-    root.account,
-    root.accounts
-  ];
-
-  for (
-    const candidate
-    of candidates
-  ) {
-    const candidateRecord =
-      getRecord(candidate);
-
-    if (!candidateRecord) {
-      continue;
-    }
-
-    const nestedPositions =
-      recordsFromValue(
-        candidateRecord.positions
-      );
-
-    if (
-      nestedPositions.length > 0
-    ) {
-      return nestedPositions;
-    }
-
-    const nestedAccounts =
-      recordsFromValue(
-        candidateRecord.accounts
-      );
-
-    for (
-      const account
-      of nestedAccounts
-    ) {
-      const accountPositions =
-        recordsFromValue(
-          account.positions
-        );
-
-      if (
-        accountPositions.length > 0
-      ) {
-        return accountPositions;
-      }
+    for (const account of recordsFromValue(record.accounts)) {
+      const nested = recordsFromValue(account.positions);
+      if (nested.length) return nested;
     }
   }
-
   return [];
 }
 
-function parsePosition(
-  rawPosition: Record<string, unknown>
-): LighterPosition | null {
-  const marketId =
-    toNumber(
-      rawPosition.market_id ??
-        rawPosition.market_index ??
-        rawPosition.marketId
-    );
+function readNestedPosition(raw: Record<string, unknown>): Record<string, unknown> {
+  const nested = getRecord(raw.position);
+  return nested ? { ...raw, ...nested } : raw;
+}
 
-  const rawSize =
-    toNumber(
-      rawPosition.position ??
-        rawPosition.position_size ??
-        rawPosition.size ??
-        rawPosition.quantity
-    );
+function parsePosition(rawInput: Record<string, unknown>): LighterPosition | null {
+  const raw = readNestedPosition(rawInput);
+  const marketId = toNumber(raw.market_id ?? raw.market_index ?? raw.marketId);
+  const quantity = toNumber(raw.position_size ?? raw.size ?? raw.quantity ?? raw.position);
+  const entryPrice = toNumber(
+    raw.avg_entry_price ?? raw.entry_price ?? raw.average_entry_price ?? raw.entryPrice
+  );
 
-  const entryPrice =
-    toNumber(
-      rawPosition.avg_entry_price ??
-        rawPosition.entry_price ??
-        rawPosition.average_entry_price ??
-        rawPosition.entryPrice
-    );
-
-  if (
-    marketId == null ||
-    rawSize == null ||
-    rawSize === 0 ||
-    entryPrice == null ||
-    entryPrice <= 0
-  ) {
+  if (marketId == null || quantity == null || quantity <= 0 || entryPrice == null || entryPrice <= 0) {
     return null;
   }
 
-  const explicitSide =
-    getString(
-      rawPosition,
-      'position_side',
-      'side'
-    )?.toLowerCase();
+  const explicitSide = getString(raw, 'position_side', 'side')?.toLowerCase();
+  const sign = toNumber(raw.sign);
+  const side: 'long' | 'short' = explicitSide === 'long' || explicitSide === 'short'
+    ? explicitSide
+    : sign != null && sign !== 0
+      ? sign > 0 ? 'long' : 'short'
+      : 'long';
 
-  const sign =
-    toNumber(
-      rawPosition.sign
-    );
-
-  let side:
-    | 'long'
-    | 'short';
-
-  if (
-    explicitSide === 'long' ||
-    explicitSide === 'short'
-  ) {
-    side = explicitSide;
-  } else if (
-    sign != null &&
-    sign !== 0
-  ) {
-    side =
-      sign > 0
-        ? 'long'
-        : 'short';
-  } else {
-    side =
-      rawSize > 0
-        ? 'long'
-        : 'short';
-  }
-
-  const symbol =
-    getString(
-      rawPosition,
-      'symbol',
-      'market_symbol',
-      'marketSymbol'
-    ) ??
-    `MARKET_${marketId}`;
+  const symbol = getString(raw, 'symbol', 'market_symbol', 'marketSymbol') ?? `MARKET_${marketId}`;
 
   return {
-    symbol:
-      normalizeSymbol(symbol),
+    symbol: normalizeSymbol(symbol),
     marketId,
     side,
-    quantity:
-      Math.abs(rawSize),
+    quantity: Math.abs(quantity),
     entryPrice
   };
+}
+
+async function fetchJson(url: URL): Promise<unknown> {
+  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const text = await response.text();
+  let data: unknown = null;
+  try { data = text ? JSON.parse(text) : null; } catch {
+    throw new Error(`Invalid JSON from Lighter endpoint: ${text.slice(0, 300)}`);
+  }
+  if (!response.ok) {
+    const record = getRecord(data);
+    throw new Error(`Lighter request failed (${response.status}): ${String(record?.message ?? record?.error ?? response.statusText)}`);
+  }
+  const record = getRecord(data);
+  if (record?.code != null && Number(record.code) !== 200) {
+    throw new Error(`Lighter API error: ${String(record.message ?? record.code)}`);
+  }
+  return data;
 }
 
 export async function fetchAccountPositions(
   _signerClient: SignerClient,
   accountIndex: number
 ): Promise<LighterPosition[]> {
-  if (
-    !Number.isInteger(accountIndex) ||
-    accountIndex < 0
-  ) {
-    throw new Error(
-      `Invalid Lighter account index: ${accountIndex}`
-    );
+  if (!Number.isInteger(accountIndex) || accountIndex < 0) {
+    throw new Error(`Invalid Lighter account index: ${accountIndex}`);
   }
 
-  const url =
-    new URL(
-      `${LIGHTER_API_URL}/api/v1/account`
-    );
+  const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
+  url.searchParams.set('by', 'index');
+  url.searchParams.set('value', String(accountIndex));
 
-  url.searchParams.set(
-    'by',
-    'index'
-  );
-
-  url.searchParams.set(
-    'value',
-    String(accountIndex)
-  );
-
-  const response =
-    await fetch(
-      url,
-      {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json'
-        }
-      }
-    );
-
-  const responseText =
-    await response.text();
-
-  let responseData: unknown = null;
-
-  try {
-    responseData =
-      responseText
-        ? JSON.parse(
-            responseText
-          )
-        : null;
-  } catch {
-    throw new Error(
-      `Invalid JSON from Lighter account endpoint: ` +
-      `${responseText.slice(0, 300)}`
-    );
-  }
-
-  if (!response.ok) {
-    const record =
-      getRecord(responseData);
-
-    throw new Error(
-      `Lighter account request failed ` +
-        `(${response.status}): ` +
-        `${String(
-          record?.message ??
-            record?.error ??
-            record?.code ??
-            response.statusText
-        )}`
-    );
-  }
-
-  const responseRecord =
-    getRecord(responseData);
-
-  if (
-    responseRecord?.code != null &&
-    Number(
-      responseRecord.code
-    ) !== 200
-  ) {
-    throw new Error(
-      `Lighter account API error: ` +
-        `${String(
-          responseRecord.message ??
-            responseRecord.code
-        )}`
-    );
-  }
-
-  const positionRecords =
-    getPositionRecords(
-      responseData
-    );
-
-  return positionRecords
+  const data = await fetchJson(url);
+  return getPositionRecords(data)
     .map(parsePosition)
-    .filter(
-      (
-        position
-      ): position is LighterPosition =>
-        position !== null
-    );
+    .filter((position): position is LighterPosition => position !== null);
 }
 
-function getPositionKey(
-  position: {
-    marketId?: number;
-    symbol: string;
-  }
-): string {
-  if (
-    position.marketId != null
-  ) {
-    return `market:${position.marketId}`;
-  }
-
-  return (
-    `symbol:${normalizeSymbol(
-      position.symbol
-    )}`
-  );
+function getPositionKey(position: { marketId?: number; symbol: string }): string {
+  return position.marketId != null
+    ? `market:${position.marketId}`
+    : `symbol:${normalizeSymbol(position.symbol)}`;
 }
 
-function buildRestoredPosition(
-  persisted: VirtualPosition
-): ReturnType<
-  typeof openPosition
-> {
+function buildRestoredPosition(persisted: VirtualPosition): ReturnType<typeof openPosition> {
   return openPosition({
-    symbol:
-      persisted.symbol,
-    marketId:
-      persisted.marketId,
-    side:
-      persisted.side,
-    entryPrice:
-      persisted.entryPrice,
-    quantity:
-      persisted.quantity,
-    takeProfitPrice:
-      persisted.takeProfitPrice,
-    stopLossPrice:
-      persisted.stopLossPrice,
-    exchangeStopLossPrice:
-      persisted.exchangeStopLossPrice,
-    exchangeTakeProfitPrice:
-      persisted.exchangeTakeProfitPrice,
-    exchangeStopLossOrderId:
-      persisted.exchangeStopLossOrderId,
-    exchangeTakeProfitOrderId:
-      persisted.exchangeTakeProfitOrderId,
-    exchangeStopLossClientOrderIndex:
-      persisted.exchangeStopLossClientOrderIndex,
-    exchangeTakeProfitClientOrderIndex:
-      persisted.exchangeTakeProfitClientOrderIndex,
-    metadata:
-      persisted.metadata,
-    executionOrderId:
-      persisted.executionOrderId,
-    clientOrderId:
-      persisted.clientOrderId
+    symbol: persisted.symbol,
+    marketId: persisted.marketId,
+    side: persisted.side,
+    entryPrice: persisted.entryPrice,
+    quantity: persisted.quantity,
+    takeProfitPrice: persisted.takeProfitPrice,
+    stopLossPrice: persisted.stopLossPrice,
+    exchangeStopLossPrice: persisted.exchangeStopLossPrice,
+    exchangeTakeProfitPrice: persisted.exchangeTakeProfitPrice,
+    exchangeStopLossOrderId: persisted.exchangeStopLossOrderId,
+    exchangeTakeProfitOrderId: persisted.exchangeTakeProfitOrderId,
+    exchangeStopLossClientOrderIndex: persisted.exchangeStopLossClientOrderIndex,
+    exchangeTakeProfitClientOrderIndex: persisted.exchangeTakeProfitClientOrderIndex,
+    metadata: persisted.metadata,
+    executionOrderId: persisted.executionOrderId,
+    clientOrderId: persisted.clientOrderId
   });
 }
 
 export async function reconcileAccount(
   signerClient: SignerClient,
   accountIndex: number,
-  options?: {
-    autoFix?: boolean;
-    dryRun?: boolean;
-  }
+  options?: { autoFix?: boolean; dryRun?: boolean }
 ): Promise<ReconciliationResult> {
-  const autoFix =
-    options?.autoFix ?? false;
-
-  const dryRun =
-    options?.dryRun ?? false;
-
-  const localPositions =
-    getPositions();
-
-  let remotePositions:
-    LighterPosition[] = [];
-
-  let remoteError:
-    string | undefined;
+  const localPositions = getPositions();
+  let remotePositions: LighterPosition[] = [];
+  let remoteError: string | undefined;
 
   try {
-    remotePositions =
-      await fetchAccountPositions(
-        signerClient,
-        accountIndex
-      );
+    remotePositions = await fetchAccountPositions(signerClient, accountIndex);
   } catch (error) {
-    remoteError =
-      error instanceof Error
-        ? error.message
-        : 'Unknown error';
-
-    logError({
-      timestamp:
-        new Date().toISOString(),
-      context:
-        'reconciliation',
-      error:
-        remoteError
-    });
-
-    notifyError({
-      context:
-        'reconciliation',
-      error:
-        remoteError
-    });
+    remoteError = error instanceof Error ? error.message : 'Unknown error';
+    logError({ timestamp: new Date().toISOString(), context: 'reconciliation', error: remoteError });
+    notifyError({ context: 'reconciliation', error: remoteError });
   }
 
-  const mismatches:
-    ReconciliationMismatch[] =
-    [];
+  const mismatches: ReconciliationMismatch[] = [];
+  const localByKey = new Map(localPositions.map(position => [getPositionKey(position), position]));
+  const remoteByKey = new Map(remotePositions.map(position => [getPositionKey(position), position]));
 
-  const localByKey =
-    new Map(
-      localPositions.map(
-        position => [
-          getPositionKey(position),
-          position
-        ]
-      )
-    );
-
-  const remoteByKey =
-    new Map(
-      remotePositions.map(
-        position => [
-          getPositionKey(position),
-          position
-        ]
-      )
-    );
-
-  for (
-    const [key, local]
-    of localByKey
-  ) {
-    const remote =
-      remoteByKey.get(key);
-
-    const symbol =
-      normalizeSymbol(
-        local.symbol
-      );
-
+  for (const [key, local] of localByKey) {
+    const remote = remoteByKey.get(key);
     if (!remote) {
-      mismatches.push({
-        symbol,
-        local,
-        reason:
-          'missing_remote'
-      });
-
+      mismatches.push({ symbol: normalizeSymbol(local.symbol), local, reason: 'missing_remote' });
       continue;
     }
-
-    if (
-      local.side !== remote.side
-    ) {
-      mismatches.push({
-        symbol,
-        local,
-        remote,
-        reason:
-          'side_mismatch'
-      });
-
+    if (local.side !== remote.side) {
+      mismatches.push({ symbol: normalizeSymbol(local.symbol), local, remote, reason: 'side_mismatch' });
       continue;
     }
-
-    const quantityTolerance =
-      Math.max(
-        local.quantity * 0.01,
-        1e-12
-      );
-
-    if (
-      Math.abs(
-        local.quantity -
-          remote.quantity
-      ) > quantityTolerance
-    ) {
-      mismatches.push({
-        symbol,
-        local,
-        remote,
-        reason:
-          'quantity_mismatch'
-      });
-
+    if (Math.abs(local.quantity - remote.quantity) > Math.max(local.quantity * 0.01, 1e-12)) {
+      mismatches.push({ symbol: normalizeSymbol(local.symbol), local, remote, reason: 'quantity_mismatch' });
       continue;
     }
-
-    const priceTolerance =
-      Math.max(
-        local.entryPrice * 0.01,
-        1e-12
-      );
-
-    if (
-      Math.abs(
-        local.entryPrice -
-          remote.entryPrice
-      ) > priceTolerance
-    ) {
-      mismatches.push({
-        symbol,
-        local,
-        remote,
-        reason:
-          'price_mismatch'
-      });
+    if (Math.abs(local.entryPrice - remote.entryPrice) > Math.max(local.entryPrice * 0.01, 1e-12)) {
+      mismatches.push({ symbol: normalizeSymbol(local.symbol), local, remote, reason: 'price_mismatch' });
     }
   }
 
-  for (
-    const [key, remote]
-    of remoteByKey
-  ) {
-    if (
-      localByKey.has(key)
-    ) {
-      continue;
+  for (const [key, remote] of remoteByKey) {
+    if (!localByKey.has(key)) {
+      mismatches.push({ symbol: normalizeSymbol(remote.symbol), remote, reason: 'missing_local' });
     }
-
-    mismatches.push({
-      symbol:
-        normalizeSymbol(
-          remote.symbol
-        ),
-      remote,
-      reason:
-        'missing_local'
-    });
   }
 
-  if (
-    mismatches.length === 0 &&
-    remoteError == null
-  ) {
-    return {
-      ok: true,
-      localPositions,
-      remotePositions,
-      mismatches
-    };
-  }
+  if (options?.autoFix && !options.dryRun && !remoteError) {
+    for (const mismatch of mismatches) {
+      if (mismatch.reason === 'missing_remote' && mismatch.local) {
+        updatePositionMetadata(mismatch.local.id, { reconciliationIssue: 'missing_remote' } as never);
+      }
 
-  if (
-    autoFix &&
-    !dryRun &&
-    remoteError == null
-  ) {
-    for (
-      const mismatch
-      of mismatches
-    ) {
-      try {
-        if (
-          mismatch.reason ===
-          'missing_remote'
-        ) {
-          const local =
-            mismatch.local;
-
-          if (!local) {
-            continue;
-          }
-
-          // НЕ закрываем автоматически — только лог и уведомление
-          logError({
-            timestamp: new Date().toISOString(),
-            context: 'reconciliation',
-            symbol: mismatch.symbol,
-            error:
-              `Local position ${local.symbol} (${local.id}) ` +
-              `not found on exchange. ` +
-              `Manual check required. Auto-close disabled.`
+      if (mismatch.reason === 'missing_local' && mismatch.remote) {
+        const persisted = await loadOpenPositions();
+        const persistedPosition = persisted.find(position => getPositionKey(position) === getPositionKey(mismatch.remote!));
+        if (persistedPosition) {
+          const restored = buildRestoredPosition({
+            ...persistedPosition,
+            marketId: mismatch.remote.marketId,
+            quantity: mismatch.remote.quantity,
+            entryPrice: mismatch.remote.entryPrice,
+            side: mismatch.remote.side
           });
-
-          notifyError({
-            context: 'reconciliation',
-            symbol: mismatch.symbol,
-            error:
-              `Local position ${local.symbol} ` +
-              `missing on exchange. ` +
-              `Do NOT send compensating orders manually.`
-          });
-
-          // Помечаем позицию как проблемную в metadata
-          //updatePositionMetadata(local.id, {
-          //  reconciliationIssue: 'missing_remote'
-          //});
-
-          continue;
-        } else if (
-          mismatch.reason ===
-          'missing_local'
-        ) {
-          const remote =
-            mismatch.remote;
-
-          if (!remote) {
-            continue;
-          }
-
-          const persisted =
-            await loadOpenPositions();
-
-          const persistedPosition =
-            persisted.find(
-              position =>
-                getPositionKey(
-                  position
-                ) ===
-                getPositionKey(
-                  remote
-                )
-            );
-
-          if (
-            !persistedPosition
-          ) {
-            logError({
-              timestamp: new Date().toISOString(),
-              context: 'reconciliation',
-              symbol: mismatch.symbol,
-              error:
-                `Remote position ${remote.symbol} detected, ` +
-                `but no persisted state found. ` +
-                `Manual reconciliation required.`
-            });
-
-            notifyError({
-              context: 'reconciliation',
-              symbol: mismatch.symbol,
-              error:
-                `Orphan position on exchange: ${remote.symbol}. ` +
-                `No local state. Manual action required.`
-            });
-
-            continue;
-          }
-
-          const restored =
-            buildRestoredPosition(
-              persistedPosition
-            );
-
           if (!restored.ok) {
-            throw new Error(
-              `Failed to restore ${remote.symbol}: ` +
-                `${restored.message}`
-            );
+            throw new Error(`Failed to restore ${mismatch.remote.symbol}: ${restored.message}`);
           }
-
-          continue;
-        } else {
-          // Остальные mismatches — только лог
-          logError({
-            timestamp: new Date().toISOString(),
-            context: 'reconciliation',
-            symbol: mismatch.symbol,
-            error:
-              `Severe reconciliation mismatch for ` +
-                `${mismatch.symbol}: ` +
-                `${mismatch.reason}`
-          });
         }
-      } catch (error) {
-        const errorMsg =
-          error instanceof Error
-            ? error.message
-            : 'Unknown error';
-
-        logError({
-          timestamp:
-            new Date().toISOString(),
-          context:
-            'reconciliation-fix',
-          symbol:
-            mismatch.symbol,
-          error:
-            errorMsg
-        });
-
-        notifyError({
-          context:
-            'reconciliation-fix',
-          symbol:
-            mismatch.symbol,
-          error:
-            errorMsg
-        });
       }
     }
   }
 
   return {
-    ok:
-      mismatches.length === 0 &&
-      remoteError == null,
+    ok: mismatches.length === 0 && remoteError == null,
     localPositions,
     remotePositions,
     mismatches,
-    error:
-      remoteError
+    error: remoteError
   };
 }
 
 export async function restoreStateAfterRestart(
   signerClient: SignerClient,
   accountIndex: number
-): Promise<{
-  restored: number;
-  closed: number;
-  errors: number;
-}> {
-  const persisted =
-    await loadOpenPositions();
-
-  const result =
-    await reconcileAccount(
-      signerClient,
-      accountIndex,
-      {
-        autoFix: true,
-        dryRun: false
-      }
-    );
-
-  if (result.error) {
-    return {
-      restored: 0,
-      closed: 0,
-      errors: 1
-    };
-  }
+): Promise<{ restored: number; closed: number; errors: number }> {
+  const persisted = await loadOpenPositions();
+  const result = await reconcileAccount(signerClient, accountIndex, { autoFix: true, dryRun: false });
+  if (result.error) return { restored: 0, closed: 0, errors: 1 };
 
   let restored = 0;
-  let closed = 0;
   let errors = 0;
-
-  for (
-    const mismatch
-    of result.mismatches
-  ) {
-    if (
-      mismatch.reason ===
-      'missing_local'
-    ) {
-      const remote =
-        mismatch.remote;
-
-      if (!remote) {
-        errors++;
-        continue;
-      }
-
-      const exists =
-        persisted.some(
-          position =>
-            getPositionKey(
-              position
-            ) ===
-            getPositionKey(
-              remote
-            )
-        );
-
-      if (exists) {
-        restored++;
-      } else {
-        errors++;
-      }
-    } else if (
-      mismatch.reason ===
-      'missing_remote'
-    ) {
-      // Не закрываем, просто считаем как closed для статистики
-      closed++;
-    } else {
+  for (const mismatch of result.mismatches) {
+    if (mismatch.reason === 'missing_local' && mismatch.remote) {
+      const exists = persisted.some(position => getPositionKey(position) === getPositionKey(mismatch.remote!));
+      if (exists) restored++; else errors++;
+    } else if (mismatch.reason !== 'missing_remote') {
       errors++;
     }
   }
+  return { restored, closed: 0, errors };
+}
 
-  return {
-    restored,
-    closed,
-    errors
-  };
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export async function verifyPositionAfterFill(
   signerClient: SignerClient,
   accountIndex: number,
+  marketId: number,
   symbol: string,
   expectedSide: 'long' | 'short',
   expectedQuantity: number
-): Promise<{
-  ok: boolean;
-  mismatch?: string;
-}> {
-  try {
-    const remotePositions =
-      await fetchAccountPositions(
-        signerClient,
-        accountIndex
-      );
+): Promise<{ ok: boolean; pending?: boolean; mismatch?: string }> {
+  let lastMismatch = `Position ${symbol} not found on exchange after fill`;
 
-    const normalizedSymbol =
-      normalizeSymbol(symbol);
+  for (const delay of VERIFY_RETRY_DELAYS_MS) {
+    if (delay > 0) await sleep(delay);
 
-    const remote =
-      remotePositions.find(
-        position =>
-          normalizeSymbol(
-            position.symbol
-          ) === normalizedSymbol
-      );
-
-    if (!remote) {
-      return {
-        ok: false,
-        mismatch:
-          `Position ${symbol} not found on exchange ` +
-          `after fill`
-      };
+    let remotePositions: LighterPosition[];
+    try {
+      remotePositions = await fetchAccountPositions(signerClient, accountIndex);
+    } catch (error) {
+      lastMismatch = error instanceof Error ? error.message : 'Remote account request failed';
+      continue;
     }
 
-    if (
-      remote.side !== expectedSide
-    ) {
-      return {
-        ok: false,
-        mismatch:
-          `Side mismatch for ${symbol}: ` +
-          `expected=${expectedSide}, ` +
-          `remote=${remote.side}`
-      };
+    const remote = remotePositions.find(position => position.marketId === marketId)
+      ?? remotePositions.find(position => normalizeSymbol(position.symbol) === normalizeSymbol(symbol));
+
+    if (!remote) continue;
+
+    if (remote.side !== expectedSide) {
+      lastMismatch = `Side mismatch for ${symbol}: expected=${expectedSide}, remote=${remote.side}`;
+      continue;
     }
 
-    const quantityTolerance =
-      Math.max(
-        expectedQuantity * 0.02,
-        1e-12
-      );
-
-    if (
-      Math.abs(
-        remote.quantity -
-          expectedQuantity
-      ) > quantityTolerance
-    ) {
-      return {
-        ok: false,
-        mismatch:
-          `Quantity mismatch for ${symbol}: ` +
-          `expected=${expectedQuantity}, ` +
-          `remote=${remote.quantity}`
-      };
+    const tolerance = Math.max(expectedQuantity * 0.02, 1e-12);
+    if (Math.abs(remote.quantity - expectedQuantity) > tolerance) {
+      lastMismatch = `Quantity mismatch for ${symbol}: expected=${expectedQuantity}, remote=${remote.quantity}`;
+      continue;
     }
 
-    return {
-      ok: true
-    };
-  } catch (error) {
-    const errorMsg =
-      error instanceof Error
-        ? error.message
-        : 'Unknown error';
-
-    return {
-      ok: false,
-      mismatch:
-        `Verification error: ${errorMsg}`
-    };
+    return { ok: true };
   }
+
+  return { ok: false, pending: true, mismatch: lastMismatch };
 }
 
-export async function syncLiveBalance(
-  accountIndex: number
-): Promise<void> {
-  const response = await fetch(
-    `${LIGHTER_API_URL}/api/v1/account?` +
-      new URLSearchParams({
-        by: 'index',
-        value: String(accountIndex)
-      }).toString(),
-    {
-      headers: {
-        Accept: 'application/json'
-      }
-    }
+export async function syncLiveBalance(accountIndex: number): Promise<void> {
+  const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
+  url.searchParams.set('by', 'index');
+  url.searchParams.set('value', String(accountIndex));
+  const data = await fetchJson(url);
+  const root = getRecord(data);
+  if (!root) throw new Error('Invalid account response structure');
+
+  const accounts = Array.isArray(root.accounts) ? root.accounts : [];
+  const account = (accounts.map(getRecord).find(record =>
+    record && (Number(record.index ?? record.account_index) === accountIndex)
+  ) ?? getRecord(root.account));
+
+  if (!account) return;
+
+  const balance = toNumber(
+    account.collateral ?? account.available_balance ?? account.availableBalance ?? account.balance ?? account.total_asset_value
   );
-
-  const body = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch live balance: ` +
-        `${response.status} ${body}`
-    );
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new Error(
-      'Invalid JSON while fetching live balance'
-    );
-  }
-
-  const root = getRecord(parsed);
-
-  if (!root) {
-    throw new Error('Invalid account response structure');
-  }
-
-  let account: Record<string, unknown> | null = null;
-
-  const accounts = root?.accounts;
-  if (Array.isArray(accounts)) {
-    account = accounts.find(
-      (acc: unknown) => {
-        const record = getRecord(acc);
-        return record?.index === accountIndex || record?.account_index === accountIndex;
-      }
-    ) as Record<string, unknown> | null;
-  }
-
-  if (!account) {
-    account = getRecord(root?.account);
-  }
-
-  if (!account) {
-    const data = getRecord(root?.data);
-    account = getRecord(data?.account);
-  }
-
-  if (!account) {
-    console.warn(
-      `[${new Date().toISOString()}] ` +
-        `Account object not found in response. ` +
-        `Response keys: ${Object.keys(root).join(', ')}`
-    );
-
-    return;
-  }
-
-  const balance =
-    toNumber(
-      account?.collateral ??
-        account?.available_balance ??
-        account?.availableBalance ??
-        account?.balance ??
-        account?.total_collateral ??
-        account?.equity ??
-        account?.total_asset_value ??
-        account?.cross_asset_value
-    );
-
-  if (balance == null || balance < 0) {
-    console.warn(
-      `[${new Date().toISOString()}] ` +
-        `Balance field not found. Account keys: ${Object.keys(account).join(', ')}`
-    );
-
-    return;
-  }
+  if (balance == null || balance < 0) return;
 
   updateLiveAccountState({ balance });
-
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Balance synced: $${balance.toFixed(2)}`
-  );
+  console.log(`[${new Date().toISOString()}] Balance synced: $${balance.toFixed(2)}`);
 }
