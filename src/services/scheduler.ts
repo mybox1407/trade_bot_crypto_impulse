@@ -384,94 +384,97 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        try {
-          const clientOrderId = `${symbol}-${Date.now()}-open`;
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OPENING symbol=${symbol} side=${side} quantity=${quantity} price=${expectedPrice}`);
+        const clientOrderId = `${symbol}-${Date.now()}-open`;
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OPENING symbol=${symbol} side=${side} quantity=${quantity} price=${expectedPrice}`);
 
-          const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
+        const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
 
-          if (!executionResult.ok) {
-            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals EXECUTION_FAILED symbol=${symbol} status=${executionResult.status} message=${executionResult.message}`);
-            if (executionResult.status === 'unknown') markReconciliationPending(symbol);
-            results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: executionResult.message ?? 'Execution failed' });
-            errorsBySymbol.set(symbol, executionResult.message ?? 'Execution failed');
-            continue;
-          }
-
-          if (executionResult.filledQuantity <= 0 || executionResult.averageFillPrice == null) {
-            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_REQUIRED symbol=${symbol} filledQuantity=${executionResult.filledQuantity}`);
-            markReconciliationPending(symbol);
-            results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: 'Fill result requires reconciliation' });
-            errorsBySymbol.set(symbol, 'Fill result requires reconciliation');
-            continue;
-          }
-
-          const openResult = openPosition({
-            symbol,
-            marketId,
-            side,
-            entryPrice: executionResult.averageFillPrice,
-            quantity: executionResult.filledQuantity,
-            takeProfitPrice,
-            stopLossPrice,
-            exchangeStopLossPrice: stopLossPrice,
-            exchangeTakeProfitPrice: takeProfitPrice,
-            exchangeStopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId,
-            exchangeTakeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId,
-            exchangeStopLossClientOrderIndex: executionResult.protectiveOrders?.stopLossClientOrderIndex,
-            exchangeTakeProfitClientOrderIndex: executionResult.protectiveOrders?.takeProfitClientOrderIndex,
-            metadata: {
-              regime,
-              macdCrossUp: indicators?.macdCrossUp ?? false,
-              macdCrossDown: indicators?.macdCrossDown ?? false,
-              lastRsi: indicators?.lastRsi ?? 0,
-              lastAtr: indicators?.lastAtr ?? 0,
-              adx: indicators?.regimeIndicators?.adx ?? 0,
-              bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
-              atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
-              ema20: indicators?.regimeIndicators?.ema20 ?? 0,
-              ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-              ema200: indicators?.regimeIndicators?.ema200 ?? 0,
-              entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
-              maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
-              entryTooExtended: indicators?.entryTooExtended ?? false
-            },
-            executionOrderId: executionResult.orderId,
-            clientOrderId
-          });
-
-          if (!openResult.ok) {
-            console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals LOCAL_STATE_FAILED symbol=${symbol} message=${openResult.message}`);
-            markReconciliationPending(symbol);
-            results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason: `Filled but local state was not created: ${openResult.message}` });
-            errorsBySymbol.set(symbol, openResult.message);
-            continue;
-          }
-
-          if (!PAPER_TRADING && signerClient) {
-            const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-            const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
-            if (!verification.ok) {
-              console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_PENDING symbol=${symbol} mismatch=${verification.mismatch}`);
-              markReconciliationPending(symbol);
-              notifyError({ context: 'signal-check', symbol, error: `Position verification pending: ${verification.mismatch}` });
-              results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: `Position reconciliation pending: ${verification.mismatch}` });
-              errorsBySymbol.set(symbol, verification.mismatch ?? 'Verification failed');
-              continue;
-            }
-            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
-            unlockSymbol(symbol);
-            await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
-          } else {
-            unlockSymbol(symbol);
-          }
-
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals POSITION_OPENED symbol=${symbol}`);
-          results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened' });
-        } finally {
-          endPositionOpening(symbol);
+        // Критическое исправление: снять блокировку ПОСЛЕ исполнения, но ДО создания локальной позиции
+        if (!executionResult.ok) {
+          endPositionOpening(symbol);  // ← Снять блокировку при ошибке исполнения
+          console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals EXECUTION_FAILED symbol=${symbol} status=${executionResult.status} message=${executionResult.message}`);
+          if (executionResult.status === 'unknown') markReconciliationPending(symbol);
+          results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: executionResult.message ?? 'Execution failed' });
+          errorsBySymbol.set(symbol, executionResult.message ?? 'Execution failed');
+          continue;
         }
+
+        if (executionResult.filledQuantity <= 0 || executionResult.averageFillPrice == null) {
+          endPositionOpening(symbol);  // ← Снять блокировку при partial fill
+          console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_REQUIRED symbol=${symbol} filledQuantity=${executionResult.filledQuantity}`);
+          markReconciliationPending(symbol);
+          results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: 'Fill result requires reconciliation' });
+          errorsBySymbol.set(symbol, 'Fill result requires reconciliation');
+          continue;
+        }
+
+        // Снять блокировку ПЕРЕД созданием локальной позиции
+        endPositionOpening(symbol);
+
+        const openResult = openPosition({
+          symbol,
+          marketId,
+          side,
+          entryPrice: executionResult.averageFillPrice,
+          quantity: executionResult.filledQuantity,
+          takeProfitPrice,
+          stopLossPrice,
+          exchangeStopLossPrice: stopLossPrice,
+          exchangeTakeProfitPrice: takeProfitPrice,
+          exchangeStopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId,
+          exchangeTakeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId,
+          exchangeStopLossClientOrderIndex: executionResult.protectiveOrders?.stopLossClientOrderIndex,
+          exchangeTakeProfitClientOrderIndex: executionResult.protectiveOrders?.takeProfitClientOrderIndex,
+          metadata: {
+            regime,
+            macdCrossUp: indicators?.macdCrossUp ?? false,
+            macdCrossDown: indicators?.macdCrossDown ?? false,
+            lastRsi: indicators?.lastRsi ?? 0,
+            lastAtr: indicators?.lastAtr ?? 0,
+            adx: indicators?.regimeIndicators?.adx ?? 0,
+            bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
+            atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
+            ema20: indicators?.regimeIndicators?.ema20 ?? 0,
+            ema50: indicators?.regimeIndicators?.ema50 ?? 0,
+            ema200: indicators?.regimeIndicators?.ema200 ?? 0,
+            entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
+            maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
+            entryTooExtended: indicators?.entryTooExtended ?? false
+          },
+          executionOrderId: executionResult.orderId,
+          clientOrderId
+        });
+
+        if (!openResult.ok) {
+          console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals LOCAL_STATE_FAILED symbol=${symbol} message=${openResult.message}`);
+          markReconciliationPending(symbol);
+          results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason: `Filled but local state was not created: ${openResult.message}` });
+          errorsBySymbol.set(symbol, openResult.message);
+          continue;
+        }
+
+        if (!PAPER_TRADING && signerClient) {
+          const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+          const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
+          if (!verification.ok) {
+            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_PENDING symbol=${symbol} mismatch=${verification.mismatch}`);
+            markReconciliationPending(symbol);
+            notifyError({ context: 'signal-check', symbol, error: `Position verification pending: ${verification.mismatch}` });
+            results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: `Position reconciliation pending: ${verification.mismatch}` });
+            errorsBySymbol.set(symbol, verification.mismatch ?? 'Verification failed');
+            continue;
+          }
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
+          unlockSymbol(symbol);
+          await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
+        } else {
+          unlockSymbol(symbol);
+        }
+
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals POSITION_OPENED symbol=${symbol}`);
+        results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened' });
       } catch (error) {
+        endPositionOpening(symbol);  // ← Снять блокировку при исключении
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals ERROR symbol=${symbol} error=${message}`);
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
