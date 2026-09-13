@@ -121,7 +121,7 @@ export function notifyPositionClose(data: {
     | 'breakeven_stop'
     | 'dead_trade_mfe'
     | 'reconciliation_missing_remote'
-    | 'reconciliation_severe_mismatch',
+    | 'reconciliation_severe_mismatch'
     | 'partial_close_reconciliation';
   positionAgeSeconds: number;
   balance: number;
