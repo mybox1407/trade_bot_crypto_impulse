@@ -485,6 +485,22 @@ export async function fetchTopLighterMarkets(
     }))
   );
 
+  // Логирование decimals для каждого рынка
+  console.log(
+    `[${new Date().toISOString()}] Market decimals details:`
+  );
+  for (const market of markets) {
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `Market ${market.symbol} ` +
+        `marketId=${market.marketId} ` +
+        `priceDecimals=${market.priceDecimals} ` +
+        `sizeDecimals=${market.sizeDecimals} ` +
+        `minBaseAmount=${market.minBaseAmount} ` +
+        `minQuoteAmount=${market.minQuoteAmount}`
+    );
+  }
+
   return markets;
 }
 
