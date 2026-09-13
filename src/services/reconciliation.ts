@@ -120,10 +120,16 @@ function parsePosition(rawInput: Record<string, unknown>): LighterPosition | nul
   };
 }
 
-async function fetchJson(url: URL, logContext: string): Promise<unknown> {
+async function fetchJson(url: URL, logContext: string, authToken?: string): Promise<unknown> {
   console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} START url=${url.toString()}`);
 
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (authToken) {
+    headers.Authorization = authToken;
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} Using auth token`);
+  }
+
+  const response = await fetch(url, { headers });
   const text = await response.text();
 
   console.log(`[${new Date().toISOString()}] [LIGHTER REST] ${logContext} RESPONSE status=${response.status}`);
@@ -153,8 +159,23 @@ async function fetchJson(url: URL, logContext: string): Promise<unknown> {
   return data;
 }
 
+function createAuthToken(signerClient: SignerClient, apiKeyIndex: number): string | undefined {
+  try {
+    const [authToken, authError] = signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex);
+    if (authError || !authToken) {
+      console.error(`[${new Date().toISOString()}] [LIGHTER REST] Failed to create auth token: ${authError ?? 'unknown'}`);
+      return undefined;
+    }
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] Auth token created successfully`);
+    return authToken;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_auth_token_with_expiry ERROR:`, error);
+    return undefined;
+  }
+}
+
 export async function fetchAccountPositions(
-  _signerClient: SignerClient,
+  signerClient: SignerClient,
   accountIndex: number
 ): Promise<LighterPosition[]> {
   if (!Number.isInteger(accountIndex) || accountIndex < 0) {
@@ -165,7 +186,10 @@ export async function fetchAccountPositions(
   url.searchParams.set('by', 'index');
   url.searchParams.set('value', String(accountIndex));
 
-  const data = await fetchJson(url, `fetchAccountPositions accountIndex=${accountIndex}`);
+  const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+  const authToken = createAuthToken(signerClient, apiKeyIndex);
+
+  const data = await fetchJson(url, `fetchAccountPositions accountIndex=${accountIndex}`, authToken ?? undefined);
   const positions = getPositionRecords(data)
     .map(parsePosition)
     .filter((position): position is LighterPosition => position !== null);
@@ -384,13 +408,20 @@ export async function verifyPositionAfterFill(
   return { ok: false, pending: true, mismatch: lastMismatch };
 }
 
-export async function syncLiveBalance(accountIndex: number): Promise<void> {
+export async function syncLiveBalance(
+  signerClient: SignerClient,
+  accountIndex: number
+): Promise<void> {
   console.log(`[${new Date().toISOString()}] [RECONCILIATION] syncLiveBalance START accountIndex=${accountIndex}`);
 
   const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
   url.searchParams.set('by', 'index');
   url.searchParams.set('value', String(accountIndex));
-  const data = await fetchJson(url, `syncLiveBalance accountIndex=${accountIndex}`);
+
+  const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+  const authToken = createAuthToken(signerClient, apiKeyIndex);
+
+  const data = await fetchJson(url, `syncLiveBalance accountIndex=${accountIndex}`, authToken ?? undefined);
   const root = getRecord(data);
   if (!root) throw new Error('Invalid account response structure');
 
