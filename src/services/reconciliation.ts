@@ -285,7 +285,7 @@ export async function reconcileAccount(
       if (mismatch.reason === 'missing_local' && mismatch.remote) {
         console.log(`[${new Date().toISOString()}] [RECONCILIATION] restoring missing_local symbol=${mismatch.symbol} marketId=${mismatch.remote.marketId}`);
         const persisted = await loadOpenPositions();
-        const persistedPosition = persisted.find(position => getPositionKey(position) === getPositionKey(mismatch.remote!));
+        const persistedPosition = persisted.positions.find((position: VirtualPosition) => getPositionKey(position) === getPositionKey(mismatch.remote!));
         if (persistedPosition) {
           const restored = buildRestoredPosition({
             ...persistedPosition,
@@ -336,7 +336,7 @@ export async function restoreStateAfterRestart(
   let errors = 0;
   for (const mismatch of result.mismatches) {
     if (mismatch.reason === 'missing_local' && mismatch.remote) {
-      const exists = persisted.some(position => getPositionKey(position) === getPositionKey(mismatch.remote!));
+      const exists = persisted.positions.some((position: VirtualPosition) => getPositionKey(position) === getPositionKey(mismatch.remote!));
       if (exists) restored++; else errors++;
     } else if (mismatch.reason !== 'missing_remote') {
       errors++;
