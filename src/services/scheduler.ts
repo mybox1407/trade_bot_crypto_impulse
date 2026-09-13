@@ -33,7 +33,7 @@ import {
 } from './positionState';
 import { TRADE_FEE_RATE } from './strategy';
 import { logPositionCheck, logError } from './logger';
-import { notifyStartup, notifyError } from './telegram';
+import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
 import axios from 'axios';
 import {
   refreshTopMarkets,
@@ -202,27 +202,6 @@ function formatOpenPositionsForTelegram(): string {
   }).join('\n');
 }
 
-async function sendTelegramSummary(results: SignalResult[]): Promise<void> {
-  const active = results.filter(result => ['signal', 'no-signal', 'not-ready', 'error'].includes(result.status));
-  const signals = results.filter(result => result.status === 'signal').length;
-  const noSignals = results.filter(result => result.status === 'no-signal' || result.status === 'not-ready').length;
-  const errors = results.filter(result => result.status === 'error').length;
-  if (!active.length && !signals && !errors) return;
-
-  const text = active.map(result => {
-    if (result.status === 'error') return `❌ ${result.symbol}: ERROR - ${result.reason}`;
-    if (result.status === 'not-ready') return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
-    if (result.status === 'signal') return `${result.side === 'long' ? '🟢' : '🔴'} ${result.symbol} [${result.regime}]: ${result.side?.toUpperCase()} @ ${formatPrice(result.price ?? 0)} - ${result.reason}`;
-    return `${result.symbol} [${result.regime}]: No signal - ${result.reason}`;
-  }).join('\n');
-
-  const message = `📊 Signal Check Summary\n\n📈 Open positions: ${getOpenPositionsCount()}/${MAX_PARALLEL_POSITIONS}\n${formatOpenPositionsForTelegram()}\n\n💰 Equity: ${getBalance().toFixed(2)}\n🔒 Reserved: ${getReservedCapital().toFixed(2)}\n💵 Available: ${getAvailableBalance().toFixed(2)}\n\n🔍 Signal scan:\n${text}\n\n📊 Signals: ${signals} | No signals: ${noSignals}\n⚠️ Errors: ${errors}\n\n${new Date().toISOString()}`;
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return;
-  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text: message }, { timeout: 5000 });
-}
-
 function validateSignalPrice(price: number | undefined): number {
   if (price == null || !Number.isFinite(price) || price <= 0) throw new Error(`Invalid signal price: ${price}`);
   return price;
@@ -231,6 +210,52 @@ function validateSignalPrice(price: number | undefined): number {
 function validateQuantity(quantity: number): number {
   if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Invalid order quantity: ${quantity}`);
   return quantity;
+}
+
+async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
+  if (PAPER_TRADING || !signerClient) return false;
+
+  const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+  const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] hasPendingRemoteOrder START marketId=${marketId}`);
+
+  try {
+    const [activeData, inactiveData] = await Promise.all([
+      fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${accountIndex}&limit=100`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? ''
+        }
+      }).then(r => r.json()),
+      fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${accountIndex}&limit=100`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? ''
+        }
+      }).then(r => r.json())
+    ]);
+
+    const activeOrders = Array.isArray((activeData as any).orders) ? (activeData as any).orders : [];
+    const inactiveOrders = Array.isArray((inactiveData as any).orders) ? (inactiveData as any).orders : [];
+
+    const pendingOrder = [...activeOrders, ...inactiveOrders].find(
+      (order: any) =>
+        Number(order.market_index) === marketId &&
+        (order.status === 'submitted' || order.status === 'partially_filled' || order.status === 'open')
+    );
+
+    if (pendingOrder) {
+      console.log(`[${new Date().toISOString()}] [SCHEDULER] hasPendingRemoteOrder FOUND marketId=${marketId} orderId=${pendingOrder.order_id}`);
+      return true;
+    }
+
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] hasPendingRemoteOrder NONE marketId=${marketId}`);
+    return false;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [SCHEDULER] hasPendingRemoteOrder ERROR marketId=${marketId}:`, error);
+    return false;
+  }
 }
 
 async function verifyRemotePositionClosed(symbol: string, marketId: number): Promise<boolean> {
@@ -257,7 +282,10 @@ async function checkSignals(): Promise<void> {
     return;
   }
   signalCheckRunning = true;
+
   const results: SignalResult[] = [];
+  const errorsBySymbol = new Map<string, string>();
+
   try {
     const tradingPairs = new Set(getActiveTradingPairs().map(normalizeSymbol));
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSymbols START symbolsCount=${tradingPairs.size}`);
@@ -288,6 +316,13 @@ async function checkSignals(): Promise<void> {
         if (getOpenPositionsCount() >= MAX_PARALLEL_POSITIONS) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals MAX_POSITIONS symbol=${symbol}`);
           results.push({ symbol, status: 'max-positions', regime: 'max-positions', hasSignal: false, reason: `Max positions reached: ${MAX_PARALLEL_POSITIONS}` });
+          continue;
+        }
+
+        const pendingOrder = await hasPendingRemoteOrder(resolveMarket(symbol).marketId);
+        if (pendingOrder) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals PENDING_REMOTE_ORDER symbol=${symbol}`);
+          results.push({ symbol, status: 'not-ready', regime: 'pending-order', hasSignal: false, reason: 'Pending remote order exists' });
           continue;
         }
 
@@ -322,6 +357,7 @@ async function checkSignals(): Promise<void> {
         if (side !== 'long' && side !== 'short') {
           console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals INVALID_SIDE symbol=${symbol} side=${side}`);
           results.push({ symbol, status: 'error', regime, hasSignal: true, side: 'none', price, reason: 'Signal side is invalid' });
+          errorsBySymbol.set(symbol, 'Signal side is invalid');
           continue;
         }
 
@@ -353,6 +389,7 @@ async function checkSignals(): Promise<void> {
             console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals EXECUTION_FAILED symbol=${symbol} status=${executionResult.status} message=${executionResult.message}`);
             if (executionResult.status === 'unknown') markReconciliationPending(symbol);
             results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: executionResult.message ?? 'Execution failed' });
+            errorsBySymbol.set(symbol, executionResult.message ?? 'Execution failed');
             continue;
           }
 
@@ -360,6 +397,7 @@ async function checkSignals(): Promise<void> {
             console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_REQUIRED symbol=${symbol} filledQuantity=${executionResult.filledQuantity}`);
             markReconciliationPending(symbol);
             results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: 'Fill result requires reconciliation' });
+            errorsBySymbol.set(symbol, 'Fill result requires reconciliation');
             continue;
           }
 
@@ -401,6 +439,7 @@ async function checkSignals(): Promise<void> {
             console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals LOCAL_STATE_FAILED symbol=${symbol} message=${openResult.message}`);
             markReconciliationPending(symbol);
             results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason: `Filled but local state was not created: ${openResult.message}` });
+            errorsBySymbol.set(symbol, openResult.message);
             continue;
           }
 
@@ -412,6 +451,7 @@ async function checkSignals(): Promise<void> {
               markReconciliationPending(symbol);
               notifyError({ context: 'signal-check', symbol, error: `Position verification pending: ${verification.mismatch}` });
               results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: `Position reconciliation pending: ${verification.mismatch}` });
+              errorsBySymbol.set(symbol, verification.mismatch ?? 'Verification failed');
               continue;
             }
             console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
@@ -430,13 +470,17 @@ async function checkSignals(): Promise<void> {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals ERROR symbol=${symbol} error=${message}`);
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
-        notifyError({ context: 'signal-check', symbol, error: message });
+        errorsBySymbol.set(symbol, message);
         results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
     }
 
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals END symbolsCount=${tradingPairs.size}`);
-    await sendTelegramSummary(results);
+
+    await sendAggregatedSignalSummary({
+      results,
+      errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined
+    });
   } finally {
     signalCheckRunning = false;
   }
