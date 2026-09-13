@@ -455,7 +455,7 @@ async function checkSignals(): Promise<void> {
             }
             console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
             unlockSymbol(symbol);
-            await syncLiveBalance(accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
+            await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error)); // ← Исправлено
           } else {
             unlockSymbol(symbol);
           }
