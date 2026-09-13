@@ -196,8 +196,14 @@ export class LighterExecutionService implements ExecutionService {
       if (!orderId) continue;
       const orderIndex = Number(orderId);
       if (!Number.isSafeInteger(orderIndex) || orderIndex < 0) throw new Error(`Invalid exchange order index: ${orderId}`);
+
+      console.log(`[${new Date().toISOString()}] [LIGHTER REST] cancel_order START marketId=${orders.marketId} orderIndex=${orderIndex}`);
       const [, , sdkError] = await this.signerClient.cancel_order(orders.marketId, BigInt(orderIndex), -1, this.apiKeyIndex);
-      if (sdkError) throw new Error(`Failed to cancel protective order ${orderId}: ${sdkError}`);
+      if (sdkError) {
+        console.error(`[${new Date().toISOString()}] [LIGHTER REST] cancel_order ERROR marketId=${orders.marketId} orderIndex=${orderIndex} error=${sdkError}`);
+        throw new Error(`Failed to cancel protective order ${orderId}: ${sdkError}`);
+      }
+      console.log(`[${new Date().toISOString()}] [LIGHTER REST] cancel_order OK marketId=${orders.marketId} orderIndex=${orderIndex}`);
     }
   }
 
@@ -223,33 +229,60 @@ export class LighterExecutionService implements ExecutionService {
     const slExecution = this.toPriceUnits(req.side === 'long' ? req.stopLossPrice * (1 - slippage) : req.stopLossPrice * (1 + slippage), priceDecimals);
     const tpExecution = this.toPriceUnits(req.side === 'long' ? req.takeProfitPrice * (1 - slippage) : req.takeProfitPrice * (1 + slippage), priceDecimals);
 
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_sl_order START marketId=${req.marketId} clientOrderIndex=${slClientOrderIndex} baseAmount=${baseAmount} trigger=${slTrigger} execution=${slExecution}`);
     const [slOrder, slTx, slError] = await this.signerClient.create_sl_order(req.marketId, slClientOrderIndex, baseAmount, slTrigger, slExecution, isAsk, true, -1, this.apiKeyIndex);
-    if (slError) throw new Error(`SL creation failed: ${slError}`);
+    if (slError) {
+      console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_sl_order ERROR marketId=${req.marketId} clientOrderIndex=${slClientOrderIndex} error=${slError}`);
+      throw new Error(`SL creation failed: ${slError}`);
+    }
+    const slOrderId = this.readExchangeOrderId(slOrder as Record<string, unknown> | null) ?? this.readTransactionId(slTx);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_sl_order OK marketId=${req.marketId} clientOrderIndex=${slClientOrderIndex} orderId=${slOrderId ?? 'n/a'}`);
 
     try {
+      console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_tp_order START marketId=${req.marketId} clientOrderIndex=${tpClientOrderIndex} baseAmount=${baseAmount} trigger=${tpTrigger} execution=${tpExecution}`);
       const [tpOrder, tpTx, tpError] = await this.signerClient.create_tp_order(req.marketId, tpClientOrderIndex, baseAmount, tpTrigger, tpExecution, isAsk, true, -1, this.apiKeyIndex);
-      if (tpError) throw new Error(`TP creation failed: ${tpError}`);
+      if (tpError) {
+        console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_tp_order ERROR marketId=${req.marketId} clientOrderIndex=${tpClientOrderIndex} error=${tpError}`);
+        throw new Error(`TP creation failed: ${tpError}`);
+      }
+      const tpOrderId = this.readExchangeOrderId(tpOrder as Record<string, unknown> | null) ?? this.readTransactionId(tpTx);
+      console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_tp_order OK marketId=${req.marketId} clientOrderIndex=${tpClientOrderIndex} orderId=${tpOrderId ?? 'n/a'}`);
+
       return {
         marketId: req.marketId,
-        stopLossOrderId: this.readExchangeOrderId(slOrder as Record<string, unknown> | null) ?? this.readTransactionId(slTx),
-        takeProfitOrderId: this.readExchangeOrderId(tpOrder as Record<string, unknown> | null) ?? this.readTransactionId(tpTx),
+        stopLossOrderId: slOrderId,
+        takeProfitOrderId: tpOrderId,
         stopLossClientOrderIndex: slClientOrderIndex,
         takeProfitClientOrderIndex: tpClientOrderIndex
       };
     } catch (error) {
       try {
         const slId = this.readExchangeOrderId(slOrder as Record<string, unknown> | null);
-        if (slId) await this.cancelProtectiveOrders({ marketId: req.marketId, stopLossOrderId: slId, takeProfitOrderId: undefined, stopLossClientOrderIndex: slClientOrderIndex, takeProfitClientOrderIndex: tpClientOrderIndex });
+        if (slId) {
+          console.log(`[${new Date().toISOString()}] [LIGHTER REST] cancel_sl_after_tp_failure START marketId=${req.marketId} slOrderId=${slId}`);
+          await this.cancelProtectiveOrders({ marketId: req.marketId, stopLossOrderId: slId, takeProfitOrderId: undefined, stopLossClientOrderIndex: slClientOrderIndex, takeProfitClientOrderIndex: tpClientOrderIndex });
+          console.log(`[${new Date().toISOString()}] [LIGHTER REST] cancel_sl_after_tp_failure OK marketId=${req.marketId} slOrderId=${slId}`);
+        }
       } catch { /* best effort */ }
       throw error;
     }
   }
 
   private async submitMarketOrder(marketId: number, clientOrderIndex: number, baseAmount: number, expectedPrice: number, isAsk: boolean, reduceOnly: boolean, priceDecimals: number): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
-    const [order, tx, sdkError] = await this.signerClient.create_market_order(marketId, clientOrderIndex, baseAmount, this.toPriceUnits(expectedPrice, priceDecimals), isAsk, reduceOnly, -1, this.apiKeyIndex);
-    if (sdkError) return { ok: false, message: sdkError };
+    const priceUnits = this.toPriceUnits(expectedPrice, priceDecimals);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order START marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} priceUnits=${priceUnits} isAsk=${isAsk} reduceOnly=${reduceOnly}`);
+
+    const [order, tx, sdkError] = await this.signerClient.create_market_order(marketId, clientOrderIndex, baseAmount, priceUnits, isAsk, reduceOnly, -1, this.apiKeyIndex);
+    if (sdkError) {
+      console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order ERROR marketId=${marketId} clientOrderIndex=${clientOrderIndex} error=${sdkError}`);
+      return { ok: false, message: sdkError };
+    }
+
     const orderId = this.readExchangeOrderId(order as Record<string, unknown> | null) ?? this.readTransactionId(tx);
-    console.log(`[${new Date().toISOString()}] [LIGHTER] ORDER ACCEPTED marketId=${marketId} clientOrderIndex=${clientOrderIndex} orderId=${orderId ?? 'n/a'}`);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order OK marketId=${marketId} clientOrderIndex=${clientOrderIndex} orderId=${orderId ?? 'n/a'}`);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order RESPONSE order=`, JSON.stringify(order, null, 2));
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order RESPONSE tx=`, JSON.stringify(tx, null, 2));
+
     return { ok: true, orderId };
   }
 
@@ -321,7 +354,7 @@ export class LighterExecutionService implements ExecutionService {
         const active = await this.fetchOrders('accountActiveOrders');
         const inactive = await this.fetchOrders('accountInactiveOrders');
         const order = [...active, ...inactive].find(item =>
-          orderId && String(item.order_index) === orderId || Number(item.client_order_index) === clientOrderIndex
+          (orderId && String(item.order_index) === orderId) || Number(item.client_order_index) === clientOrderIndex
         );
 
         if (order) {
@@ -329,6 +362,7 @@ export class LighterExecutionService implements ExecutionService {
           const filledQuantity = this.toNumber(order.filled_base_amount) ?? 0;
           const filledQuote = this.toNumber(order.filled_quote_amount) ?? 0;
           if (status === 'filled' || status.startsWith('filled')) {
+            console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote}`);
             return {
               status: 'FILLED',
               filledQuantity,
@@ -337,15 +371,16 @@ export class LighterExecutionService implements ExecutionService {
             };
           }
           if (status.startsWith('cancel') || status === 'rejected' || status === 'failed') {
-            console.log(`[${new Date().toISOString()}] [LIGHTER] Order canceled status=${order.status} marketId=${marketId} clientOrderIndex=${clientOrderIndex}`);
+            console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest CANCELED marketId=${marketId} clientOrderIndex=${clientOrderIndex} status=${order.status}`);
             return { status: 'CANCELED', filledQuantity: 0, fee: 0 };
           }
         }
       } catch (error) {
-        console.error(`[${new Date().toISOString()}] [LIGHTER] REST reconciliation error:`, error);
+        console.error(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest ERROR marketId=${marketId} clientOrderIndex=${clientOrderIndex}:`, error);
       }
       await this.sleep(REST_POLL_INTERVAL_MS);
     }
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest TIMEOUT marketId=${marketId} clientOrderIndex=${clientOrderIndex}`);
     return { status: 'UNKNOWN', filledQuantity: 0, fee: 0 };
   }
 
@@ -353,10 +388,30 @@ export class LighterExecutionService implements ExecutionService {
     const url = new URL(`${LIGHTER_API_URL}/api/v1/${endpoint}`);
     url.searchParams.set('account_index', String(this.accountIndex));
     url.searchParams.set('limit', '100');
+
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders START endpoint=${endpoint} url=${url.toString()}`);
+
     const response = await fetch(url, { headers: { Accept: 'application/json', Authorization: this.authToken ?? '' } });
-    const data = await response.json() as Record<string, unknown>;
-    const orders = data.orders;
-    return Array.isArray(orders) ? orders.filter((order): order is LighterOrder => !!order && typeof order === 'object') : [];
+    const responseText = await response.text();
+
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders RESPONSE status=${response.status} endpoint=${endpoint}`);
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders RESPONSE body=${responseText.slice(0, 2000)}`);
+
+    let data: unknown;
+    try {
+      data = JSON.parse(responseText);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders JSON_PARSE_ERROR endpoint=${endpoint} error=${error instanceof Error ? error.message : 'unknown'}`);
+      return [];
+    }
+
+    const record = data as Record<string, unknown>;
+    const orders = record.orders;
+    const result = Array.isArray(orders) ? orders.filter((order): order is LighterOrder => !!order && typeof order === 'object') : [];
+
+    console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders END endpoint=${endpoint} ordersCount=${result.length}`);
+
+    return result;
   }
 
   private handleAccountMessage(message: AccountMessage): void {
@@ -525,13 +580,16 @@ export class LighterExecutionService implements ExecutionService {
       this.accountWsConnecting = false;
       try {
         if (!this.authToken) {
+          console.log(`[${new Date().toISOString()}] [LIGHTER WS] Creating auth token for account=${this.accountIndex}`);
           const [auth, authError] = this.signerClient.create_auth_token_with_expiry(60 * 60, undefined, this.apiKeyIndex);
           if (authError || !auth) throw new Error(authError ?? 'Failed to create auth token');
           this.authToken = auth;
+          console.log(`[${new Date().toISOString()}] [LIGHTER WS] Auth token created successfully`);
         }
         ws.send(JSON.stringify({ type: 'subscribe', channel: `account_all/${this.accountIndex}`, auth: this.authToken }));
+        console.log(`[${new Date().toISOString()}] [LIGHTER WS] Subscribed to account_all/${this.accountIndex}`);
       } catch (error) {
-        console.error(`[${new Date().toISOString()}] Account WebSocket auth error:`, error);
+        console.error(`[${new Date().toISOString()}] [LIGHTER WS] Auth error:`, error);
         ws.close();
         return;
       }
@@ -542,16 +600,21 @@ export class LighterExecutionService implements ExecutionService {
 
     ws.on('message', raw => {
       if (this.accountWs !== ws) return;
-      try { this.handleAccountMessage(JSON.parse(raw.toString()) as AccountMessage); }
-      catch (error) { console.error(`[${new Date().toISOString()}] Invalid account WS message:`, error); }
+      try {
+        const message = JSON.parse(raw.toString()) as AccountMessage;
+        console.log(`[${new Date().toISOString()}] [LIGHTER WS] Message received:`, JSON.stringify(message).slice(0, 500));
+        this.handleAccountMessage(message);
+      }
+      catch (error) { console.error(`[${new Date().toISOString()}] [LIGHTER WS] Invalid message:`, error); }
     });
 
     ws.on('error', error => {
-      if (this.accountWs === ws) console.error(`[${new Date().toISOString()}] Account WebSocket error:`, error);
+      if (this.accountWs === ws) console.error(`[${new Date().toISOString()}] [LIGHTER WS] Error:`, error);
     });
 
     ws.on('close', () => {
       if (this.accountWs !== ws) return;
+      console.log(`[${new Date().toISOString()}] [LIGHTER WS] Connection closed`);
       this.accountWsConnecting = false;
       this.accountWs = undefined;
       if (this.accountWsPingTimer) clearInterval(this.accountWsPingTimer);
@@ -559,6 +622,7 @@ export class LighterExecutionService implements ExecutionService {
       if (!this.accountWsStopped) {
         this.accountWsReconnectTimer = setTimeout(() => {
           this.accountWsReconnectTimer = undefined;
+          console.log(`[${new Date().toISOString()}] [LIGHTER WS] Reconnecting...`);
           this.ensureAccountWebSocket();
         }, 3_000);
       }
@@ -566,6 +630,7 @@ export class LighterExecutionService implements ExecutionService {
   }
 
   stop(): void {
+    console.log(`[${new Date().toISOString()}] [LIGHTER] Execution service stopping`);
     this.accountWsStopped = true;
     if (this.accountWsReconnectTimer) clearTimeout(this.accountWsReconnectTimer);
     if (this.accountWsPingTimer) clearInterval(this.accountWsPingTimer);
@@ -578,5 +643,6 @@ export class LighterExecutionService implements ExecutionService {
       }, 'Execution service stopped'));
     }
     this.pendingOrders.clear();
+    console.log(`[${new Date().toISOString()}] [LIGHTER] Execution service stopped`);
   }
 }
