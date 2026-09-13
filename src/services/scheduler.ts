@@ -236,43 +236,64 @@ function validateQuantity(quantity: number): number {
 async function verifyRemotePositionClosed(symbol: string, marketId: number): Promise<boolean> {
   if (PAPER_TRADING || !signerClient) return true;
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] verifyRemotePositionClosed START symbol=${symbol} marketId=${marketId}`);
   for (const delay of [0, 250, 500, 1000, 2000, 3000]) {
     if (delay) await new Promise(resolve => setTimeout(resolve, delay));
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
     const remote = remotePositions.find(position => position.marketId === marketId) ?? remotePositions.find(position => normalizeSymbol(position.symbol) === normalizeSymbol(symbol));
-    if (!remote) return true;
+    if (!remote) {
+      console.log(`[${new Date().toISOString()}] [SCHEDULER] verifyRemotePositionClosed OK symbol=${symbol} marketId=${marketId}`);
+      return true;
+    }
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] verifyRemotePositionClosed STILL_EXISTS symbol=${symbol} marketId=${marketId}`);
   }
   notifyError({ context: 'position-close-verification', symbol, error: `Position ${symbol} still exists on exchange after close` });
   return false;
 }
 
 async function checkSignals(): Promise<void> {
-  if (signalCheckRunning) return;
+  if (signalCheckRunning) {
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals SKIP already running`);
+    return;
+  }
   signalCheckRunning = true;
   const results: SignalResult[] = [];
   try {
-    for (const rawSymbol of new Set(getActiveTradingPairs().map(normalizeSymbol))) {
+    const tradingPairs = new Set(getActiveTradingPairs().map(normalizeSymbol));
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSymbols START symbolsCount=${tradingPairs.size}`);
+
+    for (const rawSymbol of tradingPairs) {
       const symbol = normalizeSymbol(rawSymbol);
       try {
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals SYMBOL=${symbol}`);
+
         if (isReconciliationPending(symbol)) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_PENDING symbol=${symbol}`);
           results.push({ symbol, status: 'not-ready', regime: 'reconciliation-pending', hasSignal: false, reason: 'Confirmed fill is awaiting remote position reconciliation' });
           continue;
         }
+
         if (isSymbolLocked(symbol) || isPositionOpening(symbol)) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals LOCKED symbol=${symbol}`);
           results.push({ symbol, status: 'not-ready', regime: 'locked', hasSignal: false, reason: 'Symbol is locked' });
           continue;
         }
+
         if (hasOpenPosition(symbol)) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals POSITION_OPEN symbol=${symbol}`);
           results.push({ symbol, status: 'position-open', regime: 'position-open', hasSignal: false, reason: 'Open position exists' });
           continue;
         }
+
         if (getOpenPositionsCount() >= MAX_PARALLEL_POSITIONS) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals MAX_POSITIONS symbol=${symbol}`);
           results.push({ symbol, status: 'max-positions', regime: 'max-positions', hasSignal: false, reason: `Max positions reached: ${MAX_PARALLEL_POSITIONS}` });
           continue;
         }
 
         const result = await runBotOnce(symbol, '15m');
         if (!result.ready) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals NOT_READY symbol=${symbol} reason=${result.reason ?? 'unknown'}`);
           results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready' });
           continue;
         }
@@ -285,15 +306,21 @@ async function checkSignals(): Promise<void> {
         const stopLossPrice = (result as any).stopLossPrice as number | null;
         const regime = (result as any).regime as string;
         const indicators = (result as any).indicators as any;
+
         if ((result as any).skipReason) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals SKIP symbol=${symbol} reason=${(result as any).skipReason}`);
           results.push({ symbol, status: 'no-signal', regime, hasSignal: false, reason: (result as any).skipReason });
           continue;
         }
+
         if (!buy && !sell) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals NO_SIGNAL symbol=${symbol}`);
           results.push({ symbol, status: 'no-signal', regime, hasSignal: false, reason: 'No signal' });
           continue;
         }
+
         if (side !== 'long' && side !== 'short') {
+          console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals INVALID_SIDE symbol=${symbol} side=${side}`);
           results.push({ symbol, status: 'error', regime, hasSignal: true, side: 'none', price, reason: 'Signal side is invalid' });
           continue;
         }
@@ -303,6 +330,7 @@ async function checkSignals(): Promise<void> {
         const marketId = requireMarketId(resolveMarket(symbol).marketId, `open ${symbol}`);
         const activeMarket = getActiveMarket(symbol);
         if (!activeMarket) throw new Error(`Active market metadata not found: ${symbol}`);
+
         const stopDistance = Math.abs(expectedPrice - stopLossPrice);
         const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
         if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) throw new Error(`Invalid total risk per unit: ${totalRiskPerUnit}`);
@@ -310,21 +338,26 @@ async function checkSignals(): Promise<void> {
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
         if (!beginPositionOpening(symbol)) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OPENING_IN_PROGRESS symbol=${symbol}`);
           results.push({ symbol, status: 'not-ready', regime: 'opening', hasSignal: true, side, price: expectedPrice, reason: 'Opening already in progress' });
           continue;
         }
 
         try {
           const clientOrderId = `${symbol}-${Date.now()}-open`;
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OPENING symbol=${symbol} side=${side} quantity=${quantity} price=${expectedPrice}`);
+
           const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
 
           if (!executionResult.ok) {
+            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals EXECUTION_FAILED symbol=${symbol} status=${executionResult.status} message=${executionResult.message}`);
             if (executionResult.status === 'unknown') markReconciliationPending(symbol);
             results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: executionResult.message ?? 'Execution failed' });
             continue;
           }
 
           if (executionResult.filledQuantity <= 0 || executionResult.averageFillPrice == null) {
+            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_REQUIRED symbol=${symbol} filledQuantity=${executionResult.filledQuantity}`);
             markReconciliationPending(symbol);
             results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: 'Fill result requires reconciliation' });
             continue;
@@ -365,6 +398,7 @@ async function checkSignals(): Promise<void> {
           });
 
           if (!openResult.ok) {
+            console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals LOCAL_STATE_FAILED symbol=${symbol} message=${openResult.message}`);
             markReconciliationPending(symbol);
             results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason: `Filled but local state was not created: ${openResult.message}` });
             continue;
@@ -374,26 +408,34 @@ async function checkSignals(): Promise<void> {
             const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
             const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
             if (!verification.ok) {
+              console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_PENDING symbol=${symbol} mismatch=${verification.mismatch}`);
               markReconciliationPending(symbol);
               notifyError({ context: 'signal-check', symbol, error: `Position verification pending: ${verification.mismatch}` });
               results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: `Position reconciliation pending: ${verification.mismatch}` });
               continue;
             }
+            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
             unlockSymbol(symbol);
             await syncLiveBalance(accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
+          } else {
+            unlockSymbol(symbol);
           }
 
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals POSITION_OPENED symbol=${symbol}`);
           results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened' });
         } finally {
           endPositionOpening(symbol);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals ERROR symbol=${symbol} error=${message}`);
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
         notifyError({ context: 'signal-check', symbol, error: message });
         results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
     }
+
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals END symbolsCount=${tradingPairs.size}`);
     await sendTelegramSummary(results);
   } finally {
     signalCheckRunning = false;
@@ -405,68 +447,126 @@ async function executeClose(position: ReturnType<typeof getPositions>[number], c
   const activeMarket = getActiveMarket(position.symbol);
   if (!activeMarket) throw new Error(`Active market metadata not found: ${position.symbol}`);
   const clientOrderId = `${position.symbol}-${Date.now()}-${reason}`;
+
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose START symbol=${position.symbol} reason=${reason} quantity=${position.quantity}`);
+
   const executionResult = await executionService.closePosition({ symbol: position.symbol, marketId, positionSide: position.side, quantity: position.quantity, expectedPrice: currentPrice, reason, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals });
   if (!executionResult.ok) throw new Error(`Close execution failed for ${position.symbol}: ${executionResult.message ?? 'unknown error'}`);
   if (executionResult.filledQuantity <= 0 || executionResult.averageFillPrice == null) throw new Error(`Close execution returned no confirmed fill for ${position.symbol}`);
 
   if (executionResult.filledQuantity < position.quantity * 0.999999) {
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL symbol=${position.symbol} filled=${executionResult.filledQuantity} original=${position.quantity}`);
     const partial = partialClosePosition(position.id, executionResult.filledQuantity, executionResult.averageFillPrice, { executionOrderId: executionResult.orderId, clientOrderId, fee: executionResult.fee });
     if (!partial.ok) throw new Error(`Partial close state update failed for ${position.symbol}: ${partial.message}`);
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL_OK symbol=${position.symbol}`);
     return true;
   }
 
   if (executionService.cancelProtectiveOrders && (position.exchangeStopLossOrderId || position.exchangeTakeProfitOrderId)) {
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose CANCEL_PROTECTIVE symbol=${position.symbol}`);
     await executionService.cancelProtectiveOrders({ marketId, stopLossOrderId: position.exchangeStopLossOrderId, takeProfitOrderId: position.exchangeTakeProfitOrderId, stopLossClientOrderIndex: position.exchangeStopLossClientOrderIndex ?? 0, takeProfitClientOrderIndex: position.exchangeTakeProfitClientOrderIndex ?? 0 });
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose CANCEL_PROTECTIVE_OK symbol=${position.symbol}`);
   }
 
   const result = closePosition(position.id, executionResult.averageFillPrice, reason, { executionOrderId: executionResult.orderId, clientOrderId, fee: executionResult.fee });
   if (!result.ok) throw new Error(`Close state update failed for ${position.symbol}: ${result.message}`);
+
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose OK symbol=${position.symbol} reason=${reason}`);
   return true;
 }
 
 async function checkPositions(): Promise<void> {
-  if (positionCheckRunning) return;
+  if (positionCheckRunning) {
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SKIP already running`);
+    return;
+  }
   positionCheckRunning = true;
   try {
-    for (const snapshot of getPositions()) {
-      const position = getPositions().find(item => item.id === snapshot.id);
-      if (!position || isReconciliationPending(position.symbol)) continue;
+    const snapshot = getPositions();
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions START positionsCount=${snapshot.length}`);
+
+    for (const snapshotPosition of snapshot) {
+      const position = getPositions().find(item => item.id === snapshotPosition.id);
+      if (!position || isReconciliationPending(position.symbol)) {
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SKIP symbol=${position?.symbol} reason=${position ? 'reconciliation-pending' : 'not found'}`);
+        continue;
+      }
+
       const symbol = normalizeSymbol(position.symbol);
       try {
         const markPrice = getMarkPrice(symbol);
         const exitPrice = getExitPrice(symbol, position.side);
         if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) throw new Error(`Mark price unavailable for ${symbol}`);
         if (exitPrice == null || !Number.isFinite(exitPrice) || exitPrice <= 0) throw new Error(`Exit price unavailable for ${symbol}`);
+
         const pnl = position.side === 'long' ? (markPrice - position.entryPrice) * position.quantity : (position.entryPrice - markPrice) * position.quantity;
         const pnlPercent = position.notional > 0 ? pnl / position.notional * 100 : 0;
         const previousMax = position.metadata?.maxUnrealizedPnL ?? Number.NEGATIVE_INFINITY;
         const previousMaxPercent = position.metadata?.maxUnrealizedPnLPercent ?? Number.NEGATIVE_INFINITY;
         const maxPnl = Math.max(previousMax, pnl);
         const maxPnlPercent = Math.max(previousMaxPercent, pnlPercent);
+
         updatePositionMetadata(position.id, { maxUnrealizedPnL: maxPnl, maxUnrealizedPnLPercent: maxPnlPercent, worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) });
+
         const tpHit = position.side === 'long' ? markPrice >= position.takeProfitPrice : markPrice <= position.takeProfitPrice;
         const slHit = position.side === 'long' ? markPrice <= position.stopLossPrice : markPrice >= position.stopLossPrice;
-        if (tpHit) await executeClose(position, exitPrice, 'take_profit');
-        else if (slHit) await executeClose(position, exitPrice, position.metadata?.beTriggered ? 'breakeven_stop' : 'stop_loss');
-        else logPositionCheck({ timestamp: new Date().toISOString(), positionId: position.id, symbol, side: position.side, entryPrice: position.entryPrice, currentPrice: markPrice, takeProfitPrice: position.takeProfitPrice, stopLossPrice: position.stopLossPrice, unrealizedPnL: pnl, unrealizedPnLPercent: pnlPercent, distanceToTP: Math.abs(position.takeProfitPrice - markPrice), distanceToTPPercent: Math.abs(position.takeProfitPrice - markPrice) / markPrice * 100, distanceToSL: Math.abs(position.stopLossPrice - markPrice), distanceToSLPercent: Math.abs(position.stopLossPrice - markPrice) / markPrice * 100, hitTakeProfit: tpHit, hitStopLoss: slHit, action: 'hold', positionAgeSeconds: Math.max(0, Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000)) });
+
+        if (tpHit) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TP_HIT symbol=${symbol} pnl=${pnl.toFixed(2)}`);
+          await executeClose(position, exitPrice, 'take_profit');
+        } else if (slHit) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SL_HIT symbol=${symbol} pnl=${pnl.toFixed(2)} beTriggered=${position.metadata?.beTriggered ?? false}`);
+          await executeClose(position, exitPrice, position.metadata?.beTriggered ? 'breakeven_stop' : 'stop_loss');
+        } else {
+          logPositionCheck({
+            timestamp: new Date().toISOString(),
+            positionId: position.id,
+            symbol,
+            side: position.side,
+            entryPrice: position.entryPrice,
+            currentPrice: markPrice,
+            takeProfitPrice: position.takeProfitPrice,
+            stopLossPrice: position.stopLossPrice,
+            unrealizedPnL: pnl,
+            unrealizedPnLPercent: pnlPercent,
+            distanceToTP: Math.abs(position.takeProfitPrice - markPrice),
+            distanceToTPPercent: Math.abs(position.takeProfitPrice - markPrice) / markPrice * 100,
+            distanceToSL: Math.abs(position.stopLossPrice - markPrice),
+            distanceToSLPercent: Math.abs(position.stopLossPrice - markPrice) / markPrice * 100,
+            hitTakeProfit: tpHit,
+            hitStopLoss: slHit,
+            action: 'hold',
+            positionAgeSeconds: Math.max(0, Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000))
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[${new Date().toISOString()}] [SCHEDULER] checkPositions ERROR symbol=${symbol} error=${message}`);
         notifyError({ context: 'position-check', symbol, error: message });
       }
     }
+
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions END`);
   } finally {
     positionCheckRunning = false;
   }
 }
 
 export async function startScheduler(): Promise<void> {
-  if (schedulerStarted) return;
+  if (schedulerStarted) {
+    console.warn(`[${new Date().toISOString()}] [SCHEDULER] startScheduler SKIP already started`);
+    return;
+  }
+
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] startScheduler START`);
   schedulerStarted = true;
   schedulerStopping = false;
+
   try {
     executionService = createExecutionService();
     initializeSignerClient();
     await refreshTopMarkets();
+
     if (!PAPER_TRADING && signerClient) {
       const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
       await syncLiveBalance(accountIndex);
@@ -475,13 +575,18 @@ export async function startScheduler(): Promise<void> {
       startReconciliationLoop(signerClient, accountIndex);
       startBalanceSyncLoop(accountIndex);
     }
+
     startMarketRefresh();
     await checkSignals();
     await checkPositions();
+
     signalCheckInterval = setInterval(() => void checkSignals().catch(console.error), SIGNAL_CHECK_INTERVAL_MS);
     positionCheckInterval = setInterval(() => void checkPositions().catch(console.error), POSITION_CHECK_INTERVAL_MS);
+
     notifyStartup({ port: Number(process.env.PORT) || 3006, tradingPairs: getActiveTradingPairs(), signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000, positionInterval: POSITION_CHECK_INTERVAL_MS / 1000 });
+    console.log(`[${new Date().toISOString()}] [SCHEDULER] startScheduler OK`);
   } catch (error) {
+    console.error(`[${new Date().toISOString()}] [SCHEDULER] startScheduler ERROR:`, error);
     schedulerStarted = false;
     stopMarketRefresh();
     stopReconciliationLoop();
@@ -492,20 +597,28 @@ export async function startScheduler(): Promise<void> {
 }
 
 export async function stopScheduler(): Promise<void> {
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] stopScheduler START`);
+
   stopReconciliationLoop();
   stopBalanceSyncLoop();
   stopMarketRefresh();
+
   if (signalCheckInterval) clearInterval(signalCheckInterval);
   if (positionCheckInterval) clearInterval(positionCheckInterval);
   signalCheckInterval = null;
   positionCheckInterval = null;
+
   executionService?.stop?.();
+
   if (!schedulerStopping) {
     schedulerStopping = true;
     for (const symbol of new Set([...getPositions().map(position => normalizeSymbol(position.symbol)), ...getActiveTradingPairs().map(normalizeSymbol)])) {
       try { stopMarketData(symbol); } catch (error) { console.error(`[${new Date().toISOString()}] Failed to stop market data for ${symbol}:`, error); }
     }
   }
+
   await flushPositionPersistence().catch(error => console.error(`[${new Date().toISOString()}] Failed to flush persistence:`, error));
   schedulerStarted = false;
+
+  console.log(`[${new Date().toISOString()}] [SCHEDULER] stopScheduler OK`);
 }
