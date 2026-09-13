@@ -21,6 +21,7 @@ export interface PersistedPositionState {
   version: 1;
   updatedAt: string;
   positions: VirtualPosition[];
+  reconciliationPendingSymbols?: string[];
 }
 
 function getStateFilePath(): string {
@@ -28,7 +29,8 @@ function getStateFilePath(): string {
 }
 
 export async function saveOpenPositions(
-  positions: VirtualPosition[]
+  positions: VirtualPosition[],
+  reconciliationPendingSymbols?: string[]
 ): Promise<void> {
   const filePath =
     getStateFilePath();
@@ -50,7 +52,10 @@ export async function saveOpenPositions(
             }
           : undefined
       })
-    )
+    ),
+    reconciliationPendingSymbols: reconciliationPendingSymbols
+      ? [...reconciliationPendingSymbols]
+      : undefined
   };
 
   await mkdir(
@@ -76,9 +81,10 @@ export async function saveOpenPositions(
   );
 }
 
-export async function loadOpenPositions(): Promise<
-  VirtualPosition[]
-> {
+export async function loadOpenPositions(): Promise<{
+  positions: VirtualPosition[];
+  reconciliationPendingSymbols: string[];
+}> {
   const filePath =
     getStateFilePath();
 
@@ -107,13 +113,21 @@ export async function loadOpenPositions(): Promise<
       );
     }
 
-    return parsed.positions;
+    return {
+      positions: parsed.positions,
+      reconciliationPendingSymbols: Array.isArray(parsed.reconciliationPendingSymbols)
+        ? parsed.reconciliationPendingSymbols
+        : []
+    };
   } catch (error) {
     const code =
       error as NodeJS.ErrnoException;
 
     if (code.code === 'ENOENT') {
-      return [];
+      return {
+        positions: [],
+        reconciliationPendingSymbols: []
+      };
     }
 
     throw error;
@@ -121,5 +135,5 @@ export async function loadOpenPositions(): Promise<
 }
 
 export async function clearOpenPositions(): Promise<void> {
-  await saveOpenPositions([]);
+  await saveOpenPositions([], []);
 }
