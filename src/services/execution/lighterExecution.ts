@@ -103,6 +103,13 @@ export class LighterExecutionService implements ExecutionService {
       return this.rejectedResult(req, `Opening order already in progress for market ${req.marketId}`);
     }
 
+    // Пункт 3: проверка pending remote orders перед открытием
+    const hasPending = await this.checkPendingRemoteOrders(req.marketId);
+    if (hasPending) {
+      console.log(`[${new Date().toISOString()}] [LIGHTER] openPosition REJECTED marketId=${req.marketId} reason=pending_remote_order`);
+      return this.rejectedResult(req, `Pending remote order exists for market ${req.marketId}`);
+    }
+
     this.openingMarkets.add(req.marketId);
 
     try {
@@ -204,6 +211,47 @@ export class LighterExecutionService implements ExecutionService {
         throw new Error(`Failed to cancel protective order ${orderId}: ${sdkError}`);
       }
       console.log(`[${new Date().toISOString()}] [LIGHTER REST] cancel_order OK marketId=${orders.marketId} orderIndex=${orderIndex}`);
+    }
+  }
+
+  private async checkPendingRemoteOrders(marketId: number): Promise<boolean> {
+    try {
+      console.log(`[${new Date().toISOString()}] [LIGHTER] checkPendingRemoteOrders START marketId=${marketId}`);
+
+      const [activeData, inactiveData] = await Promise.all([
+        fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${this.accountIndex}&limit=100`, {
+          headers: {
+            Accept: 'application/json',
+            Authorization: this.authToken ?? ''
+          }
+        }).then(r => r.json()),
+        fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${this.accountIndex}&limit=100`, {
+          headers: {
+            Accept: 'application/json',
+            Authorization: this.authToken ?? ''
+          }
+        }).then(r => r.json())
+      ]);
+
+      const activeOrders = Array.isArray((activeData as any).orders) ? (activeData as any).orders : [];
+      const inactiveOrders = Array.isArray((inactiveData as any).orders) ? (inactiveData as any).orders : [];
+
+      const pendingOrder = [...activeOrders, ...inactiveOrders].find(
+        (order: any) =>
+          Number(order.market_index) === marketId &&
+          (order.status === 'submitted' || order.status === 'partially_filled' || order.status === 'open')
+      );
+
+      if (pendingOrder) {
+        console.log(`[${new Date().toISOString()}] [LIGHTER] checkPendingRemoteOrders FOUND marketId=${marketId} orderId=${pendingOrder.order_id} status=${pendingOrder.status}`);
+        return true;
+      }
+
+      console.log(`[${new Date().toISOString()}] [LIGHTER] checkPendingRemoteOrders NONE marketId=${marketId}`);
+      return false;
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] [LIGHTER] checkPendingRemoteOrders ERROR marketId=${marketId}:`, error);
+      return false;
     }
   }
 
