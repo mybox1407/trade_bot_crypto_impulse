@@ -16,7 +16,8 @@ import {
 } from './telegram';
 
 import {
-  saveOpenPositions
+  saveOpenPositions,
+  loadOpenPositions
 } from './persistence';
 
 export const POSITION_PERCENT = 0.30;
@@ -105,6 +106,7 @@ let reservedCapital = 0;
 let currentPositions: VirtualPosition[] = [];
 let lastClosedTrade: ClosedTrade | null = null;
 let persistenceQueue: Promise<void> = Promise.resolve();
+let reconciliationPendingSymbols = new Set<string>();
 const openingSymbols = new Set<string>();
 
 function normalizeSymbol(symbol: string): string {
@@ -148,9 +150,10 @@ function syncReservedCapital(): void {
 
 function schedulePersistence(): void {
   const snapshot = getPositions();
+  const pendingSymbols = getReconciliationPendingSymbols();
   persistenceQueue = persistenceQueue
     .catch(() => undefined)
-    .then(() => saveOpenPositions(snapshot))
+    .then(() => saveOpenPositions(snapshot, pendingSymbols))
     .catch(error => {
       console.error(`[${new Date().toISOString()}] Failed to persist position state:`, error);
     });
@@ -158,6 +161,28 @@ function schedulePersistence(): void {
 
 export async function flushPositionPersistence(): Promise<void> {
   await persistenceQueue;
+}
+
+export async function loadReconciliationPendingSymbols(): Promise<string[]> {
+  const { reconciliationPendingSymbols: pending } = await loadOpenPositions();
+  reconciliationPendingSymbols = new Set(pending);
+  return pending;
+}
+
+export function getReconciliationPendingSymbols(): string[] {
+  return [...reconciliationPendingSymbols];
+}
+
+export function addReconciliationPendingSymbol(symbol: string): void {
+  reconciliationPendingSymbols.add(normalizeSymbol(symbol));
+}
+
+export function removeReconciliationPendingSymbol(symbol: string): void {
+  reconciliationPendingSymbols.delete(normalizeSymbol(symbol));
+}
+
+export function isReconciliationPendingSymbol(symbol: string): boolean {
+  return reconciliationPendingSymbols.has(normalizeSymbol(symbol));
 }
 
 export function beginPositionOpening(symbol: string): boolean {
