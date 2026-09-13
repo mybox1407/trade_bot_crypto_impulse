@@ -160,8 +160,7 @@ function stopReconciliationLoop(): void {
 
 function startBalanceSyncLoop(accountIndex: number): void {
   balanceSyncInterval = setInterval(() => {
-    void syncLiveBalance(accountIndex).catch(error => {
-      console.error(`[${new Date().toISOString()}] Balance sync error:`, error);
+    void syncLiveBalance(signerClient!, accountIndex).catch(error => {console.error(`[${new Date().toISOString()}] Balance sync error:`, error);
     });
   }, 5 * 60_000);
 }
@@ -613,7 +612,7 @@ export async function startScheduler(): Promise<void> {
 
     if (!PAPER_TRADING && signerClient) {
       const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-      await syncLiveBalance(accountIndex);
+      await syncLiveBalance(signerClient, accountIndex); // ← Исправлено
       const restore = await restoreStateAfterRestart(signerClient, accountIndex);
       if (restore.errors > 0) notifyError({ context: 'reconciliation', error: `State reconciliation completed with ${restore.errors} errors` });
       startReconciliationLoop(signerClient, accountIndex);
