@@ -29,7 +29,11 @@ import {
   VirtualPosition,
   beginPositionOpening,
   endPositionOpening,
-  isPositionOpening
+  isPositionOpening,
+  loadReconciliationPendingSymbols,
+  addReconciliationPendingSymbol,
+  removeReconciliationPendingSymbol,
+  isReconciliationPendingSymbol
 } from './positionState';
 import { TRADE_FEE_RATE } from './strategy';
 import { logPositionCheck, logError } from './logger';
@@ -72,7 +76,6 @@ let schedulerStopping = false;
 let schedulerStarted = false;
 
 const symbolLocks = new Map<string, number>();
-const reconciliationPending = new Set<string>();
 
 function isSymbolLocked(symbol: string): boolean {
   const key = normalizeSymbol(symbol);
@@ -92,17 +95,17 @@ function lockSymbol(symbol: string, durationMs = SIGNAL_LOCK_MS): void {
 function unlockSymbol(symbol: string): void {
   const key = normalizeSymbol(symbol);
   symbolLocks.delete(key);
-  reconciliationPending.delete(key);
+  removeReconciliationPendingSymbol(key);
 }
 
 function markReconciliationPending(symbol: string): void {
   const key = normalizeSymbol(symbol);
-  reconciliationPending.add(key);
+  addReconciliationPendingSymbol(key);
   lockSymbol(key, SIGNAL_LOCK_MS);
 }
 
 function isReconciliationPending(symbol: string): boolean {
-  return reconciliationPending.has(normalizeSymbol(symbol));
+  return isReconciliationPendingSymbol(symbol);
 }
 
 function formatPrice(price: number): string {
@@ -160,7 +163,8 @@ function stopReconciliationLoop(): void {
 
 function startBalanceSyncLoop(accountIndex: number): void {
   balanceSyncInterval = setInterval(() => {
-    void syncLiveBalance(signerClient!, accountIndex).catch(error => {console.error(`[${new Date().toISOString()}] Balance sync error:`, error);
+    void syncLiveBalance(signerClient!, accountIndex).catch(error => {
+      console.error(`[${new Date().toISOString()}] Balance sync error:`, error);
     });
   }, 5 * 60_000);
 }
@@ -455,7 +459,7 @@ async function checkSignals(): Promise<void> {
             }
             console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
             unlockSymbol(symbol);
-            await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error)); // ← Исправлено
+            await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
           } else {
             unlockSymbol(symbol);
           }
@@ -610,9 +614,12 @@ export async function startScheduler(): Promise<void> {
     initializeSignerClient();
     await refreshTopMarkets();
 
+    // Загрузка reconciliation pending символов из persistence
+    await loadReconciliationPendingSymbols();
+
     if (!PAPER_TRADING && signerClient) {
       const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-      await syncLiveBalance(signerClient, accountIndex); // ← Исправлено
+      await syncLiveBalance(signerClient, accountIndex);
       const restore = await restoreStateAfterRestart(signerClient, accountIndex);
       if (restore.errors > 0) notifyError({ context: 'reconciliation', error: `State reconciliation completed with ${restore.errors} errors` });
       startReconciliationLoop(signerClient, accountIndex);
