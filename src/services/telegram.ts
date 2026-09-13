@@ -281,3 +281,51 @@ export function notifySignalCheck(data: {
     text
   });
 }
+
+export async function sendAggregatedSignalSummary(data: {
+  results: Array<{
+    symbol: string;
+    status: string;
+    regime: string;
+    hasSignal: boolean;
+    side?: string;
+    price?: number;
+    reason?: string;
+  }>;
+  errorsBySymbol?: Record<string, string>;
+}): Promise<void> {
+  const { results, errorsBySymbol } = data;
+
+  const active = results.filter(result => ['signal', 'no-signal', 'not-ready', 'error'].includes(result.status));
+  const signals = results.filter(result => result.status === 'signal').length;
+  const noSignals = results.filter(result => result.status === 'no-signal' || result.status === 'not-ready').length;
+  const errors = results.filter(result => result.status === 'error').length;
+
+  if (!active.length && !signals && !errors && !errorsBySymbol) return;
+
+  const text = active.map(result => {
+    if (result.status === 'error') return `❌ ${result.symbol}: ERROR - ${result.reason}`;
+    if (result.status === 'not-ready') return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
+    if (result.status === 'signal') return `${result.side === 'long' ? '🟢' : '🔴'} ${result.symbol} [${result.regime}]: ${result.side?.toUpperCase()} @ ${result.price?.toFixed(4) ?? 'n/a'} - ${result.reason}`;
+    return `${result.symbol} [${result.regime}]: No signal - ${result.reason}`;
+  }).join('\n');
+
+  let errorSummary = '';
+  if (errorsBySymbol && Object.keys(errorsBySymbol).length > 0) {
+    const errorLines = Object.entries(errorsBySymbol)
+      .slice(0, 5)
+      .map(([symbol, error]) => `• ${symbol}: ${error}`)
+      .join('\n');
+
+    const moreCount = Object.keys(errorsBySymbol).length - 5;
+    errorSummary = `\n\n⚠️ Errors summary:\n${errorLines}${moreCount > 0 ? `\n• ...and ${moreCount} more` : ''}`;
+  }
+
+  const message = `📊 Signal Check Summary\n\n📈 Open positions: ${results.filter(r => r.status === 'position-open').length}\n\n💰 Equity: N/A\n\n🔍 Signal scan:\n${text}${errorSummary}\n\n📊 Signals: ${signals} | No signals: ${noSignals}\n⚠️ Errors: ${errors}\n\n${new Date().toISOString()}`;
+
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+
+  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text: message }, { timeout: 5000 });
+}
