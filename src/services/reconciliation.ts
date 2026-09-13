@@ -21,7 +21,7 @@ type ReconciliationMismatch = {
   symbol: string;
   local?: ReturnType<typeof getPositions>[number];
   remote?: LighterPosition;
-  reason: 'missing_remote' | 'missing_local' | 'quantity_mismatch' | 'side_mismatch' | 'price_mismatch';
+  reason: 'missing_remote' | 'missing_local' | 'quantity_mismatch' | 'side_mismatch' | 'price_mismatch' | 'remote_unavailable';
 };
 
 type ReconciliationResult = {
