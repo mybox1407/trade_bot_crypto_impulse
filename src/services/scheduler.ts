@@ -480,7 +480,8 @@ async function checkSignals(): Promise<void> {
 
     await sendAggregatedSignalSummary({
       results,
-      errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined
+      errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined,
+      equity: getBalance()
     });
   } finally {
     signalCheckRunning = false;
