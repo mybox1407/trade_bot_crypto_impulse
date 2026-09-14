@@ -316,8 +316,6 @@ export class LighterExecutionService implements ExecutionService {
   }
 
   private async submitMarketOrder(marketId: number, clientOrderIndex: number, baseAmount: number, expectedPrice: number, isAsk: boolean, reduceOnly: boolean, priceDecimals: number): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
-    // Используем create_market_order_if_slippage() вместо create_market_order()
-    // Это FOK логика: если цена уходит за slippage bound - ордер не создаётся вообще
     const maxSlippageBps = Number(process.env.LIGHTER_MARKET_SLIPPAGE_BPS ?? 50);
     if (!Number.isFinite(maxSlippageBps) || maxSlippageBps <= 0) {
       throw new Error(`Invalid LIGHTER_MARKET_SLIPPAGE_BPS: ${maxSlippageBps}`);
@@ -425,8 +423,6 @@ export class LighterExecutionService implements ExecutionService {
           const filledQuantity = this.toNumber(order.filled_base_amount) ?? 0;
           const filledQuote = this.toNumber(order.filled_quote_amount) ?? 0;
 
-          // Критическое исправление: проверяем filled_base_amount ДО проверки статуса!
-          // Если filledQuantity > 0 - ордер исполнился (даже если статус "canceled...")
           if (filledQuantity > 0) {
             console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED (by volume) marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote} status=${status}`);
             return {
@@ -504,7 +500,6 @@ export class LighterExecutionService implements ExecutionService {
     const filledQuote = this.toNumber(order.filled_quote_amount) ?? 0;
     const status = String(order.status ?? '').toLowerCase();
 
-    // Критическое исправление: проверяем filled_base_amount ДО проверки статуса!
     if (filledQuantity > 0) {
       const averageFillPrice = filledQuote > 0 ? filledQuote / filledQuantity : this.averagePendingFillPrice(pending);
       this.resolvePendingOrder(clientOrderIndex, {
@@ -544,6 +539,28 @@ export class LighterExecutionService implements ExecutionService {
     const price = this.toNumber(trade.price);
     if (quantity == null || quantity <= 0 || price == null || price <= 0) return;
     pending.fills.push({ quantity, price, fee: this.toNumber(trade.taker_fee) ?? this.toNumber(trade.maker_fee) ?? 0 });
+
+    // Критическое исправление: проверяем сумму fills после каждого trade
+    const totalFilled = pending.fills.reduce((sum, fill) => sum + fill.quantity, 0);
+    if (totalFilled >= pending.requestedQuantity * 0.99) {  // 99% заполнено
+      const averageFillPrice = pending.fills.reduce(
+        (sum, fill) => sum + fill.quantity * fill.price, 0
+      ) / totalFilled;
+
+      console.log(`[${new Date().toISOString()}] [LIGHTER WS] Trade fill confirmed via WebSocket totalFilled=${totalFilled} requested=${pending.requestedQuantity}`);
+
+      this.resolvePendingOrder(clientOrderIndex, {
+        ok: true,
+        status: totalFilled >= pending.requestedQuantity ? 'filled' : 'partially_filled',
+        orderId: pending.orderId ?? '',
+        clientOrderId: pending.clientOrderId ?? '',
+        requestedQuantity: pending.requestedQuantity,
+        filledQuantity: totalFilled,
+        averageFillPrice,
+        fee: this.sumPendingFees(pending),
+        message: 'Execution confirmed from WebSocket fills'
+      });
+    }
   }
 
   private resolvePendingOrder(clientOrderIndex: number, result: ExecutionResult): void {
