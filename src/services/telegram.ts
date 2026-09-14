@@ -233,6 +233,7 @@ export function notifyStartup(data: {
   tradingPairs: string[];
   signalInterval: number;
   positionInterval: number;
+  balance: number;
 }) {
   const text =
     `🤖 TRADING BOT STARTED 🤖\n\n` +
@@ -240,6 +241,7 @@ export function notifyStartup(data: {
     `Trading Pairs: ${data.tradingPairs.join(', ')}\n` +
     `Signal Check: every ${data.signalInterval}s\n` +
     `Position Check: every ${data.positionInterval}s\n\n` +
+    `Balance: $${data.balance.toFixed(2)}\n\n` +
     `Bot is running...\n\n` +
     `${new Date().toISOString()}`;
 
@@ -294,8 +296,9 @@ export async function sendAggregatedSignalSummary(data: {
     reason?: string;
   }>;
   errorsBySymbol?: Record<string, string>;
+  equity?: number;
 }): Promise<void> {
-  const { results, errorsBySymbol } = data;
+  const { results, errorsBySymbol, equity } = data;
 
   const active = results.filter(result => ['signal', 'no-signal', 'not-ready', 'error'].includes(result.status));
   const signals = results.filter(result => result.status === 'signal').length;
@@ -322,7 +325,19 @@ export async function sendAggregatedSignalSummary(data: {
     errorSummary = `\n\n⚠️ Errors summary:\n${errorLines}${moreCount > 0 ? `\n• ...and ${moreCount} more` : ''}`;
   }
 
-  const message = `📊 Signal Check Summary\n\n📈 Open positions: ${results.filter(r => r.status === 'position-open').length}\n\n💰 Equity: N/A\n\n🔍 Signal scan:\n${text}${errorSummary}\n\n📊 Signals: ${signals} | No signals: ${noSignals}\n⚠️ Errors: ${errors}\n\n${new Date().toISOString()}`;
+  const equityText =
+    equity != null && Number.isFinite(equity)
+      ? `$${equity.toFixed(2)}`
+      : 'N/A';
+
+  const message =
+    `📊 Signal Check Summary\n\n` +
+    `📈 Open positions: ${results.filter(r => r.status === 'position-open').length}\n\n` +
+    `💰 Equity: ${equityText}\n\n` +
+    `🔍 Signal scan:\n${text}${errorSummary}\n\n` +
+    `📊 Signals: ${signals} | No signals: ${noSignals}\n` +
+    `⚠️ Errors: ${errors}\n\n` +
+    `${new Date().toISOString()}`;
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
