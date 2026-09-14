@@ -665,10 +665,7 @@ async function checkPositions(): Promise<void> {
           hitTakeProfit: tpHit,
           hitStopLoss: slHit,
           action: 'hold',
-          positionAgeSeconds,
-          maxUnrealizedPnL: maxPnl,
-          maxUnrealizedPnLPercent: maxPnlPercent,
-          beTriggered: position.metadata?.beTriggered ?? false
+          positionAgeSeconds
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
