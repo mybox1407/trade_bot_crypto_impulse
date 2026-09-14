@@ -639,9 +639,6 @@ async function checkPositions(): Promise<void> {
           position.metadata?.partialClosed === true ||
           position.metadata?.partialClosePending === true;
         
-        const beTriggered =
-          position.metadata?.beTriggered === true;
-        
         if (
           DEAD_TRADE_ENABLED &&
           !partialClosed &&
