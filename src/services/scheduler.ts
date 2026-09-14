@@ -635,19 +635,30 @@ async function checkPositions(): Promise<void> {
         }
 
         // ========== DEAD TRADE LOGIC ==========
+        const partialClosed =
+          position.metadata?.partialClosed === true ||
+          position.metadata?.partialClosePending === true;
+        
+        const beTriggered =
+          position.metadata?.beTriggered === true;
+        
         if (
           DEAD_TRADE_ENABLED &&
+          !partialClosed &&
+          !beTriggered &&
           positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
         ) {
-          const lastAtr = position.metadata?.lastAtr ?? 0;
-          const minMfeAtr = lastAtr * DEAD_TRADE_MIN_MFE_ATR;
+          const entryAtr =
+            position.metadata?.lastAtr ?? 0;
         
-          const favorableMove =
-            position.side === 'long'
-              ? Math.max(0, markPrice - position.entryPrice)
-              : Math.max(0, position.entryPrice - markPrice);
+          const maxUnrealizedPnL =
+            position.metadata?.maxUnrealizedPnL ?? 0;
         
-          const mfeAtr = favorableMove;
+          const mfeAtr =
+            entryAtr > 0 && position.quantity > 0
+              ? maxUnrealizedPnL /
+                (entryAtr * position.quantity)
+              : 0;
         
           console.log(
             `[${new Date().toISOString()}] ` +
@@ -655,25 +666,24 @@ async function checkPositions(): Promise<void> {
             `symbol=${symbol} ` +
             `age=${positionAgeSeconds}s ` +
             `threshold=${DEAD_TRADE_CHECK_AFTER_SEC}s ` +
-            `entry=${position.entryPrice.toFixed(6)} ` +
-            `mark=${markPrice.toFixed(6)} ` +
-            `favorableMove=${favorableMove.toFixed(6)} ` +
-            `lastAtr=${lastAtr.toFixed(6)} ` +
-            `mfeAtr=${mfeAtr.toFixed(6)} ` +
-            `minMfeAtr=${minMfeAtr.toFixed(6)} ` +
+            `entryAtr=${entryAtr.toFixed(6)} ` +
+            `maxUnrealizedPnL=${maxUnrealizedPnL.toFixed(6)} ` +
+            `mfeAtr=${mfeAtr.toFixed(4)} ` +
+            `minMfeAtr=${DEAD_TRADE_MIN_MFE_ATR.toFixed(4)} ` +
+            `partialClosed=${partialClosed} ` +
+            `beTriggered=${beTriggered} ` +
             `pnl=${pnl.toFixed(6)} ` +
             `pnlPercent=${pnlPercent.toFixed(4)}`
           );
         
-          if (mfeAtr >= minMfeAtr && pnl < 0) {
+          if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
             console.log(
               `[${new Date().toISOString()}] ` +
-              `[SCHEDULER] checkPositions DEAD_TRADE ` +
+              `[SCHEDULER] checkPositions DEAD_TRADE_TRIGGER ` +
               `symbol=${symbol} ` +
               `age=${positionAgeSeconds}s ` +
               `mfeAtr=${mfeAtr.toFixed(4)} ` +
-              `minMfeAtr=${minMfeAtr.toFixed(4)} ` +
-              `pnl=${pnl.toFixed(2)}`
+              `minMfeAtr=${DEAD_TRADE_MIN_MFE_ATR.toFixed(4)}`
             );
         
             await executeClose(
@@ -685,7 +695,7 @@ async function checkPositions(): Promise<void> {
             continue;
           }
         }
-
+        
         // ========== LOG POSITION CHECK ==========
         logPositionCheck({
           timestamp: new Date().toISOString(),
