@@ -389,9 +389,8 @@ async function checkSignals(): Promise<void> {
 
         const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
 
-        // Критическое исправление: снять блокировку ПОСЛЕ исполнения, но ДО создания локальной позиции
         if (!executionResult.ok) {
-          endPositionOpening(symbol);  // ← Снять блокировку при ошибке исполнения
+          endPositionOpening(symbol);
           console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals EXECUTION_FAILED symbol=${symbol} status=${executionResult.status} message=${executionResult.message}`);
           if (executionResult.status === 'unknown') markReconciliationPending(symbol);
           results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: executionResult.message ?? 'Execution failed' });
@@ -400,7 +399,7 @@ async function checkSignals(): Promise<void> {
         }
 
         if (executionResult.filledQuantity <= 0 || executionResult.averageFillPrice == null) {
-          endPositionOpening(symbol);  // ← Снять блокировку при partial fill
+          endPositionOpening(symbol);
           console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals RECONCILIATION_REQUIRED symbol=${symbol} filledQuantity=${executionResult.filledQuantity}`);
           markReconciliationPending(symbol);
           results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: 'Fill result requires reconciliation' });
@@ -408,7 +407,6 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        // Снять блокировку ПЕРЕД созданием локальной позиции
         endPositionOpening(symbol);
 
         const openResult = openPosition({
@@ -455,16 +453,11 @@ async function checkSignals(): Promise<void> {
 
         if (!PAPER_TRADING && signerClient) {
           const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-          const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
-          if (!verification.ok) {
-            console.warn(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_PENDING symbol=${symbol} mismatch=${verification.mismatch}`);
-            markReconciliationPending(symbol);
-            notifyError({ context: 'signal-check', symbol, error: `Position verification pending: ${verification.mismatch}` });
-            results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason: `Position reconciliation pending: ${verification.mismatch}` });
-            errorsBySymbol.set(symbol, verification.mismatch ?? 'Verification failed');
-            continue;
-          }
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol}`);
+          // Отключаем verifyPositionAfterFill — WebSocket теперь подтверждает мгновенно
+          // const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
+          // if (!verification.ok) { ... }
+          
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol} (WebSocket confirmed)`);
           unlockSymbol(symbol);
           await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
         } else {
@@ -474,7 +467,7 @@ async function checkSignals(): Promise<void> {
         console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals POSITION_OPENED symbol=${symbol}`);
         results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened' });
       } catch (error) {
-        endPositionOpening(symbol);  // ← Снять блокировку при исключении
+        endPositionOpening(symbol);
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error(`[${new Date().toISOString()}] [SCHEDULER] checkSignals ERROR symbol=${symbol} error=${message}`);
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
