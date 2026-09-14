@@ -635,13 +635,53 @@ async function checkPositions(): Promise<void> {
         }
 
         // ========== DEAD TRADE LOGIC ==========
-        if (DEAD_TRADE_ENABLED && positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC) {
-          const minMfeAtr = (position.metadata?.lastAtr ?? 0) * DEAD_TRADE_MIN_MFE_ATR;
-          const mfeAtr = (position.metadata?.maxUnrealizedPnL ?? 0) / position.quantity;
-          
+        if (
+          DEAD_TRADE_ENABLED &&
+          positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
+        ) {
+          const lastAtr = position.metadata?.lastAtr ?? 0;
+          const minMfeAtr = lastAtr * DEAD_TRADE_MIN_MFE_ATR;
+        
+          const favorableMove =
+            position.side === 'long'
+              ? Math.max(0, markPrice - position.entryPrice)
+              : Math.max(0, position.entryPrice - markPrice);
+        
+          const mfeAtr = favorableMove;
+        
+          console.log(
+            `[${new Date().toISOString()}] ` +
+            `[SCHEDULER] checkPositions DEAD_TRADE_CHECK ` +
+            `symbol=${symbol} ` +
+            `age=${positionAgeSeconds}s ` +
+            `threshold=${DEAD_TRADE_CHECK_AFTER_SEC}s ` +
+            `entry=${position.entryPrice.toFixed(6)} ` +
+            `mark=${markPrice.toFixed(6)} ` +
+            `favorableMove=${favorableMove.toFixed(6)} ` +
+            `lastAtr=${lastAtr.toFixed(6)} ` +
+            `mfeAtr=${mfeAtr.toFixed(6)} ` +
+            `minMfeAtr=${minMfeAtr.toFixed(6)} ` +
+            `pnl=${pnl.toFixed(6)} ` +
+            `pnlPercent=${pnlPercent.toFixed(4)}`
+          );
+        
           if (mfeAtr >= minMfeAtr && pnl < 0) {
-            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions DEAD_TRADE symbol=${symbol} age=${positionAgeSeconds}s mfeAtr=${mfeAtr.toFixed(4)} minMfeAtr=${minMfeAtr.toFixed(4)} pnl=${pnl.toFixed(2)}`);
-            await executeClose(position, exitPrice, 'dead_trade_mfe');
+            console.log(
+              `[${new Date().toISOString()}] ` +
+              `[SCHEDULER] checkPositions DEAD_TRADE ` +
+              `symbol=${symbol} ` +
+              `age=${positionAgeSeconds}s ` +
+              `mfeAtr=${mfeAtr.toFixed(4)} ` +
+              `minMfeAtr=${minMfeAtr.toFixed(4)} ` +
+              `pnl=${pnl.toFixed(2)}`
+            );
+        
+            await executeClose(
+              position,
+              exitPrice,
+              'dead_trade_mfe'
+            );
+        
             continue;
           }
         }
