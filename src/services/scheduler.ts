@@ -760,7 +760,13 @@ export async function startScheduler(): Promise<void> {
     signalCheckInterval = setInterval(() => void checkSignals().catch(console.error), SIGNAL_CHECK_INTERVAL_MS);
     positionCheckInterval = setInterval(() => void checkPositions().catch(console.error), POSITION_CHECK_INTERVAL_MS);
 
-    notifyStartup({ port: Number(process.env.PORT) || 3006, tradingPairs: getActiveTradingPairs(), signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000, positionInterval: POSITION_CHECK_INTERVAL_MS / 1000 });
+    notifyStartup({
+      port: Number(process.env.PORT) || 3006,
+      tradingPairs: getActiveTradingPairs(),
+      signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
+      positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
+      balance: getBalance()
+    });
     console.log(`[${new Date().toISOString()}] [SCHEDULER] startScheduler OK`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [SCHEDULER] startScheduler ERROR:`, error);
