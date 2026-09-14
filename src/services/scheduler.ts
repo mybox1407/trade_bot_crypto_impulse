@@ -562,7 +562,12 @@ async function checkPositions(): Promise<void> {
         const maxPnl = Math.max(previousMax, pnl);
         const maxPnlPercent = Math.max(previousMaxPercent, pnlPercent);
 
-        updatePositionMetadata(position.id, { maxUnrealizedPnL: maxPnl, maxUnrealizedPnLPercent: maxPnlPercent, worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) });
+        updatePositionMetadata(position.id, { 
+          maxUnrealizedPnL: maxPnl, 
+          maxUnrealizedPnLPercent: maxPnlPercent, 
+          worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), 
+          worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) 
+        });
 
         const tpHit = position.side === 'long' ? markPrice >= position.takeProfitPrice : markPrice <= position.takeProfitPrice;
         const slHit = position.side === 'long' ? markPrice <= position.stopLossPrice : markPrice >= position.stopLossPrice;
@@ -570,31 +575,101 @@ async function checkPositions(): Promise<void> {
         if (tpHit) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TP_HIT symbol=${symbol} pnl=${pnl.toFixed(2)}`);
           await executeClose(position, exitPrice, 'take_profit');
-        } else if (slHit) {
+          continue;
+        }
+        
+        if (slHit) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SL_HIT symbol=${symbol} pnl=${pnl.toFixed(2)} beTriggered=${position.metadata?.beTriggered ?? false}`);
           await executeClose(position, exitPrice, position.metadata?.beTriggered ? 'breakeven_stop' : 'stop_loss');
-        } else {
-          logPositionCheck({
-            timestamp: new Date().toISOString(),
-            positionId: position.id,
-            symbol,
-            side: position.side,
-            entryPrice: position.entryPrice,
-            currentPrice: markPrice,
-            takeProfitPrice: position.takeProfitPrice,
-            stopLossPrice: position.stopLossPrice,
-            unrealizedPnL: pnl,
-            unrealizedPnLPercent: pnlPercent,
-            distanceToTP: Math.abs(position.takeProfitPrice - markPrice),
-            distanceToTPPercent: Math.abs(position.takeProfitPrice - markPrice) / markPrice * 100,
-            distanceToSL: Math.abs(position.stopLossPrice - markPrice),
-            distanceToSLPercent: Math.abs(position.stopLossPrice - markPrice) / markPrice * 100,
-            hitTakeProfit: tpHit,
-            hitStopLoss: slHit,
-            action: 'hold',
-            positionAgeSeconds: Math.max(0, Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000))
-          });
+          continue;
         }
+
+        // ========== BREAKEVEN LOGIC ==========
+        const beThreshold = position.entryPrice * (1 + BE_THRESHOLD_PERCENT / 100 * (position.side === 'long' ? 1 : -1));
+        const beTriggered = position.side === 'long' 
+          ? markPrice >= beThreshold 
+          : markPrice <= beThreshold;
+        
+        if (beTriggered && !position.metadata?.beTriggered) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions BE_TRIGGERED symbol=${symbol} threshold=${beThreshold.toFixed(4)} markPrice=${markPrice.toFixed(4)}`);
+          updatePositionMetadata(position.id, { beTriggered: true });
+        }
+
+        if (position.metadata?.beTriggered) {
+          const beStop = position.entryPrice * (1 + 0.0005 * (position.side === 'long' ? 1 : -1)); // 0.05% above entry
+          const newStopLoss = position.side === 'long' 
+            ? Math.max(position.stopLossPrice, beStop) 
+            : Math.min(position.stopLossPrice, beStop);
+          
+          if (newStopLoss !== position.stopLossPrice) {
+            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions BE_STOP_UPDATE symbol=${symbol} oldSL=${position.stopLossPrice.toFixed(4)} newSL=${newStopLoss.toFixed(4)}`);
+            updatePositionStopLoss(position.id, newStopLoss);
+          }
+        }
+
+        // ========== TRAILING STOP LOGIC ==========
+        if (maxPnlPercent >= TIME_STOP_MFE_PERCENT * 100) { // 0.3% MFE
+          const trailingDistance = markPrice * TRAILING_DISTANCE_PERCENT / 100; // 0.35%
+          const trailingStop = position.side === 'long' 
+            ? markPrice - trailingDistance 
+            : markPrice + trailingDistance;
+          
+          const newTrailingStop = position.side === 'long'
+            ? Math.max(position.stopLossPrice, trailingStop)
+            : Math.min(position.stopLossPrice, trailingStop);
+          
+          if (newTrailingStop !== position.stopLossPrice && newTrailingStop > position.entryPrice * (position.side === 'long' ? 1.001 : 0.999)) {
+            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TRAILING_STOP symbol=${symbol} maxPnlPercent=${maxPnlPercent.toFixed(2)}% oldSL=${position.stopLossPrice.toFixed(4)} newSL=${newTrailingStop.toFixed(4)}`);
+            updatePositionStopLoss(position.id, newTrailingStop);
+          }
+        }
+
+        // ========== TIME STOP LOGIC ==========
+        const positionAgeSeconds = Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000);
+        if (positionAgeSeconds >= TIME_STOP_SECONDS) { // 30 minutes
+          if (pnlPercent > TIME_STOP_MAX_LOSS_PERCENT && pnlPercent < TIME_STOP_MFE_PERCENT * 100) {
+            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TIME_STOP symbol=${symbol} age=${positionAgeSeconds}s pnlPercent=${pnlPercent.toFixed(2)}%`);
+            await executeClose(position, exitPrice, 'time_stop');
+            continue;
+          }
+        }
+
+        // ========== DEAD TRADE LOGIC ==========
+        if (DEAD_TRADE_ENABLED && positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC) {
+          const minMfeAtr = (position.metadata?.lastAtr ?? 0) * DEAD_TRADE_MIN_MFE_ATR;
+          const mfeAtr = (position.metadata?.maxUnrealizedPnL ?? 0) / position.quantity;
+          
+          if (mfeAtr >= minMfeAtr && pnl < 0) {
+            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions DEAD_TRADE symbol=${symbol} age=${positionAgeSeconds}s mfeAtr=${mfeAtr.toFixed(4)} minMfeAtr=${minMfeAtr.toFixed(4)} pnl=${pnl.toFixed(2)}`);
+            await executeClose(position, exitPrice, 'dead_trade_mfe');
+            continue;
+          }
+        }
+
+        // ========== LOG POSITION CHECK ==========
+        logPositionCheck({
+          timestamp: new Date().toISOString(),
+          positionId: position.id,
+          symbol,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          currentPrice: markPrice,
+          takeProfitPrice: position.takeProfitPrice,
+          stopLossPrice: position.stopLossPrice,
+          unrealizedPnL: pnl,
+          unrealizedPnLPercent: pnlPercent,
+          distanceToTP: Math.abs(position.takeProfitPrice - markPrice),
+          distanceToTPPercent: Math.abs(position.takeProfitPrice - markPrice) / markPrice * 100,
+          distanceToSL: Math.abs(position.stopLossPrice - markPrice),
+          distanceToSLPercent: Math.abs(position.stopLossPrice - markPrice) / markPrice * 100,
+          hitTakeProfit: tpHit,
+          hitStopLoss: slHit,
+          action: 'hold',
+          positionAgeSeconds,
+          maxUnrealizedPnL: maxPnl,
+          maxUnrealizedPnLPercent: maxPnlPercent,
+          beTriggered: position.metadata?.beTriggered ?? false
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error(`[${new Date().toISOString()}] [SCHEDULER] checkPositions ERROR symbol=${symbol} error=${message}`);
