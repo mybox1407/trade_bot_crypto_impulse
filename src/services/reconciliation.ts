@@ -68,19 +68,38 @@ function getPositionRecords(response: unknown): Array<Record<string, unknown>> {
   const direct = recordsFromValue(root.positions);
   if (direct.length) return direct;
 
-  const candidates = [root.account, root.accounts, root.data];
-  for (const candidate of candidates) {
-    const record = getRecord(candidate);
-    if (!record) continue;
-
-    const positions = recordsFromValue(record.positions);
+  const account = getRecord(root.account);
+  if (account) {
+    const positions = recordsFromValue(account.positions);
     if (positions.length) return positions;
+  }
 
-    for (const account of recordsFromValue(record.accounts)) {
-      const nested = recordsFromValue(account.positions);
-      if (nested.length) return nested;
+  if (Array.isArray(root.accounts)) {
+    for (const rawAccount of root.accounts) {
+      const accountRecord = getRecord(rawAccount);
+      if (!accountRecord) continue;
+
+      const positions = recordsFromValue(accountRecord.positions);
+      if (positions.length) return positions;
     }
   }
+
+  const data = getRecord(root.data);
+  if (data) {
+    const positions = recordsFromValue(data.positions);
+    if (positions.length) return positions;
+
+    if (Array.isArray(data.accounts)) {
+      for (const rawAccount of data.accounts) {
+        const accountRecord = getRecord(rawAccount);
+        if (!accountRecord) continue;
+
+        const positions = recordsFromValue(accountRecord.positions);
+        if (positions.length) return positions;
+      }
+    }
+  }
+
   return [];
 }
 
