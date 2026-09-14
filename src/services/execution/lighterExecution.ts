@@ -219,16 +219,10 @@ export class LighterExecutionService implements ExecutionService {
 
       const [activeData, inactiveData] = await Promise.all([
         fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${this.accountIndex}&limit=100`, {
-          headers: {
-            Accept: 'application/json',
-            Authorization: this.authToken ?? ''
-          }
+          headers: { Accept: 'application/json', Authorization: this.authToken ?? '' }
         }).then(r => r.json()),
         fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${this.accountIndex}&limit=100`, {
-          headers: {
-            Accept: 'application/json',
-            Authorization: this.authToken ?? ''
-          }
+          headers: { Accept: 'application/json', Authorization: this.authToken ?? '' }
         }).then(r => r.json())
       ]);
 
@@ -236,8 +230,7 @@ export class LighterExecutionService implements ExecutionService {
       const inactiveOrders = Array.isArray((inactiveData as any).orders) ? (inactiveData as any).orders : [];
 
       const pendingOrder = [...activeOrders, ...inactiveOrders].find(
-        (order: any) =>
-          Number(order.market_index) === marketId &&
+        (order: any) => Number(order.market_index) === marketId &&
           (order.status === 'submitted' || order.status === 'partially_filled' || order.status === 'open')
       );
 
@@ -315,23 +308,46 @@ export class LighterExecutionService implements ExecutionService {
     }
   }
 
-  private async submitMarketOrder(marketId: number, clientOrderIndex: number, baseAmount: number, expectedPrice: number, isAsk: boolean, reduceOnly: boolean, priceDecimals: number): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
+  private async submitMarketOrder(
+    marketId: number,
+    clientOrderIndex: number,
+    baseAmount: number,
+    expectedPrice: number,
+    isAsk: boolean,
+    reduceOnly: boolean,
+    _priceDecimals: number
+  ): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
     const maxSlippageBps = Number(process.env.LIGHTER_MARKET_SLIPPAGE_BPS ?? 50);
     if (!Number.isFinite(maxSlippageBps) || maxSlippageBps <= 0) {
       throw new Error(`Invalid LIGHTER_MARKET_SLIPPAGE_BPS: ${maxSlippageBps}`);
     }
+    if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) {
+      throw new Error(`Invalid expectedPrice: ${expectedPrice}`);
+    }
 
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage START marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} maxSlippageBps=${maxSlippageBps}`);
+    // SDK expects max_slippage as a decimal fraction: 0.005 = 50 bps.
+    const maxSlippage = maxSlippageBps / 10_000;
+    if (maxSlippage >= 1) {
+      throw new Error(`LIGHTER_MARKET_SLIPPAGE_BPS is too large: ${maxSlippageBps}`);
+    }
+
+    console.log(
+      `[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage START ` +
+      `marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} ` +
+      `maxSlippageBps=${maxSlippageBps} maxSlippage=${maxSlippage} idealPrice=${expectedPrice} ` +
+      `isAsk=${isAsk} reduceOnly=${reduceOnly}`
+    );
 
     const [order, tx, sdkError] = await this.signerClient.create_market_order_if_slippage(
       marketId,
       clientOrderIndex,
       baseAmount,
-      maxSlippageBps,
+      maxSlippage,
       isAsk,
       reduceOnly,
       -1,
-      this.apiKeyIndex
+      this.apiKeyIndex,
+      expectedPrice
     );
 
     if (sdkError) {
@@ -425,22 +441,12 @@ export class LighterExecutionService implements ExecutionService {
 
           if (filledQuantity > 0) {
             console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED (by volume) marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote} status=${status}`);
-            return {
-              status: 'FILLED',
-              filledQuantity,
-              averageFillPrice: filledQuantity > 0 ? filledQuote / filledQuantity : undefined,
-              fee: 0
-            };
+            return { status: 'FILLED', filledQuantity, averageFillPrice: filledQuote / filledQuantity, fee: 0 };
           }
 
           if (status === 'filled' || status.startsWith('filled')) {
             console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest FILLED marketId=${marketId} clientOrderIndex=${clientOrderIndex} filledQuantity=${filledQuantity} filledQuote=${filledQuote}`);
-            return {
-              status: 'FILLED',
-              filledQuantity,
-              averageFillPrice: filledQuantity > 0 ? filledQuote / filledQuantity : undefined,
-              fee: 0
-            };
+            return { status: 'FILLED', filledQuantity, averageFillPrice: filledQuantity > 0 ? filledQuote / filledQuantity : undefined, fee: 0 };
           }
           if (status.startsWith('cancel') || status === 'rejected' || status === 'failed') {
             console.log(`[${new Date().toISOString()}] [LIGHTER REST] reconcileOrderViaRest CANCELED marketId=${marketId} clientOrderIndex=${clientOrderIndex} status=${order.status}`);
@@ -462,7 +468,6 @@ export class LighterExecutionService implements ExecutionService {
     url.searchParams.set('limit', '100');
 
     console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders START endpoint=${endpoint} url=${url.toString()}`);
-
     const response = await fetch(url, { headers: { Accept: 'application/json', Authorization: this.authToken ?? '' } });
     const responseText = await response.text();
 
@@ -477,12 +482,9 @@ export class LighterExecutionService implements ExecutionService {
       return [];
     }
 
-    const record = data as Record<string, unknown>;
-    const orders = record.orders;
+    const orders = (data as Record<string, unknown>).orders;
     const result = Array.isArray(orders) ? orders.filter((order): order is LighterOrder => !!order && typeof order === 'object') : [];
-
     console.log(`[${new Date().toISOString()}] [LIGHTER REST] fetchOrders END endpoint=${endpoint} ordersCount=${result.length}`);
-
     return result;
   }
 
@@ -540,13 +542,9 @@ export class LighterExecutionService implements ExecutionService {
     if (quantity == null || quantity <= 0 || price == null || price <= 0) return;
     pending.fills.push({ quantity, price, fee: this.toNumber(trade.taker_fee) ?? this.toNumber(trade.maker_fee) ?? 0 });
 
-    // Критическое исправление: проверяем сумму fills после каждого trade
     const totalFilled = pending.fills.reduce((sum, fill) => sum + fill.quantity, 0);
-    if (totalFilled >= pending.requestedQuantity * 0.99) {  // 99% заполнено
-      const averageFillPrice = pending.fills.reduce(
-        (sum, fill) => sum + fill.quantity * fill.price, 0
-      ) / totalFilled;
-
+    if (totalFilled >= pending.requestedQuantity * 0.99) {
+      const averageFillPrice = pending.fills.reduce((sum, fill) => sum + fill.quantity * fill.price, 0) / totalFilled;
       console.log(`[${new Date().toISOString()}] [LIGHTER WS] Trade fill confirmed via WebSocket totalFilled=${totalFilled} requested=${pending.requestedQuantity}`);
 
       this.resolvePendingOrder(clientOrderIndex, {
@@ -699,8 +697,9 @@ export class LighterExecutionService implements ExecutionService {
         const message = JSON.parse(raw.toString()) as AccountMessage;
         console.log(`[${new Date().toISOString()}] [LIGHTER WS] Message received:`, JSON.stringify(message).slice(0, 500));
         this.handleAccountMessage(message);
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] [LIGHTER WS] Invalid message:`, error);
       }
-      catch (error) { console.error(`[${new Date().toISOString()}] [LIGHTER WS] Invalid message:`, error); }
     });
 
     ws.on('error', error => {
