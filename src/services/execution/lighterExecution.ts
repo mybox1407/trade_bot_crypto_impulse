@@ -315,54 +315,125 @@ export class LighterExecutionService implements ExecutionService {
     expectedPrice: number,
     isAsk: boolean,
     reduceOnly: boolean,
-    _priceDecimals: number
+    priceDecimals: number
   ): Promise<{ ok: true; orderId?: string } | { ok: false; message: string }> {
-    const maxSlippageBps = Number(process.env.LIGHTER_MARKET_SLIPPAGE_BPS ?? 50);
+    const maxSlippageBps = Number(
+      process.env.LIGHTER_MARKET_SLIPPAGE_BPS ?? 50
+    );
+  
     if (!Number.isFinite(maxSlippageBps) || maxSlippageBps <= 0) {
-      throw new Error(`Invalid LIGHTER_MARKET_SLIPPAGE_BPS: ${maxSlippageBps}`);
+      throw new Error(
+        `Invalid LIGHTER_MARKET_SLIPPAGE_BPS: ${maxSlippageBps}`
+      );
     }
+  
     if (!Number.isFinite(expectedPrice) || expectedPrice <= 0) {
       throw new Error(`Invalid expectedPrice: ${expectedPrice}`);
     }
-
-    // SDK expects max_slippage as a decimal fraction: 0.005 = 50 bps.
+  
+    if (!Number.isInteger(priceDecimals) || priceDecimals < 0 || priceDecimals > 18) {
+      throw new Error(`Invalid priceDecimals: ${priceDecimals}`);
+    }
+  
+    // SDK expects max_slippage as a decimal fraction:
+    // 0.005 = 50 bps = 0.5%.
     const maxSlippage = maxSlippageBps / 10_000;
+  
     if (maxSlippage >= 1) {
-      throw new Error(`LIGHTER_MARKET_SLIPPAGE_BPS is too large: ${maxSlippageBps}`);
+      throw new Error(
+        `LIGHTER_MARKET_SLIPPAGE_BPS is too large: ${maxSlippageBps}`
+      );
     }
-
+  
+    // SDK uses protocol price units, not display price.
+    // Examples:
+    // TSLA 359.02 with 2 decimals -> 35902
+    // XMR 511.46 with 3 decimals -> 511460
+    // LIT 4.5656 with 4 decimals -> 45656
+    const idealPrice = Math.round(
+      expectedPrice * 10 ** priceDecimals
+    );
+  
+    if (!Number.isSafeInteger(idealPrice) || idealPrice <= 0) {
+      throw new Error(
+        `Invalid idealPrice: ${idealPrice} from expectedPrice=${expectedPrice}, priceDecimals=${priceDecimals}`
+      );
+    }
+  
     console.log(
-      `[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage START ` +
-      `marketId=${marketId} clientOrderIndex=${clientOrderIndex} baseAmount=${baseAmount} ` +
-      `maxSlippageBps=${maxSlippageBps} maxSlippage=${maxSlippage} idealPrice=${expectedPrice} ` +
-      `isAsk=${isAsk} reduceOnly=${reduceOnly}`
+      `[${new Date().toISOString()}] [LIGHTER REST] ` +
+      `create_market_order_if_slippage START ` +
+      `marketId=${marketId} ` +
+      `clientOrderIndex=${clientOrderIndex} ` +
+      `baseAmount=${baseAmount} ` +
+      `maxSlippageBps=${maxSlippageBps} ` +
+      `maxSlippage=${maxSlippage} ` +
+      `expectedPrice=${expectedPrice} ` +
+      `idealPrice=${idealPrice} ` +
+      `priceDecimals=${priceDecimals} ` +
+      `isAsk=${isAsk} ` +
+      `reduceOnly=${reduceOnly}`
     );
-
-    const [order, tx, sdkError] = await this.signerClient.create_market_order_if_slippage(
-      marketId,
-      clientOrderIndex,
-      baseAmount,
-      maxSlippage,
-      isAsk,
-      reduceOnly,
-      -1,
-      this.apiKeyIndex,
-      expectedPrice
-    );
-
+  
+    const [order, tx, sdkError] =
+      await this.signerClient.create_market_order_if_slippage(
+        marketId,
+        clientOrderIndex,
+        baseAmount,
+        maxSlippage,
+        isAsk,
+        reduceOnly,
+        -1,
+        this.apiKeyIndex,
+        idealPrice
+      );
+  
     if (sdkError) {
-      console.error(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage ERROR marketId=${marketId} clientOrderIndex=${clientOrderIndex} error=${sdkError}`);
-      return { ok: false, message: sdkError };
+      console.error(
+        `[${new Date().toISOString()}] [LIGHTER REST] ` +
+        `create_market_order_if_slippage ERROR ` +
+        `marketId=${marketId} ` +
+        `clientOrderIndex=${clientOrderIndex} ` +
+        `error=${sdkError}`
+      );
+  
+      return {
+        ok: false,
+        message: sdkError
+      };
     }
-
-    const orderId = this.readExchangeOrderId(order as Record<string, unknown> | null) ?? this.readTransactionId(tx);
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage OK marketId=${marketId} clientOrderIndex=${clientOrderIndex} orderId=${orderId ?? 'n/a'}`);
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage RESPONSE order=`, JSON.stringify(order, null, 2));
-    console.log(`[${new Date().toISOString()}] [LIGHTER REST] create_market_order_if_slippage RESPONSE tx=`, JSON.stringify(tx, null, 2));
-
-    return { ok: true, orderId };
+  
+    const orderId =
+      this.readExchangeOrderId(
+        order as Record<string, unknown> | null
+      ) ?? this.readTransactionId(tx);
+  
+    console.log(
+      `[${new Date().toISOString()}] [LIGHTER REST] ` +
+      `create_market_order_if_slippage OK ` +
+      `marketId=${marketId} ` +
+      `clientOrderIndex=${clientOrderIndex} ` +
+      `orderId=${orderId ?? 'n/a'}`
+    );
+  
+    console.log(
+      `[${new Date().toISOString()}] [LIGHTER REST] ` +
+      `create_market_order_if_slippage RESPONSE order=`,
+      JSON.stringify(order, null, 2)
+    );
+  
+    console.log(
+      `[${new Date().toISOString()}] [LIGHTER REST] ` +
+      `create_market_order_if_slippage RESPONSE tx=`,
+      JSON.stringify(tx, null, 2)
+    );
+  
+    return {
+      ok: true,
+      orderId
+    };
   }
-
+  
   private waitForOrderExecution(req: OpenExecutionRequest | CloseExecutionRequest, marketId: number, clientOrderIndex: number, orderId: string | undefined, requestedQuantity: number, _priceDecimals: number, _sizeDecimals: number): Promise<ExecutionResult> {
     return new Promise(resolve => {
       const timer = setTimeout(async () => {
