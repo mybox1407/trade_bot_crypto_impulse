@@ -50,6 +50,8 @@ export interface ProtectiveOrders {
   marketId: number;
   stopLossOrderId?: string;
   takeProfitOrderId?: string;
+  stopLossOrderIndex?: number;
+  takeProfitOrderIndex?: number;
   stopLossClientOrderIndex: number;
   takeProfitClientOrderIndex: number;
 }
