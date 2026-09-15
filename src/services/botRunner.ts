@@ -1,5 +1,3 @@
-src/services/botRunner.ts
-
 import { getCandles } from './exchange';
 import { analyzeMarket, detectMarketRegime, StrategyResult } from './strategy';
 import { logSignalCheck } from './logger';
