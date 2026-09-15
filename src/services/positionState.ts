@@ -1,5 +1,3 @@
-src/services/positionState.ts
-
 import {
   MAX_RISK_PER_TRADE,
   STARTING_BALANCE,
