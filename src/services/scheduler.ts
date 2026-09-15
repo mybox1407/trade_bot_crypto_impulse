@@ -1,5 +1,3 @@
-src/services/scheduler.ts
-
 import {
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
