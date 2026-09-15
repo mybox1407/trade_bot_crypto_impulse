@@ -1,5 +1,3 @@
-src/services/strategy.ts
-
 import {
   MACD,
   RSI,
