@@ -1,3 +1,5 @@
+src/services/logger.ts
+
 import fs from 'fs';
 import path from 'path';
 
@@ -42,7 +44,12 @@ const FILE_HEADERS: Record<
     'atrPct',
     'signalTriggered',
     'positionOpened',
-    'openPositionError'
+    'openPositionError',
+    'entryDistanceFromEma20',
+    'entryDistanceFromEma20Atr',
+    'entryTooExtended',
+    'signalTimeIso',
+    'isTradingWindow'
   ],
 
   'position_open_log.csv': [
@@ -77,7 +84,9 @@ const FILE_HEADERS: Record<
     'entryDistanceFromEma20',
     'entryDistanceFromEma20Percent',
     'entryDistanceFromEma20Atr',
-    'entryTooExtended'
+    'entryTooExtended',
+    'signalTime',
+    'signalTimeIso'
   ],
 
   'position_check_log.csv': [
@@ -276,6 +285,11 @@ export function logSignalCheck(row: {
   signalTriggered: boolean;
   positionOpened: boolean;
   openPositionError?: string;
+  entryDistanceFromEma20?: number;
+  entryDistanceFromEma20Atr?: number;
+  entryTooExtended?: boolean;
+  signalTimeIso?: string;
+  isTradingWindow?: boolean;
 }): void {
   writeRow(
     'signal_log.csv',
@@ -316,6 +330,8 @@ export function logPositionOpen(row: {
   entryDistanceFromEma20Percent: number;
   entryDistanceFromEma20Atr: number;
   entryTooExtended: boolean;
+  signalTime?: number;
+  signalTimeIso?: string;
 }): void {
   writeRow(
     'position_open_log.csv',
