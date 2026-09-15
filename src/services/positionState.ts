@@ -1,3 +1,5 @@
+src/services/positionState.ts
+
 import {
   MAX_RISK_PER_TRADE,
   STARTING_BALANCE,
@@ -82,6 +84,10 @@ export interface VirtualPosition {
     partialClosePending?: boolean;
     partialCloseQuantity?: number;
     partialCloseExecutedQuantity?: number;
+    entryDistanceFromEma20?: number;
+    entryDistanceFromEma20Atr?: number;
+    signalTime?: number;
+    signalTimeIso?: string;
   };
 }
 
@@ -362,10 +368,14 @@ export function openPosition(data: {
     ema20: data.metadata?.ema20 ?? 0,
     ema50: data.metadata?.ema50 ?? 0,
     ema200: data.metadata?.ema200 ?? 0,
-    entryDistanceFromEma20: 0,
-    entryDistanceFromEma20Percent: 0,
-    entryDistanceFromEma20Atr: data.metadata?.entryExtensionAtr ?? 0,
-    entryTooExtended: data.metadata?.entryTooExtended ?? false
+    entryDistanceFromEma20: data.metadata?.entryDistanceFromEma20 ?? 0,
+    entryDistanceFromEma20Percent: data.metadata?.entryDistanceFromEma20Atr != null && data.metadata?.lastAtr != null && data.metadata.lastAtr > 0
+      ? (data.metadata.entryDistanceFromEma20 ?? 0) / data.metadata.lastAtr * 100
+      : 0,
+    entryDistanceFromEma20Atr: data.metadata?.entryDistanceFromEma20Atr ?? 0,
+    entryTooExtended: data.metadata?.entryTooExtended ?? false,
+    signalTime: data.metadata?.signalTime,
+    signalTimeIso: data.metadata?.signalTimeIso
   });
 
   notifyPositionOpen({
@@ -547,7 +557,11 @@ export function partialClosePosition(positionId: string, quantityToClose: number
       reconciliationIssue: position.metadata?.reconciliationIssue,
       partialClosePending: false,
       partialCloseQuantity: quantityToClose,
-      partialCloseExecutedQuantity: quantityToClose
+      partialCloseExecutedQuantity: quantityToClose,
+      entryDistanceFromEma20: position.metadata?.entryDistanceFromEma20,
+      entryDistanceFromEma20Atr: position.metadata?.entryDistanceFromEma20Atr,
+      signalTime: position.metadata?.signalTime,
+      signalTimeIso: position.metadata?.signalTimeIso
     }
   };
 
