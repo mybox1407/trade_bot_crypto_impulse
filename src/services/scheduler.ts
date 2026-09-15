@@ -37,8 +37,8 @@ import {
   removeReconciliationPendingSymbol,
   isReconciliationPendingSymbol
 } from './positionState';
-import { TRADE_FEE_RATE } from './strategy';
-import { logPositionCheck, logError } from './logger';
+import { TRADE_FEE_RATE, isTradingTimeUtcPlus4 } from './strategy';
+import { logPositionCheck, logError, logSignalCheck } from './logger';
 import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
 import axios from 'axios';
 import {
@@ -337,6 +337,52 @@ async function checkSignals(): Promise<void> {
         const regime = (result as any).regime as string;
         const indicators = (result as any).indicators as any;
 
+        // ========== ЛОГИРОВАНИЕ КАЖДОГО СИГНАЛА ==========
+        const signalTimeIso = (result as any).signalTimeIso ?? new Date().toISOString();
+        const isTradingWindow = isTradingTimeUtcPlus4(new Date());
+
+        logSignalCheck({
+          timestamp: new Date().toISOString(),
+          symbol,
+          timeframe: '15m',
+          side: side ?? 'none',
+          price: price ?? 0,
+          regime: regime ?? 'unknown',
+          takeProfitPrice: takeProfitPrice ?? null,
+          stopLossPrice: stopLossPrice ?? null,
+          positionSize: (result as any).positionSize ?? null,
+          macdCrossUp: indicators?.macdCrossUp ?? false,
+          macdCrossDown: indicators?.macdCrossDown ?? false,
+          lastRsi: indicators?.lastRsi ?? 0,
+          lastAtr: indicators?.lastAtr ?? 0,
+          rsiBull: false,
+          rsiBear: false,
+          bbUpper: indicators?.bbUpper ?? 0,
+          bbMiddle: indicators?.bbMiddle ?? 0,
+          bbLower: indicators?.bbLower ?? 0,
+          adx: indicators?.adx ?? 0,
+          adxRising: indicators?.regimeIndicators?.adxRising ?? false,
+          ema20: indicators?.ema20 ?? 0,
+          ema50: indicators?.regimeIndicators?.ema50 ?? 0,
+          ema200: indicators?.ema200 ?? 0,
+          bbWidth: indicators?.bbWidth ?? 0,
+          atrPct: indicators?.atrPct ?? 0,
+          signalTriggered: buy || sell,
+          positionOpened: false,
+          entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? 0,
+          entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? 0,
+          entryTooExtended: indicators?.entryTooExtended ?? false,
+          signalTimeIso,
+          isTradingWindow
+        });
+
+        // ========== ПРОВЕРКА: ВНЕ ТОРГОВОГО ОКНА ==========
+        if (!isTradingWindow && (buy || sell)) {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OUTSIDE_TRADING_WINDOW symbol=${symbol} side=${side} price=${price}`);
+          results.push({ symbol, status: 'no-signal', regime, hasSignal: false, reason: 'Outside trading window (02:00–13:59 UTC+4)' });
+          continue;
+        }
+
         if ((result as any).skipReason) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals SKIP symbol=${symbol} reason=${(result as any).skipReason}`);
           results.push({ symbol, status: 'no-signal', regime, hasSignal: false, reason: (result as any).skipReason });
@@ -419,15 +465,19 @@ async function checkSignals(): Promise<void> {
             macdCrossDown: indicators?.macdCrossDown ?? false,
             lastRsi: indicators?.lastRsi ?? 0,
             lastAtr: indicators?.lastAtr ?? 0,
-            adx: indicators?.regimeIndicators?.adx ?? 0,
-            bbWidth: indicators?.regimeIndicators?.bbWidth ?? 0,
-            atrPct: indicators?.regimeIndicators?.atrPct ?? 0,
-            ema20: indicators?.regimeIndicators?.ema20 ?? 0,
+            adx: indicators?.adx ?? 0,
+            bbWidth: indicators?.bbWidth ?? 0,
+            atrPct: indicators?.atrPct ?? 0,
+            ema20: indicators?.ema20 ?? 0,
             ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-            ema200: indicators?.regimeIndicators?.ema200 ?? 0,
+            ema200: indicators?.ema200 ?? 0,
             entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
             maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
-            entryTooExtended: indicators?.entryTooExtended ?? false
+            entryTooExtended: indicators?.entryTooExtended ?? false,
+            entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? 0,
+            entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? 0,
+            signalTime: (result as any).signalTime,
+            signalTimeIso: (result as any).signalTimeIso
           },
           executionOrderId: executionResult.orderId,
           clientOrderId
