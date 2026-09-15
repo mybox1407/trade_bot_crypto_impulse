@@ -1,3 +1,8 @@
+/* Full scheduler.ts with automatic SL/TP recovery.
+ *
+ * Based on the complete scheduler.ts supplied in the conversation.
+ */
+
 import {
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
@@ -62,6 +67,7 @@ import {
   fetchAccountPositions,
   syncLiveBalance
 } from './reconciliation';
+import type { EnsureProtectiveOrdersRequest } from './execution/types';
 
 const LIGHTER_API_URL = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
@@ -120,10 +126,6 @@ function isReconciliationPending(symbol: string): boolean {
   return isReconciliationPendingSymbol(symbol);
 }
 
-function formatPrice(price: number): string {
-  return Number.isFinite(price) ? price.toFixed(4) : 'n/a';
-}
-
 function requireMarketId(marketId: number | undefined, context: string): number {
   if (marketId == null || !Number.isInteger(marketId) || marketId < 0) {
     throw new Error(`Missing or invalid marketId for ${context}: ${marketId}`);
@@ -132,12 +134,16 @@ function requireMarketId(marketId: number | undefined, context: string): number 
 }
 
 function validateSignalPrice(price: number | undefined): number {
-  if (price == null || !Number.isFinite(price) || price <= 0) throw new Error(`Invalid signal price: ${price}`);
+  if (price == null || !Number.isFinite(price) || price <= 0) {
+    throw new Error(`Invalid signal price: ${price}`);
+  }
   return price;
 }
 
 function validateQuantity(quantity: number): number {
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Invalid order quantity: ${quantity}`);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error(`Invalid order quantity: ${quantity}`);
+  }
   return quantity;
 }
 
@@ -147,8 +153,12 @@ function createExecutionService(): ExecutionService {
   const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
   if (!secret) throw new Error('LIGHTER_API_SECRET is required in live mode');
-  if (!Number.isInteger(apiKeyIndex) || apiKeyIndex < 0 || apiKeyIndex > 254) throw new Error(`Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`);
-  if (!Number.isInteger(accountIndex) || accountIndex < 0) throw new Error(`Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`);
+  if (!Number.isInteger(apiKeyIndex) || apiKeyIndex < 0 || apiKeyIndex > 254) {
+    throw new Error(`Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`);
+  }
+  if (!Number.isInteger(accountIndex) || accountIndex < 0) {
+    throw new Error(`Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`);
+  }
   return new LighterExecutionService(secret, apiKeyIndex, accountIndex);
 }
 
@@ -162,7 +172,12 @@ function initializeSignerClient(): void {
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
   if (!secret) throw new Error('LIGHTER_API_SECRET is required in live mode');
   const key = secret.startsWith('0x') ? secret.slice(2) : secret;
-  signerClient = new SignerClient(process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai', key, apiKeyIndex, accountIndex);
+  signerClient = new SignerClient(
+    process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai',
+    key,
+    apiKeyIndex,
+    accountIndex
+  );
 }
 
 function startReconciliationLoop(client: SignerClient, accountIndex: number): void {
@@ -196,22 +211,24 @@ async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
   if (PAPER_TRADING || !signerClient) return false;
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
   const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-  try {
-    const authorization = signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? '';
-    const responses = await Promise.all([
-      fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${accountIndex}&limit=100`, { headers: { Accept: 'application/json', Authorization: authorization } }),
-      fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${accountIndex}&limit=100`, { headers: { Accept: 'application/json', Authorization: authorization } })
-    ]);
-    const data = await Promise.all(responses.map(async response => {
-      if (!response.ok) throw new Error(`Orders request failed: ${response.status}`);
-      return response.json() as Promise<any>;
-    }));
-    const orders = data.flatMap(item => Array.isArray(item?.orders) ? item.orders : []);
-    return orders.some((order: any) => Number(order.market_index) === marketId && ['submitted', 'partially_filled', 'open'].includes(String(order.status).toLowerCase()));
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] [SCHEDULER] hasPendingRemoteOrder ERROR marketId=${marketId}:`, error);
-    throw error;
-  }
+  const authorization = signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? '';
+
+  const responses = await Promise.all([
+    fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${accountIndex}&limit=100`, {
+      headers: { Accept: 'application/json', Authorization: authorization }
+    }),
+    fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${accountIndex}&limit=100`, {
+      headers: { Accept: 'application/json', Authorization: authorization }
+    })
+  ]);
+
+  const data = await Promise.all(responses.map(async response => {
+    if (!response.ok) throw new Error(`Orders request failed: ${response.status}`);
+    return response.json() as Promise<any>;
+  }));
+
+  const orders = data.flatMap(item => Array.isArray(item?.orders) ? item.orders : []);
+  return orders.some((order: any) => Number(order.market_index) === marketId && ['submitted', 'partially_filled', 'open'].includes(String(order.status).toLowerCase()));
 }
 
 function buildPositionMetadata(regime: string, indicators: any, signalTime?: number, signalTimeIso?: string) {
@@ -235,6 +252,41 @@ function buildPositionMetadata(regime: string, indicators: any, signalTime?: num
     signalTime: signalTime ?? Date.now(),
     signalTimeIso: signalTimeIso ?? new Date().toISOString()
   };
+}
+
+async function ensurePositionProtection(
+  position: ReturnType<typeof getPositions>[number],
+  activeMarket: { priceDecimals: number; sizeDecimals: number }
+): Promise<void> {
+  if (position.marketId == null) {
+    throw new Error(`Missing marketId for ${position.symbol}`);
+  }
+  if (!executionService.ensureProtectiveOrders) {
+    throw new Error('Execution service does not support protective-order recovery');
+  }
+
+  const request: EnsureProtectiveOrdersRequest = {
+    symbol: position.symbol,
+    marketId: position.marketId,
+    side: position.side,
+    quantity: position.quantity,
+    expectedPrice: position.entryPrice,
+    clientOrderId: `${position.symbol}-${Date.now()}-protection`,
+    priceDecimals: activeMarket.priceDecimals,
+    sizeDecimals: activeMarket.sizeDecimals,
+    stopLossPrice: position.exchangeStopLossPrice,
+    takeProfitPrice: position.exchangeTakeProfitPrice
+  };
+
+  const protection = await executionService.ensureProtectiveOrders(request);
+  if (!protection.stopLossOrderId || !protection.takeProfitOrderId) {
+    throw new Error(`Protective orders were not fully confirmed for ${position.symbol}`);
+  }
+
+  const updated = updatePositionMetadata(position.id, {
+    reconciliationIssue: undefined
+  });
+  if (!updated) throw new Error(`Failed to update protection state for ${position.symbol}`);
 }
 
 async function checkSignals(): Promise<void> {
@@ -369,11 +421,21 @@ async function checkSignals(): Promise<void> {
         }
 
         if (!executionResult.protectiveOrders?.stopLossOrderId || !executionResult.protectiveOrders?.takeProfitOrderId) {
-          markReconciliationPending(symbol);
-          const reason = 'Entry filled but SL/TP are not confirmed';
-          notifyError({ context: 'position-unprotected', symbol, error: reason });
-          errorsBySymbol.set(symbol, reason);
-          results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason });
+          try {
+            const position = getPositions().find(item => normalizeSymbol(item.symbol) === symbol);
+            if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);
+            const protectionMarket = getActiveMarket(symbol);
+            if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
+            await ensurePositionProtection(position, protectionMarket);
+            unlockSymbol(symbol);
+            results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened and protection recovered' });
+          } catch (error) {
+            markReconciliationPending(symbol);
+            const reason = error instanceof Error ? error.message : 'Protective-order recovery failed';
+            notifyError({ context: 'protective-order-recovery', symbol, error: reason });
+            errorsBySymbol.set(symbol, reason);
+            results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason });
+          }
           continue;
         }
 
@@ -400,20 +462,14 @@ async function checkSignals(): Promise<void> {
 async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
   if (PAPER_TRADING || !signerClient) return;
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-
   try {
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
     const remoteByMarketId = new Map(remotePositions.map(position => [position.marketId, position]));
     const remoteBySymbol = new Map(remotePositions.map(position => [normalizeSymbol(position.symbol), position]));
-
     for (const local of localPositions) {
       const symbol = normalizeSymbol(local.symbol);
       const remote = local.marketId != null ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol)) : remoteBySymbol.get(symbol);
-      if (remote) {
-        console.log(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE POSITION_PRESENT symbol=${symbol} marketId=${remote.marketId}`);
-        continue;
-      }
-
+      if (remote) continue;
       const markPrice = getMarkPrice(symbol);
       const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0 ? markPrice : local.entryPrice;
       const tpHit = markPrice != null && Number.isFinite(markPrice) && (local.side === 'long' ? markPrice >= local.takeProfitPrice : markPrice <= local.takeProfitPrice);
@@ -421,15 +477,11 @@ async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<ty
       const closeResult = closePosition(local.id, closePrice, closeReason, { executionOrderId: 'exchange-auto-close', clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`, fee: 0 });
       if (!closeResult.ok) markReconciliationPending(symbol); else unlockSymbol(symbol);
     }
-
     const localByMarketId = new Map(localPositions.filter(position => position.marketId != null).map(position => [position.marketId as number, position]));
     const localBySymbol = new Map(localPositions.map(position => [normalizeSymbol(position.symbol), position]));
     for (const remote of remotePositions) {
       const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(normalizeSymbol(remote.symbol));
-      if (!hasLocal) {
-        console.warn(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE ORPHAN_POSITION symbol=${remote.symbol} marketId=${remote.marketId}`);
-        markReconciliationPending(remote.symbol);
-      }
+      if (!hasLocal) markReconciliationPending(remote.symbol);
     }
   } catch (error) {
     console.error(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE ERROR:`, error);
@@ -443,28 +495,28 @@ async function checkPositions(): Promise<void> {
     const snapshot = getPositions();
     await reconcileLocalPositionsWithExchange(snapshot);
     const currentPositions = getPositions();
-
     for (const snapshotPosition of currentPositions) {
       const position = getPositions().find(item => item.id === snapshotPosition.id);
       if (!position || isReconciliationPending(position.symbol)) continue;
       const symbol = normalizeSymbol(position.symbol);
-
       try {
+        if (!position.exchangeStopLossOrderId || !position.exchangeTakeProfitOrderId) {
+          const protectionMarket = getActiveMarket(symbol);
+          if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
+          await ensurePositionProtection(position, protectionMarket);
+          unlockSymbol(symbol);
+        }
         const markPrice = getMarkPrice(symbol);
         if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) throw new Error(`Mark price unavailable for ${symbol}`);
         const pnl = position.side === 'long' ? (markPrice - position.entryPrice) * position.quantity : (position.entryPrice - markPrice) * position.quantity;
         const pnlPercent = position.notional > 0 ? pnl / position.notional * 100 : 0;
-        updatePositionMetadata(position.id, {
-          maxUnrealizedPnL: Math.max(position.metadata?.maxUnrealizedPnL ?? Number.NEGATIVE_INFINITY, pnl),
-          maxUnrealizedPnLPercent: Math.max(position.metadata?.maxUnrealizedPnLPercent ?? Number.NEGATIVE_INFINITY, pnlPercent),
-          worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl),
-          worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent)
-        });
+        updatePositionMetadata(position.id, { maxUnrealizedPnL: Math.max(position.metadata?.maxUnrealizedPnL ?? Number.NEGATIVE_INFINITY, pnl), maxUnrealizedPnLPercent: Math.max(position.metadata?.maxUnrealizedPnLPercent ?? Number.NEGATIVE_INFINITY, pnlPercent), worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) });
         const tpHit = position.side === 'long' ? markPrice >= position.takeProfitPrice : markPrice <= position.takeProfitPrice;
         const slHit = position.side === 'long' ? markPrice <= position.stopLossPrice : markPrice >= position.stopLossPrice;
         logPositionCheck({ timestamp: new Date().toISOString(), positionId: position.id, symbol, side: position.side, entryPrice: position.entryPrice, currentPrice: markPrice, takeProfitPrice: position.takeProfitPrice, stopLossPrice: position.stopLossPrice, unrealizedPnL: pnl, unrealizedPnLPercent: pnlPercent, distanceToTP: Math.abs(position.takeProfitPrice - markPrice), distanceToTPPercent: Math.abs(position.takeProfitPrice - markPrice) / markPrice * 100, distanceToSL: Math.abs(position.stopLossPrice - markPrice), distanceToSLPercent: Math.abs(position.stopLossPrice - markPrice) / markPrice * 100, hitTakeProfit: tpHit, hitStopLoss: slHit, action: 'hold', positionAgeSeconds: Math.max(0, Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000)) });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
+        markReconciliationPending(symbol);
         notifyError({ context: 'position-check', symbol, error: message });
       }
     }
@@ -482,7 +534,6 @@ export async function startScheduler(): Promise<void> {
     initializeSignerClient();
     await refreshTopMarkets();
     await loadReconciliationPendingSymbols();
-
     if (!PAPER_TRADING && signerClient) {
       const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
       await syncLiveBalance(signerClient, accountIndex);
@@ -491,7 +542,6 @@ export async function startScheduler(): Promise<void> {
       startReconciliationLoop(signerClient, accountIndex);
       startBalanceSyncLoop(accountIndex);
     }
-
     startMarketRefresh();
     await checkPositions();
     await checkSignals();
@@ -517,7 +567,6 @@ export async function stopScheduler(): Promise<void> {
   signalCheckInterval = null;
   positionCheckInterval = null;
   executionService?.stop?.();
-
   if (!schedulerStopping) {
     schedulerStopping = true;
     const symbols = new Set([...getPositions().map(position => normalizeSymbol(position.symbol)), ...getActiveTradingPairs().map(normalizeSymbol)]);
@@ -525,7 +574,6 @@ export async function stopScheduler(): Promise<void> {
       try { stopMarketData(symbol); } catch (error) { console.error(`[${new Date().toISOString()}] Failed to stop market data for ${symbol}:`, error); }
     }
   }
-
   await flushPositionPersistence().catch(error => console.error(`[${new Date().toISOString()}] Failed to flush persistence:`, error));
   schedulerStarted = false;
 }
