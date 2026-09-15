@@ -334,7 +334,6 @@ async function checkSignals(): Promise<void> {
         const stopLossPrice = (result as any).stopLossPrice as number | null;
         const regime = (result as any).regime as string;
         const indicators = (result as any).indicators as any;
-
         // ========== ЛОГИРОВАНИЕ КАЖДОГО СИГНАЛА ==========
         const signalTimeIso = (result as any).signalTimeIso ?? new Date().toISOString();
         const isTradingWindow = isTradingTimeUtcPlus4(new Date());
@@ -373,7 +372,6 @@ async function checkSignals(): Promise<void> {
           signalTimeIso,
           isTradingWindow
         });
-
         // ========== ПРОВЕРКА: ВНЕ ТОРГОВОГО ОКНА ==========
         if (!isTradingWindow && (buy || sell)) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals OUTSIDE_TRADING_WINDOW symbol=${symbol} side=${side} price=${price}`);
@@ -405,7 +403,6 @@ async function checkSignals(): Promise<void> {
         const marketId = requireMarketId(resolveMarket(symbol).marketId, `open ${symbol}`);
         const activeMarket = getActiveMarket(symbol);
         if (!activeMarket) throw new Error(`Active market metadata not found: ${symbol}`);
-
         const stopDistance = Math.abs(expectedPrice - stopLossPrice);
         const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
         if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) throw new Error(`Invalid total risk per unit: ${totalRiskPerUnit}`);
@@ -442,7 +439,6 @@ async function checkSignals(): Promise<void> {
         }
 
         endPositionOpening(symbol);
-
         const openResult = openPosition({
           symbol,
           marketId,
@@ -509,9 +505,7 @@ async function checkSignals(): Promise<void> {
         results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
     }
-
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals END symbolsCount=${tradingPairs.size}`);
-
     await sendAggregatedSignalSummary({
       results,
       errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined,
@@ -548,7 +542,6 @@ async function executeClose(position: ReturnType<typeof getPositions>[number], c
         reconciliationIssue: 'partial_close_reconciliation'
       });
     }
-    
     console.log(`[${new Date().toISOString()}] [SCHEDULER] executeClose PARTIAL_OK symbol=${position.symbol}`);
     return true;
   }
@@ -567,8 +560,7 @@ async function executeClose(position: ReturnType<typeof getPositions>[number], c
 }
 
 /**
- * Реконсиляция локальных позиций с биржей.
- * Если позиция закрыта на бирже (SL/TP сработал), закрываем локально с правильной причиной.
+ * Реконсиляция локальных позиций с биржей. Если позиция закрыта на бирже (SL/TP сработал), закрываем локально с правильной причиной.
  */
 async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
   if (PAPER_TRADING || !signerClient || localPositions.length === 0) return;
@@ -583,8 +575,7 @@ async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<ty
 
     for (const local of localPositions) {
       const symbol = normalizeSymbol(local.symbol);
-      const marketId = local.marketId;
-      
+      const marketId = local.marketId;  
       // Ищем позицию на бирже по marketId или символу
       const remote = remoteByMarketId.get(marketId) ?? remoteBySymbol.get(symbol);
       
@@ -611,7 +602,6 @@ async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<ty
         }
         
         console.log(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE position missing on exchange symbol=${symbol} reason=${closeReason} markPrice=${formatPrice(markPrice ?? 0)} localTP=${formatPrice(local.takeProfitPrice)} localSL=${formatPrice(local.stopLossPrice)}`);
-        
         // Закрываем локально без отправки ордера на биржу (позиция уже закрыта)
         const result = closePosition(local.id, local.exitPrice ?? local.entryPrice, closeReason, { 
           executionOrderId: 'exchange-auto-close', 
@@ -629,7 +619,6 @@ async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<ty
         }
         continue;
       }
-      
       // Позиция есть на бирже — можно обновить локальные данные при необходимости
       // (например, quantity, entryPrice, если изменились после частичного исполнения)
       if (Math.abs(remote.size - local.quantity) > 1e-8) {
@@ -638,7 +627,6 @@ async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<ty
         markReconciliationPending(symbol);
       }
     }
-    
     // Проверяем "висячие" позиции на бирже, которых нет локально
     const localByMarketId = new Map(localPositions.map(lp => [lp.marketId, lp]));
     const localBySymbol = new Map(localPositions.map(lp => [normalizeSymbol(lp.symbol), lp]));
@@ -666,10 +654,8 @@ async function checkPositions(): Promise<void> {
   try {
     const snapshot = getPositions();
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions START positionsCount=${snapshot.length}`);
-
     // 1. Реконсиляция с биржей — узнаем, какие позиции реально открыты
     await reconcileLocalPositionsWithExchange(snapshot);
-
     // 2. Берём актуальный список локальных позиций после возможного закрытия при реконсиляции
     const currentPositions = getPositions();
 
@@ -700,22 +686,18 @@ async function checkPositions(): Promise<void> {
           worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), 
           worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) 
         });
-
         // Проверяем только биржевые TP/SL через марк-цену (для логирования/метрик)
         // Реальное закрытие происходит на бирже, а мы узнаем об этом через reconcileLocalPositionsWithExchange
         const tpHit = position.side === 'long' ? markPrice >= position.takeProfitPrice : markPrice <= position.takeProfitPrice;
         const slHit = position.side === 'long' ? markPrice <= position.stopLossPrice : markPrice >= position.stopLossPrice;
-
         if (tpHit) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TP_HIT (mark price) symbol=${symbol} pnl=${pnl.toFixed(2)}`);
           // Не закрываем здесь — ждём реконсиляции, чтобы закрыть с правильной ценой исполнения
           // Но логируем для метрик
         }
-        
         if (slHit) {
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SL_HIT (mark price) symbol=${symbol} pnl=${pnl.toFixed(2)}`);
         }
-
         // Логирование позиции (для метрик/телеграма)
         logPositionCheck({
           timestamp: new Date().toISOString(),
@@ -743,7 +725,6 @@ async function checkPositions(): Promise<void> {
         notifyError({ context: 'position-check', symbol, error: message });
       }
     }
-
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions END`);
   } finally {
     positionCheckRunning = false;
@@ -755,7 +736,6 @@ export async function startScheduler(): Promise<void> {
     console.warn(`[${new Date().toISOString()}] [SCHEDULER] startScheduler SKIP already started`);
     return;
   }
-
   console.log(`[${new Date().toISOString()}] [SCHEDULER] startScheduler START`);
   schedulerStarted = true;
   schedulerStopping = false;
@@ -764,7 +744,6 @@ export async function startScheduler(): Promise<void> {
     executionService = createExecutionService();
     initializeSignerClient();
     await refreshTopMarkets();
-
     await loadReconciliationPendingSymbols();
 
     if (!PAPER_TRADING && signerClient) {
@@ -779,7 +758,6 @@ export async function startScheduler(): Promise<void> {
     startMarketRefresh();
     await checkSignals();
     await checkPositions();
-
     signalCheckInterval = setInterval(() => void checkSignals().catch(console.error), SIGNAL_CHECK_INTERVAL_MS);
     positionCheckInterval = setInterval(() => void checkPositions().catch(console.error), POSITION_CHECK_INTERVAL_MS);
 
@@ -804,27 +782,21 @@ export async function startScheduler(): Promise<void> {
 
 export async function stopScheduler(): Promise<void> {
   console.log(`[${new Date().toISOString()}] [SCHEDULER] stopScheduler START`);
-
   stopReconciliationLoop();
   stopBalanceSyncLoop();
   stopMarketRefresh();
-
   if (signalCheckInterval) clearInterval(signalCheckInterval);
   if (positionCheckInterval) clearInterval(positionCheckInterval);
   signalCheckInterval = null;
   positionCheckInterval = null;
-
   executionService?.stop?.();
-
   if (!schedulerStopping) {
     schedulerStopping = true;
     for (const symbol of new Set([...getPositions().map(position => normalizeSymbol(position.symbol)), ...getActiveTradingPairs().map(normalizeSymbol)])) {
       try { stopMarketData(symbol); } catch (error) { console.error(`[${new Date().toISOString()}] Failed to stop market data for ${symbol}:`, error); }
     }
   }
-
   await flushPositionPersistence().catch(error => console.error(`[${new Date().toISOString()}] Failed to flush persistence:`, error));
   schedulerStarted = false;
-
   console.log(`[${new Date().toISOString()}] [SCHEDULER] stopScheduler OK`);
 }
