@@ -1,3 +1,5 @@
+src/services/scheduler.ts
+
 import {
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
@@ -185,18 +187,6 @@ type SignalResult = {
   price?: number;
   reason?: string;
 };
-
-const BE_THRESHOLD_PERCENT = 0.2;
-const LOCK_RATIO = 0.3;
-const PARTIAL_THRESHOLD_PERCENT = 0.5;
-const TRAILING_DISTANCE_PERCENT = 0.35;
-const TIME_STOP_SECONDS = 1800;
-const TIME_STOP_MFE_PERCENT = 0.3;
-const TIME_STOP_MAX_LOSS_PERCENT = -0.5;
-const DEAD_TRADE_ENABLED = true;
-const DEAD_TRADE_CHECK_AFTER_SEC = 360;
-const DEAD_TRADE_MIN_MFE_ATR = 0.3;
-const MIN_LOCKED_PERCENT = 0.25;
 
 function formatOpenPositionsForTelegram(): string {
   const positions = getPositions();
@@ -453,10 +443,6 @@ async function checkSignals(): Promise<void> {
 
         if (!PAPER_TRADING && signerClient) {
           const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-          // Отключаем verifyPositionAfterFill — WebSocket теперь подтверждает мгновенно
-          // const verification = await verifyPositionAfterFill(signerClient, accountIndex, marketId, symbol, side, executionResult.filledQuantity);
-          // if (!verification.ok) { ... }
-          
           console.log(`[${new Date().toISOString()}] [SCHEDULER] checkSignals VERIFICATION_OK symbol=${symbol} (WebSocket confirmed)`);
           unlockSymbol(symbol);
           await syncLiveBalance(signerClient, accountIndex).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
@@ -532,6 +518,97 @@ async function executeClose(position: ReturnType<typeof getPositions>[number], c
   return true;
 }
 
+/**
+ * Реконсиляция локальных позиций с биржей.
+ * Если позиция закрыта на бирже (SL/TP сработал), закрываем локально с правильной причиной.
+ */
+async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
+  if (PAPER_TRADING || !signerClient || localPositions.length === 0) return;
+
+  const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+  const symbolsWithPositions = [...new Set(localPositions.map(p => normalizeSymbol(p.symbol)))];
+  
+  try {
+    const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
+    const remoteByMarketId = new Map(remotePositions.map(rp => [rp.marketId, rp]));
+    const remoteBySymbol = new Map(remotePositions.map(rp => [normalizeSymbol(rp.symbol), rp]));
+
+    for (const local of localPositions) {
+      const symbol = normalizeSymbol(local.symbol);
+      const marketId = local.marketId;
+      
+      // Ищем позицию на бирже по marketId или символу
+      const remote = remoteByMarketId.get(marketId) ?? remoteBySymbol.get(symbol);
+      
+      if (!remote) {
+        // Позиции нет на бирже — закрыта по SL/TP или вручную
+        // Определяем причину по последней известной марк-цене
+        const markPrice = getMarkPrice(symbol);
+        let closeReason: 'take_profit' | 'stop_loss' = 'stop_loss';
+        
+        if (markPrice != null && Number.isFinite(markPrice)) {
+          const tpHit = local.side === 'long' 
+            ? markPrice >= local.takeProfitPrice 
+            : markPrice <= local.takeProfitPrice;
+          const slHit = local.side === 'long' 
+            ? markPrice <= local.stopLossPrice 
+            : markPrice >= local.stopLossPrice;
+          
+          if (tpHit) closeReason = 'take_profit';
+          else if (slHit) closeReason = 'stop_loss';
+          else {
+            // Если ни TP ни SL не достигнуты по марк-цене, но позиции нет — скорее всего SL (более консервативно)
+            closeReason = 'stop_loss';
+          }
+        }
+        
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE position missing on exchange symbol=${symbol} reason=${closeReason} markPrice=${formatPrice(markPrice ?? 0)} localTP=${formatPrice(local.takeProfitPrice)} localSL=${formatPrice(local.stopLossPrice)}`);
+        
+        // Закрываем локально без отправки ордера на биржу (позиция уже закрыта)
+        const result = closePosition(local.id, local.exitPrice ?? local.entryPrice, closeReason, { 
+          executionOrderId: 'exchange-auto-close', 
+          clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`, 
+          fee: 0,
+          reconciled: true 
+        });
+        
+        if (!result.ok) {
+          console.error(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE local close failed symbol=${symbol}: ${result.message}`);
+          markReconciliationPending(symbol);
+        } else {
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE local closed symbol=${symbol} reason=${closeReason}`);
+          unlockSymbol(symbol);
+        }
+        continue;
+      }
+      
+      // Позиция есть на бирже — можно обновить локальные данные при необходимости
+      // (например, quantity, entryPrice, если изменились после частичного исполнения)
+      if (Math.abs(remote.size - local.quantity) > 1e-8) {
+        console.log(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE quantity mismatch symbol=${symbol} local=${local.quantity} remote=${remote.size}`);
+        updatePositionMetadata(local.id, { reconciliationIssue: 'quantity_mismatch', remoteQuantity: remote.size });
+        markReconciliationPending(symbol);
+      }
+    }
+    
+    // Проверяем "висячие" позиции на бирже, которых нет локально
+    const localByMarketId = new Map(localPositions.map(lp => [lp.marketId, lp]));
+    const localBySymbol = new Map(localPositions.map(lp => [normalizeSymbol(lp.symbol), lp]));
+    
+    for (const remote of remotePositions) {
+      const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(normalizeSymbol(remote.symbol));
+      if (!hasLocal && Math.abs(remote.size) > 1e-8) {
+        console.warn(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE orphan position on exchange symbol=${remote.symbol} marketId=${remote.marketId} size=${remote.size}`);
+        markReconciliationPending(remote.symbol);
+      }
+    }
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE ERROR:`, error);
+    // Не кидаем ошибку — просто пропускаем реконсиляцию этот цикл
+  }
+}
+
 async function checkPositions(): Promise<void> {
   if (positionCheckRunning) {
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SKIP already running`);
@@ -542,7 +619,13 @@ async function checkPositions(): Promise<void> {
     const snapshot = getPositions();
     console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions START positionsCount=${snapshot.length}`);
 
-    for (const snapshotPosition of snapshot) {
+    // 1. Реконсиляция с биржей — узнаем, какие позиции реально открыты
+    await reconcileLocalPositionsWithExchange(snapshot);
+
+    // 2. Берём актуальный список локальных позиций после возможного закрытия при реконсиляции
+    const currentPositions = getPositions();
+
+    for (const snapshotPosition of currentPositions) {
       const position = getPositions().find(item => item.id === snapshotPosition.id);
       if (!position || isReconciliationPending(position.symbol)) {
         console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SKIP symbol=${position?.symbol} reason=${position ? 'reconciliation-pending' : 'not found'}`);
@@ -570,131 +653,22 @@ async function checkPositions(): Promise<void> {
           worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) 
         });
 
+        // Проверяем только биржевые TP/SL через марк-цену (для логирования/метрик)
+        // Реальное закрытие происходит на бирже, а мы узнаем об этом через reconcileLocalPositionsWithExchange
         const tpHit = position.side === 'long' ? markPrice >= position.takeProfitPrice : markPrice <= position.takeProfitPrice;
         const slHit = position.side === 'long' ? markPrice <= position.stopLossPrice : markPrice >= position.stopLossPrice;
 
         if (tpHit) {
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TP_HIT symbol=${symbol} pnl=${pnl.toFixed(2)}`);
-          await executeClose(position, exitPrice, 'take_profit');
-          continue;
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TP_HIT (mark price) symbol=${symbol} pnl=${pnl.toFixed(2)}`);
+          // Не закрываем здесь — ждём реконсиляции, чтобы закрыть с правильной ценой исполнения
+          // Но логируем для метрик
         }
         
         if (slHit) {
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SL_HIT symbol=${symbol} pnl=${pnl.toFixed(2)} beTriggered=${position.metadata?.beTriggered ?? false}`);
-          await executeClose(position, exitPrice, position.metadata?.beTriggered ? 'breakeven_stop' : 'stop_loss');
-          continue;
+          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions SL_HIT (mark price) symbol=${symbol} pnl=${pnl.toFixed(2)}`);
         }
 
-        // ========== BREAKEVEN LOGIC ==========
-        const beThreshold = position.entryPrice * (1 + BE_THRESHOLD_PERCENT / 100 * (position.side === 'long' ? 1 : -1));
-        const beTriggered = position.side === 'long' 
-          ? markPrice >= beThreshold 
-          : markPrice <= beThreshold;
-        
-        if (beTriggered && !position.metadata?.beTriggered) {
-          console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions BE_TRIGGERED symbol=${symbol} threshold=${beThreshold.toFixed(4)} markPrice=${markPrice.toFixed(4)}`);
-          updatePositionMetadata(position.id, { beTriggered: true });
-        }
-
-        if (position.metadata?.beTriggered) {
-          const beStop = position.entryPrice * (1 + 0.0005 * (position.side === 'long' ? 1 : -1)); // 0.05% above entry
-          const newStopLoss = position.side === 'long' 
-            ? Math.max(position.stopLossPrice, beStop) 
-            : Math.min(position.stopLossPrice, beStop);
-          
-          if (newStopLoss !== position.stopLossPrice) {
-            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions BE_STOP_UPDATE symbol=${symbol} oldSL=${position.stopLossPrice.toFixed(4)} newSL=${newStopLoss.toFixed(4)}`);
-            updatePositionStopLoss(position.id, newStopLoss);
-          }
-        }
-
-        // ========== TRAILING STOP LOGIC ==========
-        if (maxPnlPercent >= TIME_STOP_MFE_PERCENT * 100) { // 0.3% MFE
-          const trailingDistance = markPrice * TRAILING_DISTANCE_PERCENT / 100; // 0.35%
-          const trailingStop = position.side === 'long' 
-            ? markPrice - trailingDistance 
-            : markPrice + trailingDistance;
-          
-          const newTrailingStop = position.side === 'long'
-            ? Math.max(position.stopLossPrice, trailingStop)
-            : Math.min(position.stopLossPrice, trailingStop);
-          
-          if (newTrailingStop !== position.stopLossPrice && newTrailingStop > position.entryPrice * (position.side === 'long' ? 1.001 : 0.999)) {
-            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TRAILING_STOP symbol=${symbol} maxPnlPercent=${maxPnlPercent.toFixed(2)}% oldSL=${position.stopLossPrice.toFixed(4)} newSL=${newTrailingStop.toFixed(4)}`);
-            updatePositionStopLoss(position.id, newTrailingStop);
-          }
-        }
-
-        // ========== TIME STOP LOGIC ==========
-        const positionAgeSeconds = Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000);
-        if (positionAgeSeconds >= TIME_STOP_SECONDS) { // 30 minutes
-          if (pnlPercent > TIME_STOP_MAX_LOSS_PERCENT && pnlPercent < TIME_STOP_MFE_PERCENT * 100) {
-            console.log(`[${new Date().toISOString()}] [SCHEDULER] checkPositions TIME_STOP symbol=${symbol} age=${positionAgeSeconds}s pnlPercent=${pnlPercent.toFixed(2)}%`);
-            await executeClose(position, exitPrice, 'time_stop');
-            continue;
-          }
-        }
-
-        // ========== DEAD TRADE LOGIC ==========
-        const partialClosed =
-          position.metadata?.partialClosed === true ||
-          position.metadata?.partialClosePending === true;
-        
-        if (
-          DEAD_TRADE_ENABLED &&
-          !partialClosed &&
-          !beTriggered &&
-          positionAgeSeconds >= DEAD_TRADE_CHECK_AFTER_SEC
-        ) {
-          const entryAtr =
-            position.metadata?.lastAtr ?? 0;
-        
-          const maxUnrealizedPnL =
-            position.metadata?.maxUnrealizedPnL ?? 0;
-        
-          const mfeAtr =
-            entryAtr > 0 && position.quantity > 0
-              ? maxUnrealizedPnL /
-                (entryAtr * position.quantity)
-              : 0;
-        
-          console.log(
-            `[${new Date().toISOString()}] ` +
-            `[SCHEDULER] checkPositions DEAD_TRADE_CHECK ` +
-            `symbol=${symbol} ` +
-            `age=${positionAgeSeconds}s ` +
-            `threshold=${DEAD_TRADE_CHECK_AFTER_SEC}s ` +
-            `entryAtr=${entryAtr.toFixed(6)} ` +
-            `maxUnrealizedPnL=${maxUnrealizedPnL.toFixed(6)} ` +
-            `mfeAtr=${mfeAtr.toFixed(4)} ` +
-            `minMfeAtr=${DEAD_TRADE_MIN_MFE_ATR.toFixed(4)} ` +
-            `partialClosed=${partialClosed} ` +
-            `beTriggered=${beTriggered} ` +
-            `pnl=${pnl.toFixed(6)} ` +
-            `pnlPercent=${pnlPercent.toFixed(4)}`
-          );
-        
-          if (mfeAtr < DEAD_TRADE_MIN_MFE_ATR) {
-            console.log(
-              `[${new Date().toISOString()}] ` +
-              `[SCHEDULER] checkPositions DEAD_TRADE_TRIGGER ` +
-              `symbol=${symbol} ` +
-              `age=${positionAgeSeconds}s ` +
-              `mfeAtr=${mfeAtr.toFixed(4)} ` +
-              `minMfeAtr=${DEAD_TRADE_MIN_MFE_ATR.toFixed(4)}`
-            );
-        
-            await executeClose(
-              position,
-              exitPrice,
-              'dead_trade_mfe'
-            );
-        
-            continue;
-          }
-        }
-        
-        // ========== LOG POSITION CHECK ==========
+        // Логирование позиции (для метрик/телеграма)
         logPositionCheck({
           timestamp: new Date().toISOString(),
           positionId: position.id,
@@ -713,7 +687,7 @@ async function checkPositions(): Promise<void> {
           hitTakeProfit: tpHit,
           hitStopLoss: slHit,
           action: 'hold',
-          positionAgeSeconds
+          positionAgeSeconds: Math.floor((Date.now() - new Date(position.openedAt).getTime()) / 1000)
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
