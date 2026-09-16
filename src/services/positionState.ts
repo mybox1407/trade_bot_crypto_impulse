@@ -254,7 +254,7 @@ export function hasOpenPosition(symbol?: string): boolean {
 
 export function getLastClosedTrade(): ClosedTrade | null { return lastClosedTrade; }
 
-export function getPositionNotional(): number { return getAvailableBalance() * POSITION_PERCENT; }
+export function getPositionNotional(): number { return balance * POSITION_PERCENT; }
 export function getRiskCapital(): number { return balance * MAX_RISK_PER_TRADE; }
 export function getOpenPositionsCount(): number { return currentPositions.length; }
 
