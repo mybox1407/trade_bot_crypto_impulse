@@ -85,7 +85,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'ORCL',
   'ANTHROPIC',
   'SAMSUNGUSD',
-  'GOOGL'.
+  'GOOGL',
   'TSLA',
   'NBIS',
   'CRCL',
