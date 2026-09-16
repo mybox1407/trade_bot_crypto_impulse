@@ -83,6 +83,13 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'AAPL',
   'HOOD',
   'ORCL',
+  'ANTHROPIC',
+  'SAMSUNGUSD',
+  'GOOGL'.
+  'TSLA',
+  'NBIS',
+  'CRCL',
+  'CBRS',
 
   //блеклист
   'UNI',
