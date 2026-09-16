@@ -1,8 +1,11 @@
+// src/services/execution/paperExecution.ts
+
 import {
   ExecutionService,
   OpenExecutionRequest,
   CloseExecutionRequest,
-  ExecutionResult
+  ExecutionResult,
+  ProtectiveOrderSpec
 } from './types';
 
 import {
@@ -69,5 +72,20 @@ export class PaperExecutionService
       averageFillPrice: req.expectedPrice,
       fee
     };
+  }
+
+  async ensureProtectiveOrders(
+    _symbol: string,
+    _positionSide: 'long' | 'short',
+    _spec: ProtectiveOrderSpec
+  ): Promise<void> {
+    // Paper-реализация: просто логируем, реальные ордера не ставим
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `📄 [PAPER] ensureProtectiveOrders ` +
+        `${_symbol} ${_positionSide} ` +
+        `TP=${_spec.takeProfitPrice?.toFixed(6)} ` +
+        `SL=${_spec.stopLossPrice?.toFixed(6)}`
+    );
   }
 }
