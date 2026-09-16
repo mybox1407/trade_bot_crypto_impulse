@@ -82,7 +82,11 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'STRC',
   'AAPL',
   'HOOD',
-  'ORCL'
+  'ORCL',
+
+  //блеклист
+  'UNI',
+  'SOXL'
 ]);
 
 function toNumber(
