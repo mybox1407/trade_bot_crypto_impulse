@@ -5,7 +5,8 @@ import {
   OpenExecutionRequest,
   CloseExecutionRequest,
   ExecutionResult,
-  ProtectiveOrderSpec
+  EnsureProtectiveOrdersRequest,
+  ProtectiveOrders
 } from './types';
 
 import {
@@ -75,17 +76,23 @@ export class PaperExecutionService
   }
 
   async ensureProtectiveOrders(
-    _symbol: string,
-    _positionSide: 'long' | 'short',
-    _spec: ProtectiveOrderSpec
-  ): Promise<void> {
+    req: EnsureProtectiveOrdersRequest
+  ): Promise<ProtectiveOrders> {
     // Paper-реализация: просто логируем, реальные ордера не ставим
     console.log(
       `[${new Date().toISOString()}] ` +
         `📄 [PAPER] ensureProtectiveOrders ` +
-        `${_symbol} ${_positionSide} ` +
-        `TP=${_spec.takeProfitPrice?.toFixed(6)} ` +
-        `SL=${_spec.stopLossPrice?.toFixed(6)}`
+        `${req.symbol} ${req.side.toUpperCase()} ` +
+        `qty=${req.quantity.toFixed(8)} ` +
+        `TP=${req.takeProfitPrice.toFixed(6)} ` +
+        `SL=${req.stopLossPrice.toFixed(6)}`
     );
+
+    // Возвращаем заглушку — в paper-режиме ордера не создаются
+    return {
+      marketId: req.marketId,
+      stopLossClientOrderIndex: 0,
+      takeProfitClientOrderIndex: 0
+    };
   }
 }
