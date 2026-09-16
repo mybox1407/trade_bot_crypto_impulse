@@ -90,6 +90,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'NBIS',
   'CRCL',
   'CBRS',
+  'MSTR',
+  'SKHY',
 
   //блеклист
   'UNI',
