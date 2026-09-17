@@ -183,16 +183,22 @@ export function getReconciliationPendingSymbols(): string[] {
 
 export function addReconciliationPendingSymbol(symbol: string): void {
   reconciliationPendingSymbols.add(normalizeSymbol(symbol));
+  schedulePersistence();
 }
 
 export function removeReconciliationPendingSymbol(symbol: string): void {
   reconciliationPendingSymbols.delete(normalizeSymbol(symbol));
+  schedulePersistence();
 }
 
 export function isReconciliationPendingSymbol(symbol: string): boolean {
   return reconciliationPendingSymbols.has(normalizeSymbol(symbol));
 }
 
+/**
+ * Protects only exchange-order submission.
+ * It must not be used by openPosition() after a confirmed fill.
+ */
 export function beginPositionOpening(symbol: string): boolean {
   const normalized = normalizeSymbol(symbol);
   if (openingSymbols.has(normalized) || hasOpenPosition(normalized)) return false;
@@ -295,7 +301,11 @@ export function openPosition(data: {
 
   if (currentPositions.length >= MAX_PARALLEL_POSITIONS) return fail(`Max ${MAX_PARALLEL_POSITIONS} open positions reached`);
   if (hasOpenPosition(normalizedSymbol)) return fail(`Position for ${normalizedSymbol} is already open`);
-  if (isPositionOpening(normalizedSymbol)) return fail(`Position opening already in progress for ${normalizedSymbol}`);
+
+  // Deliberately no isPositionOpening() check here.
+  // A confirmed exchange fill is processed while the submission guard may
+  // still be active. The guard protects duplicate order submission only.
+
   if (data.marketId != null && (!Number.isInteger(data.marketId) || data.marketId < 0)) return fail(`Invalid marketId: ${data.marketId}`);
   if (!isValidLevels({ side: data.side, entryPrice: data.entryPrice, takeProfitPrice: data.takeProfitPrice, stopLossPrice: data.stopLossPrice })) return fail('Invalid entry / stop / take-profit levels');
   if (!isFinitePositive(data.quantity)) return fail('Invalid quantity');
