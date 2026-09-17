@@ -1,7 +1,4 @@
-/* Full scheduler.ts with automatic SL/TP recovery.
- *
- * Based on the complete scheduler.ts supplied in the conversation.
- */
+/* Full scheduler.ts with automatic SL/TP recovery and structured trade/reconciliation logs. */
 
 import {
   SIGNAL_CHECK_INTERVAL_MS,
@@ -69,7 +66,6 @@ import {
 } from './reconciliation';
 import type { EnsureProtectiveOrdersRequest } from './execution/types';
 
-const LIGHTER_API_URL = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
 
@@ -94,6 +90,23 @@ type SignalResult = {
   price?: number;
   reason?: string;
 };
+
+function tradeLog(event: string, data: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({
+    event,
+    timestamp: new Date().toISOString(),
+    ...data
+  }));
+}
+
+function tradeError(event: string, error: unknown, data: Record<string, unknown> = {}): void {
+  console.error(JSON.stringify({
+    event,
+    timestamp: new Date().toISOString(),
+    error: error instanceof Error ? error.message : String(error),
+    ...data
+  }));
+}
 
 function isSymbolLocked(symbol: string): boolean {
   const key = normalizeSymbol(symbol);
@@ -183,7 +196,7 @@ function initializeSignerClient(): void {
 function startReconciliationLoop(client: SignerClient, accountIndex: number): void {
   reconciliationInterval = setInterval(() => {
     void reconcileAccount(client, accountIndex, { autoFix: false, dryRun: true }).catch(error => {
-      console.error(`[${new Date().toISOString()}] Periodic reconciliation error:`, error);
+      tradeError('EXCHANGE_RECONCILIATION_FAILED', error, { accountIndex });
     });
   }, 15 * 60_000);
 }
@@ -197,7 +210,7 @@ function startBalanceSyncLoop(accountIndex: number): void {
   balanceSyncInterval = setInterval(() => {
     if (!signerClient) return;
     void syncLiveBalance(signerClient, accountIndex).catch(error => {
-      console.error(`[${new Date().toISOString()}] Balance sync error:`, error);
+      tradeError('BALANCE_SYNC_FAILED', error, { accountIndex });
     });
   }, 5 * 60_000);
 }
@@ -213,22 +226,27 @@ async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
   const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
   const authorization = signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? '';
 
-  const responses = await Promise.all([
-    fetch(`${LIGHTER_API_URL}/api/v1/accountActiveOrders?account_index=${accountIndex}&limit=100`, {
-      headers: { Accept: 'application/json', Authorization: authorization }
-    }),
-    fetch(`${LIGHTER_API_URL}/api/v1/accountInactiveOrders?account_index=${accountIndex}&limit=100`, {
-      headers: { Accept: 'application/json', Authorization: authorization }
-    })
-  ]);
+  try {
+    const responses = await Promise.all([
+      fetch(`${process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai'}/api/v1/accountActiveOrders?account_index=${accountIndex}&limit=100`, {
+        headers: { Accept: 'application/json', Authorization: authorization }
+      }),
+      fetch(`${process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai'}/api/v1/accountInactiveOrders?account_index=${accountIndex}&limit=100`, {
+        headers: { Accept: 'application/json', Authorization: authorization }
+      })
+    ]);
 
-  const data = await Promise.all(responses.map(async response => {
-    if (!response.ok) throw new Error(`Orders request failed: ${response.status}`);
-    return response.json() as Promise<any>;
-  }));
+    const data = await Promise.all(responses.map(async response => {
+      if (!response.ok) throw new Error(`Orders request failed: ${response.status}`);
+      return response.json() as Promise<any>;
+    }));
 
-  const orders = data.flatMap(item => Array.isArray(item?.orders) ? item.orders : []);
-  return orders.some((order: any) => Number(order.market_index) === marketId && ['submitted', 'partially_filled', 'open'].includes(String(order.status).toLowerCase()));
+    const orders = data.flatMap(item => Array.isArray(item?.orders) ? item.orders : []);
+    return orders.some((order: any) => Number(order.market_index) === marketId && ['submitted', 'partially_filled', 'open'].includes(String(order.status).toLowerCase()));
+  } catch (error) {
+    tradeError('REMOTE_ORDER_SYNC_FAILED', error, { accountIndex, marketId });
+    throw error;
+  }
 }
 
 function buildPositionMetadata(regime: string, indicators: any, signalTime?: number, signalTimeIso?: string) {
@@ -258,12 +276,17 @@ async function ensurePositionProtection(
   position: ReturnType<typeof getPositions>[number],
   activeMarket: { priceDecimals: number; sizeDecimals: number }
 ): Promise<void> {
-  if (position.marketId == null) {
-    throw new Error(`Missing marketId for ${position.symbol}`);
-  }
-  if (!executionService.ensureProtectiveOrders) {
-    throw new Error('Execution service does not support protective-order recovery');
-  }
+  if (position.marketId == null) throw new Error(`Missing marketId for ${position.symbol}`);
+  if (!executionService.ensureProtectiveOrders) throw new Error('Execution service does not support protective-order recovery');
+
+  tradeLog('PROTECTION_RECOVERY_REQUEST', {
+    symbol: position.symbol,
+    marketId: position.marketId,
+    side: position.side,
+    quantity: position.quantity,
+    stopLossPrice: position.exchangeStopLossPrice,
+    takeProfitPrice: position.exchangeTakeProfitPrice
+  });
 
   const request: EnsureProtectiveOrdersRequest = {
     symbol: position.symbol,
@@ -278,15 +301,23 @@ async function ensurePositionProtection(
     takeProfitPrice: position.exchangeTakeProfitPrice
   };
 
-  const protection = await executionService.ensureProtectiveOrders(request);
-  if (!protection.stopLossOrderId || !protection.takeProfitOrderId) {
-    throw new Error(`Protective orders were not fully confirmed for ${position.symbol}`);
+  try {
+    const protection = await executionService.ensureProtectiveOrders(request);
+    if (!protection.stopLossOrderId || !protection.takeProfitOrderId) {
+      throw new Error(`Protective orders were not fully confirmed for ${position.symbol}`);
+    }
+    const updated = updatePositionMetadata(position.id, { reconciliationIssue: undefined });
+    if (!updated) throw new Error(`Failed to update protection state for ${position.symbol}`);
+    tradeLog('PROTECTION_RECOVERED', {
+      symbol: position.symbol,
+      marketId: position.marketId,
+      stopLossOrderId: protection.stopLossOrderId,
+      takeProfitOrderId: protection.takeProfitOrderId
+    });
+  } catch (error) {
+    tradeError('PROTECTION_RECOVERY_FAILED', error, { symbol: position.symbol, marketId: position.marketId });
+    throw error;
   }
-
-  const updated = updatePositionMetadata(position.id, {
-    reconciliationIssue: undefined
-  });
-  if (!updated) throw new Error(`Failed to update protection state for ${position.symbol}`);
 }
 
 async function checkSignals(): Promise<void> {
@@ -380,45 +411,43 @@ async function checkSignals(): Promise<void> {
         }
 
         const clientOrderId = `${symbol}-${Date.now()}-open`;
-        const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
+        tradeLog('POSITION_OPEN_REQUEST', { symbol, marketId, side, quantity, expectedPrice, stopLossPrice, takeProfitPrice, clientOrderId });
+
+        let executionResult;
+        try {
+          executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
+        } catch (error) {
+          tradeError('POSITION_OPEN_FAILED', error, { symbol, marketId, side, quantity, expectedPrice, clientOrderId });
+          endPositionOpening(symbol);
+          markReconciliationPending(symbol);
+          throw error;
+        }
+
         const fillConfirmed = executionResult.filledQuantity > 0 && executionResult.averageFillPrice != null && Number.isFinite(executionResult.averageFillPrice);
 
         if (!fillConfirmed) {
           endPositionOpening(symbol);
           const reason = executionResult.message ?? 'Execution failed';
+          tradeError('POSITION_OPEN_FAILED', reason, { symbol, marketId, side, quantity, expectedPrice, status: executionResult.status, orderId: executionResult.orderId ?? null });
           if (executionResult.status === 'unknown') markReconciliationPending(symbol);
           results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason });
           errorsBySymbol.set(symbol, reason);
           continue;
         }
 
-        const openResult = openPosition({
-          symbol,
-          marketId,
-          side,
-          entryPrice: executionResult.averageFillPrice as number,
-          quantity: executionResult.filledQuantity,
-          takeProfitPrice,
-          stopLossPrice,
-          exchangeStopLossPrice: stopLossPrice,
-          exchangeTakeProfitPrice: takeProfitPrice,
-          exchangeStopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId,
-          exchangeTakeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId,
-          exchangeStopLossClientOrderIndex: executionResult.protectiveOrders?.stopLossClientOrderIndex,
-          exchangeTakeProfitClientOrderIndex: executionResult.protectiveOrders?.takeProfitClientOrderIndex,
-          metadata: buildPositionMetadata(regime, indicators, signalTime, signalTimeIso),
-          executionOrderId: executionResult.orderId,
-          clientOrderId
-        });
+        const openResult = openPosition({ symbol, marketId, side, entryPrice: executionResult.averageFillPrice as number, quantity: executionResult.filledQuantity, takeProfitPrice, stopLossPrice, exchangeStopLossPrice: stopLossPrice, exchangeTakeProfitPrice: takeProfitPrice, exchangeStopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId, exchangeTakeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId, exchangeStopLossClientOrderIndex: executionResult.protectiveOrders?.stopLossClientOrderIndex, exchangeTakeProfitClientOrderIndex: executionResult.protectiveOrders?.takeProfitClientOrderIndex, metadata: buildPositionMetadata(regime, indicators, signalTime, signalTimeIso), executionOrderId: executionResult.orderId, clientOrderId });
 
         endPositionOpening(symbol);
         if (!openResult.ok) {
           markReconciliationPending(symbol);
           const reason = `Filled but local state was not created: ${openResult.message}`;
+          tradeError('LOCAL_POSITION_CREATE_FAILED', reason, { symbol, marketId, side, quantity: executionResult.filledQuantity, orderId: executionResult.orderId ?? null });
           errorsBySymbol.set(symbol, reason);
           results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason });
           continue;
         }
+
+        tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: executionResult.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: executionResult.averageFillPrice, stopLossPrice, takeProfitPrice, executionOrderId: executionResult.orderId ?? null, stopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId ?? null, takeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId ?? null, protectionConfirmed: Boolean(executionResult.protectiveOrders?.stopLossOrderId && executionResult.protectiveOrders?.takeProfitOrderId) });
 
         if (!executionResult.protectiveOrders?.stopLossOrderId || !executionResult.protectiveOrders?.takeProfitOrderId) {
           try {
@@ -432,6 +461,7 @@ async function checkSignals(): Promise<void> {
           } catch (error) {
             markReconciliationPending(symbol);
             const reason = error instanceof Error ? error.message : 'Protective-order recovery failed';
+            tradeError('PROTECTION_RECOVERY_FAILED', reason, { symbol });
             notifyError({ context: 'protective-order-recovery', symbol, error: reason });
             errorsBySymbol.set(symbol, reason);
             results.push({ symbol, status: 'not-ready', regime, hasSignal: true, side, price: expectedPrice, reason });
@@ -441,13 +471,16 @@ async function checkSignals(): Promise<void> {
 
         unlockSymbol(symbol);
         if (!PAPER_TRADING && signerClient) {
-          await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => console.error(`[${new Date().toISOString()}] Balance sync after open failed:`, error));
+          await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => {
+            tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol });
+          });
         }
         results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened and protected' });
       } catch (error) {
         endPositionOpening(symbol);
         const message = error instanceof Error ? error.message : 'Unknown error';
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
+        tradeError('SIGNAL_CHECK_FAILED', error, { symbol });
         errorsBySymbol.set(symbol, message);
         results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
@@ -462,29 +495,46 @@ async function checkSignals(): Promise<void> {
 async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
   if (PAPER_TRADING || !signerClient) return;
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
   try {
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
     const remoteByMarketId = new Map(remotePositions.map(position => [position.marketId, position]));
     const remoteBySymbol = new Map(remotePositions.map(position => [normalizeSymbol(position.symbol), position]));
+
     for (const local of localPositions) {
       const symbol = normalizeSymbol(local.symbol);
       const remote = local.marketId != null ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol)) : remoteBySymbol.get(symbol);
       if (remote) continue;
+
       const markPrice = getMarkPrice(symbol);
       const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0 ? markPrice : local.entryPrice;
       const tpHit = markPrice != null && Number.isFinite(markPrice) && (local.side === 'long' ? markPrice >= local.takeProfitPrice : markPrice <= local.takeProfitPrice);
       const closeReason = tpHit ? 'take_profit' : 'stop_loss';
+
+      tradeLog('POSITION_CLOSED_DETECTED', { symbol, positionId: local.id, marketId: local.marketId, side: local.side, closeReason, closePrice, markPrice, entryPrice: local.entryPrice, takeProfitPrice: local.takeProfitPrice, stopLossPrice: local.stopLossPrice });
+
       const closeResult = closePosition(local.id, closePrice, closeReason, { executionOrderId: 'exchange-auto-close', clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`, fee: 0 });
-      if (!closeResult.ok) markReconciliationPending(symbol); else unlockSymbol(symbol);
+      if (!closeResult.ok) {
+        markReconciliationPending(symbol);
+        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, { symbol, positionId: local.id, closeReason });
+      } else {
+        unlockSymbol(symbol);
+        tradeLog('POSITION_CLOSED', { symbol, positionId: local.id, closeReason, closePrice });
+      }
     }
+
     const localByMarketId = new Map(localPositions.filter(position => position.marketId != null).map(position => [position.marketId as number, position]));
     const localBySymbol = new Map(localPositions.map(position => [normalizeSymbol(position.symbol), position]));
     for (const remote of remotePositions) {
       const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(normalizeSymbol(remote.symbol));
-      if (!hasLocal) markReconciliationPending(remote.symbol);
+      if (!hasLocal) {
+        markReconciliationPending(remote.symbol);
+        tradeError('LOCAL_POSITION_MISSING', 'Remote position has no local state', { symbol: remote.symbol, marketId: remote.marketId });
+      }
     }
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] [SCHEDULER] RECONCILE ERROR:`, error);
+    tradeError('EXCHANGE_SYNC_FAILED', error, { accountIndex, localPositions: localPositions.length });
+    throw error;
   }
 }
 
@@ -517,6 +567,7 @@ async function checkPositions(): Promise<void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         markReconciliationPending(symbol);
+        tradeError('POSITION_CHECK_FAILED', error, { symbol, positionId: position.id });
         notifyError({ context: 'position-check', symbol, error: message });
       }
     }
@@ -545,8 +596,8 @@ export async function startScheduler(): Promise<void> {
     startMarketRefresh();
     await checkPositions();
     await checkSignals();
-    signalCheckInterval = setInterval(() => void checkSignals().catch(console.error), SIGNAL_CHECK_INTERVAL_MS);
-    positionCheckInterval = setInterval(() => void checkPositions().catch(console.error), POSITION_CHECK_INTERVAL_MS);
+    signalCheckInterval = setInterval(() => void checkSignals().catch(error => tradeError('SIGNAL_INTERVAL_FAILED', error)), SIGNAL_CHECK_INTERVAL_MS);
+    positionCheckInterval = setInterval(() => void checkPositions().catch(error => tradeError('POSITION_INTERVAL_FAILED', error)), POSITION_CHECK_INTERVAL_MS);
     notifyStartup({ port: Number(process.env.PORT) || 3006, tradingPairs: getActiveTradingPairs(), signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000, positionInterval: POSITION_CHECK_INTERVAL_MS / 1000, balance: getBalance() });
   } catch (error) {
     schedulerStarted = false;
@@ -554,6 +605,7 @@ export async function startScheduler(): Promise<void> {
     stopReconciliationLoop();
     stopBalanceSyncLoop();
     executionService?.stop?.();
+    tradeError('SCHEDULER_START_FAILED', error);
     throw error;
   }
 }
@@ -571,9 +623,13 @@ export async function stopScheduler(): Promise<void> {
     schedulerStopping = true;
     const symbols = new Set([...getPositions().map(position => normalizeSymbol(position.symbol)), ...getActiveTradingPairs().map(normalizeSymbol)]);
     for (const symbol of symbols) {
-      try { stopMarketData(symbol); } catch (error) { console.error(`[${new Date().toISOString()}] Failed to stop market data for ${symbol}:`, error); }
+      try {
+        stopMarketData(symbol);
+      } catch (error) {
+        tradeError('MARKET_DATA_STOP_FAILED', error, { symbol });
+      }
     }
   }
-  await flushPositionPersistence().catch(error => console.error(`[${new Date().toISOString()}] Failed to flush persistence:`, error));
+  await flushPositionPersistence().catch(error => tradeError('POSITION_PERSISTENCE_FLUSH_FAILED', error));
   schedulerStarted = false;
 }
