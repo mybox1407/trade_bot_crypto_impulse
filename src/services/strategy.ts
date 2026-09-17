@@ -63,7 +63,7 @@ function getUtcPlus4(date = new Date()): number {
 }
 
 export function isTradingTimeUtcPlus4(date = new Date()): boolean {
-  const hour = getUtcPlus4Hour(date);
+  const hour = getUtcPlus4(date);
 
   // 12:00–23:59 и 00:00–01:59 UTC+4
   return hour >= 12 || hour < 2;
