@@ -103,7 +103,9 @@ export class LighterExecutionService implements ExecutionService {
   }
 
   async openPosition(req: OpenExecutionRequest): Promise<ExecutionResult> {
-    if (this.openingMarkets.has(req.marketId)) return this.rejectedResult(req, `Opening order already in progress for market ${req.marketId}`);
+    if (this.openingMarkets.has(req.marketId)) {
+      return this.rejectedResult(req, `Opening order already in progress for market ${req.marketId}`);
+    }
 
     const hasPending = await this.checkPendingRemoteOrders(req.marketId);
     if (hasPending) return this.rejectedResult(req, `Pending remote order exists for market ${req.marketId}`);
@@ -125,19 +127,29 @@ export class LighterExecutionService implements ExecutionService {
 
       try {
         const actualBaseAmount = this.toBaseAmount(execution.filledQuantity, sizeDecimals);
-        if (actualBaseAmount <= 0) return { ...execution, ok: false, status: 'unknown', message: 'Execution returned invalid filled quantity' };
+        if (actualBaseAmount <= 0) {
+          return {
+            ...execution,
+            ok: false,
+            status: 'unknown',
+            message: 'Execution returned invalid filled quantity'
+          };
+        }
+
         const protectiveOrders = await this.createProtectiveOrders(req, actualBaseAmount);
         return { ...execution, ok: true, protectiveOrders };
       } catch (error) {
+        // The entry is already filled. Do not hide that fact from scheduler.
+        // Scheduler must persist the fill and recover protective orders.
         return {
           ...execution,
           ok: false,
-          status: 'unknown',
+          status: 'filled_unprotected',
           filledQuantity: execution.filledQuantity,
           averageFillPrice: execution.averageFillPrice,
           orderId: execution.orderId ?? submitted.orderId,
           message: `Entry filled but protective orders were not created: ${error instanceof Error ? error.message : 'unknown error'}`
-        };
+        } as ExecutionResult;
       }
     } catch (error) {
       return this.unknownResult(req, error instanceof Error ? error.message : 'Unknown error');
