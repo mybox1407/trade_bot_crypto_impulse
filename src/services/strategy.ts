@@ -19,7 +19,7 @@ export const ENABLE_BREAKOUT_TRADES = false;
 // Время: UTC+4.
 // Торговля разрешена с 14:00 до 01:59.
 // В 02:00–13:59 новые позиции не открываются.
-export const TRADING_START_HOUR_UTC_PLUS_4 = 14;
+export const TRADING_START_HOUR_UTC_PLUS_4 = 12;
 export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
 
 // RSI
@@ -58,15 +58,15 @@ export const ENABLE_TRAILING_STOP = false;
 
 // ========== ФУНКЦИИ ВРЕМЕНИ ==========
 
-function getUtcPlus4Hour(date = new Date()): number {
+function getUtcPlus4(date = new Date()): number {
   return (date.getUTCHours() + 4) % 24;
 }
 
 export function isTradingTimeUtcPlus4(date = new Date()): boolean {
   const hour = getUtcPlus4Hour(date);
 
-  // 14:00–23:59 и 00:00–01:59 UTC+4
-  return hour >= 14 || hour < 2;
+  // 12:00–23:59 и 00:00–01:59 UTC+4
+  return hour >= 12 || hour < 2;
 }
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
