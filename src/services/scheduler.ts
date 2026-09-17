@@ -466,8 +466,43 @@ async function checkSignals(): Promise<void> {
         const indicators = (result as any).indicators as any;
         const isTradingWindow = isTradingTimeUtcPlus4(new Date());
 
-        logSignalCheck({ timestamp: new Date().toISOString(), symbol, timeframe: '15m', side: side ?? 'none', price: price ?? 0, regime: regime ?? 'unknown', takeProfitPrice: takeProfitPrice ?? null, stopLossPrice: stopLossPrice ?? null, positionSize: positionSize ?? null, macdCrossUp: indicators?.macdCrossUp ?? false, macdCrossDown: indicators?.macdCrossDown ?? false, rsiBull: false, rsiBear: false, bbUpper: indicators?.bbUpper ?? 0, bbMiddle: indicators?.bbMiddle ?? 0, bbLower: indicators?.bbLower ?? 0, adx: indicators?.adx ?? 0, adxRising: indicators?.regimeIndicators?.adxRising ?? false, ema20: indicators?.ema20 ?? 0, ema50: indicators?.regimeIndicators?.ema50 ?? 0, ema200: indicators?.ema200 ?? 0, bbWidth: indicators?.bbWidth ?? 0, atrPct: indicators?.atrPct ?? 0, signalTriggered: buy || sell, positionOpened: false, entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? null, entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? null, entryTooExtended: indicators?.entryTooExtended ?? false, signalTimeIso: signalTimeIso ?? new Date().toISOString(), isTradingWindow });
-
+        logSignalCheck({
+          timestamp: new Date().toISOString(),
+          symbol,
+          timeframe: '15m',
+          side: side ?? 'none',
+          price: price ?? 0,
+          regime: regime ?? 'unknown',
+          takeProfitPrice: takeProfitPrice ?? null,
+          stopLossPrice: stopLossPrice ?? null,
+          positionSize: positionSize ?? null,
+        
+          macdCrossUp: indicators?.macdCrossUp ?? false,
+          macdCrossDown: indicators?.macdCrossDown ?? false,
+          lastRsi: indicators?.lastRsi ?? 0,
+          lastAtr: indicators?.lastAtr ?? 0,
+        
+          rsiBull: false,
+          rsiBear: false,
+          bbUpper: indicators?.bbUpper ?? 0,
+          bbMiddle: indicators?.bbMiddle ?? 0,
+          bbLower: indicators?.bbLower ?? 0,
+          adx: indicators?.adx ?? 0,
+          adxRising: indicators?.regimeIndicators?.adxRising ?? false,
+          ema20: indicators?.ema20 ?? 0,
+          ema50: indicators?.regimeIndicators?.ema50 ?? 0,
+          ema200: indicators?.ema200 ?? 0,
+          bbWidth: indicators?.bbWidth ?? 0,
+          atrPct: indicators?.atrPct ?? 0,
+          signalTriggered: buy || sell,
+          positionOpened: false,
+          entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? null,
+          entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? null,
+          entryTooExtended: indicators?.entryTooExtended ?? false,
+          signalTimeIso: signalTimeIso ?? new Date().toISOString(),
+          isTradingWindow
+        });
+        
         if (skipReason || (!buy && !sell)) {
           const reason = skipReason ?? 'No signal';
           results.push({ symbol, status: 'no-signal', regime, hasSignal: false, side, price, reason });
