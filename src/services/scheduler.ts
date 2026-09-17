@@ -389,7 +389,7 @@ async function checkSignals(): Promise<void> {
           continue;
         }
         if (!isTradingWindow) {
-          const reason = 'Outside trading window (02:00–13:59 UTC+4)';
+          const reason = 'Outside trading window (02:00–11:59 UTC+4)';
           results.push({ symbol, status: 'no-signal', regime, hasSignal: false, side, price, reason });
           continue;
         }
