@@ -19,15 +19,17 @@ export const ENABLE_BREAKOUT_TRADES = false;
 // Время: UTC+4.
 // Торговля разрешена с 14:00 до 01:59.
 // В 02:00–13:59 новые позиции не открываются.
-export const TRADING_START_HOUR_UTC_PLUS_4 = 12;
+export const TRADING_START_HOUR_UTC_PLUS_4 = 14;
 export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
 
 // RSI
-export const MIN_ENTRY_RSI = 39;
-export const MAX_ENTRY_RSI = 42;
+export const MIN_ENTRY_RSI_SHORT = 39;
+export const MAX_ENTRY_RSI_SHORT = 42;
+export const MIN_ENTRY_RSI_LONG = 51;
+export const MAX_ENTRY_RSI_LONG = 66;
 
 // ADX
-export const MIN_ENTRY_ADX = 22;
+export const MIN_ENTRY_ADX = 25;
 export const MAX_ENTRY_ADX = 40;
 
 // ATR: абсолютное значение для конкретного тикера
@@ -35,7 +37,7 @@ export const MIN_LAST_ATR = 0.005;
 export const MAX_LAST_ATR = 5.0;
 
 // Ширина Bollinger Bands
-export const MIN_BB_WIDTH = 0.025;
+export const MIN_BB_WIDTH = 0.04;
 
 // Минимальное расстояние от EMA20.
 // 90% ATR = 0.9 ATR.
@@ -65,8 +67,8 @@ function getUtcPlus4(date = new Date()): number {
 export function isTradingTimeUtcPlus4(date = new Date()): boolean {
   const hour = getUtcPlus4(date);
 
-  // 12:00–23:59 и 00:00–01:59 UTC+4
-  return hour >= 12 || hour < 2;
+  // 14:00–23:59 и 00:00–01:59 UTC+4
+  return hour >= 14 || hour < 2;
 }
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -382,8 +384,15 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  if (lastRsi < MIN_ENTRY_RSI || lastRsi > MAX_ENTRY_RSI) {
-    return false;
+  // RSI проверка в зависимости от стороны
+  if (side === 'short') {
+    if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
+      return false;
+    }
+  } else if (side === 'long') {
+    if (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG) {
+      return false;
+    }
   }
 
   if (lastAtr < MIN_LAST_ATR || lastAtr > MAX_LAST_ATR) {
@@ -559,7 +568,9 @@ export function analyzeMarket(
   if (
     ENABLE_TREND_UP_TRADES &&
     regime === 'trend_up' &&
-    price > regimeIndicators.ema200
+    price > regimeIndicators.ema200 &&
+    regimeIndicators.ema20 > regimeIndicators.ema50 &&
+    regimeIndicators.ema50 > regimeIndicators.ema200
   ) {
     side = 'long';
     buy = true;
@@ -575,7 +586,9 @@ export function analyzeMarket(
 
   if (
     regime === 'trend_down' &&
-    price < regimeIndicators.ema200
+    price < regimeIndicators.ema200 &&
+    regimeIndicators.ema20 < regimeIndicators.ema50 &&
+    regimeIndicators.ema50 < regimeIndicators.ema200
   ) {
     side = 'short';
     sell = true;
