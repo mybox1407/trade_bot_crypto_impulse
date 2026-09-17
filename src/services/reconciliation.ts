@@ -245,17 +245,17 @@ export async function fetchAccountPositions(
     .map(parsePosition)
     .filter((position): position is LighterPosition => position !== null);
 
-  reconciliationLog('EXCHANGE_POSITIONS_SYNCED', {
-    accountIndex,
-    positionsCount: positions.length,
-    positions: positions.map(position => ({
-      symbol: position.symbol,
-      marketId: position.marketId,
-      side: position.side,
-      quantity: position.quantity,
-      entryPrice: position.entryPrice
-    }))
-  });
+  //reconciliationLog('EXCHANGE_POSITIONS_SYNCED', {
+  //  accountIndex,
+  //  positionsCount: positions.length,
+  //  positions: positions.map(position => ({
+  //    symbol: position.symbol,
+  //    marketId: position.marketId,
+  //    side: position.side,
+  //    quantity: position.quantity,
+  //    entryPrice: position.entryPrice
+  //  }))
+  //});
 
   return positions;
 }
@@ -500,7 +500,7 @@ export async function syncLiveBalance(
   signerClient: SignerClient,
   accountIndex: number
 ): Promise<void> {
-  reconciliationLog('BALANCE_SYNC_STARTED', { accountIndex });
+  //reconciliationLog('BALANCE_SYNC_STARTED', { accountIndex });
 
   const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
   url.searchParams.set('by', 'index');
@@ -531,5 +531,5 @@ export async function syncLiveBalance(
   }
 
   updateLiveAccountState({ balance });
-  reconciliationLog('BALANCE_SYNC_FINISHED', { accountIndex, balance });
+  //reconciliationLog('BALANCE_SYNC_FINISHED', { accountIndex, balance });
 }
