@@ -604,53 +604,235 @@ async function checkSignals(): Promise<void> {
   }
 }
 
-async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
+async function reconcileLocalPositionsWithExchange(
+  localPositions: ReturnType<typeof getPositions>
+): Promise<void> {
   if (PAPER_TRADING || !signerClient) return;
+
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
+
   try {
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
-    const remoteByMarketId = new Map(remotePositions.map(position => [position.marketId, position]));
-    const remoteBySymbol = new Map(remotePositions.map(position => [normalizeSymbol(position.symbol), position]));
 
+    const remoteByMarketId = new Map(
+      remotePositions.map(position => [position.marketId, position])
+    );
+    const remoteBySymbol = new Map(
+      remotePositions.map(position => [normalizeSymbol(position.symbol), position])
+    );
+
+    // Local position is absent on the exchange: close it locally.
     for (const local of localPositions) {
       const symbol = normalizeSymbol(local.symbol);
-      const remote = local.marketId != null ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol)) : remoteBySymbol.get(symbol);
+      const remote = local.marketId != null
+        ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol))
+        : remoteBySymbol.get(symbol);
+
       if (remote) continue;
+
       const markPrice = getMarkPrice(symbol);
-      const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0 ? markPrice : local.entryPrice;
-      const tpHit = markPrice != null && Number.isFinite(markPrice) && (local.side === 'long' ? markPrice >= local.takeProfitPrice : markPrice <= local.takeProfitPrice);
+      const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0
+        ? markPrice
+        : local.entryPrice;
+      const tpHit = markPrice != null && Number.isFinite(markPrice) && (
+        local.side === 'long'
+          ? markPrice >= local.takeProfitPrice
+          : markPrice <= local.takeProfitPrice
+      );
       const closeReason = tpHit ? 'take_profit' : 'stop_loss';
-      const closeResult = closePosition(local.id, closePrice, closeReason, { executionOrderId: 'exchange-auto-close', clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`, fee: 0 });
+
+      const closeResult = closePosition(local.id, closePrice, closeReason, {
+        executionOrderId: 'exchange-auto-close',
+        clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`,
+        fee: 0
+      });
+
       if (!closeResult.ok) {
         markReconciliationPending(symbol);
-        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, { symbol, positionId: local.id, closeReason });
+        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, {
+          symbol,
+          positionId: local.id,
+          closeReason
+        });
       } else {
         unlockSymbol(symbol);
-        tradeLog('POSITION_CLOSED', { symbol, positionId: local.id, closeReason, closePrice });
+        tradeLog('POSITION_CLOSED', {
+          symbol,
+          positionId: local.id,
+          closeReason,
+          closePrice
+        });
       }
     }
 
-    const localByMarketId = new Map(localPositions.filter(position => position.marketId != null).map(position => [position.marketId as number, position]));
-    const localBySymbol = new Map(localPositions.map(position => [normalizeSymbol(position.symbol), position]));
+    // Rebuild maps after potential closes above.
+    const localByMarketId = new Map(
+      getPositions()
+        .filter(position => position.marketId != null)
+        .map(position => [position.marketId as number, position])
+    );
+    const localBySymbol = new Map(
+      getPositions().map(position => [normalizeSymbol(position.symbol), position])
+    );
+
     for (const remote of remotePositions) {
       const symbol = normalizeSymbol(remote.symbol);
-      const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(symbol);
+      const hasLocal =
+        localByMarketId.has(remote.marketId) ||
+        localBySymbol.has(symbol);
+
       if (hasLocal) continue;
 
+      // First preference: restore with exact data saved immediately after a
+      // confirmed fill. This retains the original TP, SL, indicators and IDs.
       const pending = pendingFilledOpens.get(symbol);
-      if (pending && Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS && await hasKnownRemotePosition(remote, pending)) {
+      if (
+        pending &&
+        Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS &&
+        await hasKnownRemotePosition(remote, pending)
+      ) {
         const restored = tryRestorePendingFilledOpen(symbol);
         if (restored) {
-          tradeLog('LOCAL_POSITION_RECONCILED', { symbol, marketId: remote.marketId, source: 'pending-filled-open' });
+          tradeLog('LOCAL_POSITION_RECONCILED', {
+            symbol,
+            marketId: remote.marketId,
+            source: 'pending-filled-open'
+          });
           continue;
         }
       }
 
-      markReconciliationPending(symbol);
-      tradeError('LOCAL_POSITION_MISSING', 'Remote position has no local state and cannot be reconstructed safely', { symbol: remote.symbol, marketId: remote.marketId, hasPendingFilledOpen: Boolean(pending) });
+      // Fallback: reconstruct from the remote position.
+      // Map Lighter API fields to VirtualPosition schema.
+      const sideRaw = String(remote.side ?? '').toLowerCase();
+      const side = sideRaw === 'long' || sideRaw === 'short'
+        ? sideRaw
+        : null;
+
+      // Lighter may return these under various aliases.
+      const entryPrice = Number(
+        remote.averageFillPrice ??
+        remote.average_fill_price ??
+        remote.entryPrice ??
+        remote.entry_price ??
+        remote.openPrice ??
+        remote.open_price ??
+        remote.price
+      );
+
+      const quantity = Number(
+        remote.quantity ??
+        remote.size ??
+        remote.positionSize ??
+        remote.position_size ??
+        remote.amount
+      );
+
+      const takeProfitPrice = Number(
+        remote.takeProfitPrice ??
+        remote.take_profit_price ??
+        remote.tpPrice ??
+        remote.tp_price ??
+        remote.take_profit
+      );
+
+      const stopLossPrice = Number(
+        remote.stopLossPrice ??
+        remote.stop_loss_price ??
+        remote.slPrice ??
+        remote.sl_price ??
+        remote.stop_loss
+      );
+
+      const exchangeStopLossOrderId =
+        remote.exchangeStopLossOrderId ??
+        remote.exchange_stop_loss_order_id ??
+        remote.stopLossOrderId ??
+        remote.stop_loss_order_id;
+
+      const exchangeTakeProfitOrderId =
+        remote.exchangeTakeProfitOrderId ??
+        remote.exchange_take_profit_order_id ??
+        remote.takeProfitOrderId ??
+        remote.take_profit_order_id;
+
+      const validRestore =
+        side != null &&
+        Number.isFinite(entryPrice) && entryPrice > 0 &&
+        Number.isFinite(quantity) && quantity > 0 &&
+        Number.isFinite(takeProfitPrice) && takeProfitPrice > 0 &&
+        Number.isFinite(stopLossPrice) && stopLossPrice > 0;
+
+      if (!validRestore) {
+        markReconciliationPending(symbol);
+        tradeError(
+          'LOCAL_POSITION_MISSING',
+          'Remote position has no local state and does not contain enough data for a safe restore',
+          {
+            symbol: remote.symbol,
+            marketId: remote.marketId,
+            remoteSide: remote.side ?? null,
+            entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
+            quantity: Number.isFinite(quantity) ? quantity : null,
+            takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
+            stopLossPrice: Number.isFinite(stopLossPrice) ? stopLossPrice : null,
+            hasPendingFilledOpen: Boolean(pending)
+          }
+        );
+        continue;
+      }
+
+      // Build input matching openPosition() schema.
+      const restoreInput = {
+        symbol: remote.symbol,
+        marketId: remote.marketId,
+        side,
+        entryPrice,
+        quantity,
+        takeProfitPrice,
+        stopLossPrice,
+        exchangeStopLossPrice: stopLossPrice,
+        exchangeTakeProfitPrice: takeProfitPrice,
+        exchangeStopLossOrderId: exchangeStopLossOrderId as string | undefined,
+        exchangeTakeProfitOrderId: exchangeTakeProfitOrderId as string | undefined,
+        metadata: {
+          regime: 'reconciled-remote',
+          signalTime: Date.now(),
+          signalTimeIso: new Date().toISOString(),
+          reconciliationSource: 'remote-position'
+        },
+        executionOrderId: (remote.orderId ?? remote.order_id) as string | undefined,
+        clientOrderId: `${symbol}-${Date.now()}-remote-restore`
+      };
+
+      const openResult = openPosition(restoreInput);
+
+      if (!openResult.ok) {
+        markReconciliationPending(symbol);
+        tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
+          symbol: remote.symbol,
+          marketId: remote.marketId,
+          source: 'remote-position'
+        });
+        continue;
+      }
+
+      unlockSymbol(symbol);
+      tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', {
+        symbol: remote.symbol,
+        marketId: remote.marketId,
+        positionId: openResult.position?.id ?? null,
+        entryPrice,
+        quantity,
+        takeProfitPrice,
+        stopLossPrice
+      });
     }
   } catch (error) {
-    tradeError('EXCHANGE_SYNC_FAILED', error, { accountIndex, localPositions: localPositions.length });
+    tradeError('EXCHANGE_SYNC_FAILED', error, {
+      accountIndex,
+      localPositions: localPositions.length
+    });
     throw error;
   }
 }
