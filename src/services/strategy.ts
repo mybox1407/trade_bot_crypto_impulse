@@ -26,7 +26,7 @@ export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
 export const MIN_ENTRY_RSI_SHORT = 39;
 export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
-export const MAX_ENTRY_RSI_LONG = 66;
+export const MAX_ENTRY_RSI_LONG = 65;
 
 // ADX
 export const MIN_ENTRY_ADX = 25;
@@ -37,7 +37,7 @@ export const MIN_LAST_ATR = 0.005;
 export const MAX_LAST_ATR = 5.0;
 
 // Ширина Bollinger Bands
-export const MIN_BB_WIDTH = 0.04;
+export const MIN_BB_WIDTH = 0.05;
 
 // Минимальное расстояние от EMA20.
 // 90% ATR = 0.9 ATR.
