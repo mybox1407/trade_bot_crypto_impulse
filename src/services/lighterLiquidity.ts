@@ -93,11 +93,13 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'MSTR',
   'SKHY',
   'DRAM',
+  'USDJPY',
 
   //блеклист
   'UNI',
   'SOXL',
-  'AI'
+  'AI',
+  '1000PEPE'
 ]);
 
 function toNumber(
