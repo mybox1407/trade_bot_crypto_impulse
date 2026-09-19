@@ -17,8 +17,6 @@ export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
 
 // Время: UTC+4.
-// Торговля разрешена с 14:00 до 01:59.
-// В 02:00–13:59 новые позиции не открываются.
 export const TRADING_START_HOUR_UTC_PLUS_4 = 14;
 export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
 
@@ -29,18 +27,19 @@ export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 65;
 
 // ADX
-export const MIN_ENTRY_ADX = 28;
+// ИЗМЕНЕНИЕ: отдельные минимальные пороги для Short и Long.
+export const MIN_ENTRY_ADX_SHORT = 25;
+export const MIN_ENTRY_ADX_LONG = 29;
 export const MAX_ENTRY_ADX = 40;
 
-// ATR: абсолютное значение для конкретного тикера
+// ATR
 export const MIN_LAST_ATR = 0.005;
 export const MAX_LAST_ATR = 5.0;
 
 // Ширина Bollinger Bands
 export const MIN_BB_WIDTH = 0.05;
 
-// Минимальное расстояние от EMA20.
-// 90% ATR = 0.9 ATR.
+// Минимальное расстояние от EMA20
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
@@ -66,9 +65,8 @@ function getUtcPlus4(date = new Date()): number {
 
 export function isTradingTimeUtcPlus4(date = new Date()): boolean {
   const hour = getUtcPlus4(date);
-
-  // 14:00–23:59 и 00:00–01:59 UTC+4
-  return hour >= 14 || hour < 2;
+  return hour >= TRADING_START_HOUR_UTC_PLUS_4 ||
+    hour < TRADING_END_HOUR_UTC_PLUS_4;
 }
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -85,39 +83,27 @@ function mean(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function getVolumeSpike(
-  volumes: number[],
-  avgVol20: number
-): boolean {
+function getVolumeSpike(volumes: number[], avgVol20: number): boolean {
   const latestVolume = volumes[volumes.length - 1] ?? 0;
-
   return latestVolume >= avgVol20 * 1.3;
 }
 
-// Поиск локального экстремума за lookback свечей
 function findLocalExtremum(
   candles: Candle[],
   side: 'long' | 'short',
   lookback: number
-): {
-  extremePrice: number;
-} {
+): { extremePrice: number } {
   const slice = candles.slice(-lookback);
 
   if (slice.length === 0) {
-    return {
-      extremePrice: 0
-    };
+    return { extremePrice: 0 };
   }
 
-  const extremePrice =
-    side === 'long'
-      ? Math.min(...slice.map(candle => candle.low))
-      : Math.max(...slice.map(candle => candle.high));
+  const extremePrice = side === 'long'
+    ? Math.min(...slice.map(candle => candle.low))
+    : Math.max(...slice.map(candle => candle.high));
 
-  return {
-    extremePrice
-  };
+  return { extremePrice };
 }
 
 // ========== ТИПЫ ==========
@@ -199,15 +185,10 @@ const MIN_ADX_TREND = 21;
 const MIN_ADX_RANGE = 20;
 const BB_SQUEEZE_THRESHOLD = 0.05;
 
-// Фильтры breakout_watch
 const BREAKOUT_ATR_BUFFER_K = 0.2;
 const BREAKOUT_BODY_ATR_MIN = 0.6;
-
-// Фильтр расстояния до локального экстремума
 const MAX_EXTREMUM_DISTANCE_ATR = 2.5;
 const EXTREMUM_LOOKBACK = 30;
-
-// Диапазон волатильности для пробоев
 const BREAKOUT_MIN_ATR_PCT = 0.015;
 const BREAKOUT_MAX_ATR_PCT = 0.035;
 const BREAKOUT_MIN_BB_WIDTH = 0.03;
@@ -223,40 +204,12 @@ export function detectMarketRegime(candles: Candle[]): {
   const lows = candles.map(candle => candle.low);
   const volumes = candles.map(candle => candle.volume);
 
-  const atr = ATR.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const adx = ADX.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const ema20 = EMA.calculate({
-    period: 20,
-    values: closes
-  });
-
-  const ema50 = EMA.calculate({
-    period: 50,
-    values: closes
-  });
-
-  const ema200 = EMA.calculate({
-    period: 200,
-    values: closes
-  });
-
-  const bb = BollingerBands.calculate({
-    period: 20,
-    values: closes,
-    stdDev: 2
-  });
+  const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
+  const adx = ADX.calculate({ period: 14, high: highs, low: lows, close: closes });
+  const ema20 = EMA.calculate({ period: 20, values: closes });
+  const ema50 = EMA.calculate({ period: 50, values: closes });
+  const ema200 = EMA.calculate({ period: 200, values: closes });
+  const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
 
   if (
     atr.length < 2 ||
@@ -266,29 +219,22 @@ export function detectMarketRegime(candles: Candle[]): {
     ema200.length < 1 ||
     bb.length < 1
   ) {
-    return {
-      regime: 'unknown',
-      ready: false,
-      indicators: null
-    };
+    return { regime: 'unknown', ready: false, indicators: null };
   }
 
   const lastClose = last(closes);
   const lastAtr = last(atr);
   const lastAdx = last(adx);
   const previousAdx = adx[adx.length - 2];
-
   const lastEma20 = last(ema20);
   const lastEma50 = last(ema50);
   const lastEma200 = last(ema200);
-
   const lastBb = last(bb);
   const avgVol20 = mean(volumes.slice(-20));
 
-  const bbWidth =
-    lastBb.middle !== 0
-      ? (lastBb.upper - lastBb.lower) / lastBb.middle
-      : 0;
+  const bbWidth = lastBb.middle !== 0
+    ? (lastBb.upper - lastBb.lower) / lastBb.middle
+    : 0;
 
   const adxRising = lastAdx.adx > previousAdx.adx;
   const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
@@ -304,9 +250,7 @@ export function detectMarketRegime(candles: Candle[]): {
     lastEma20 < lastEma50 &&
     lastAdx.adx >= MIN_ADX_TREND;
 
-  const range =
-    lastAdx.adx < MIN_ADX_RANGE &&
-    bbWidth < 0.08;
+  const range = lastAdx.adx < MIN_ADX_RANGE && bbWidth < 0.08;
 
   const breakoutWatch =
     compression &&
@@ -314,9 +258,7 @@ export function detectMarketRegime(candles: Candle[]): {
     lastAdx.adx <= 28 &&
     getVolumeSpike(volumes, avgVol20);
 
-  const highVolatility =
-    atrPct > 0.025 ||
-    bbWidth > 0.12;
+  const highVolatility = atrPct > 0.025 || bbWidth > 0.12;
 
   let regime: MarketRegime = 'unknown';
 
@@ -376,15 +318,12 @@ export function canOpenTrade(params: {
     now = new Date()
   } = params;
 
-  // Оставлено для совместимости и будущего symbol-filter.
   void symbol;
-  void side;
 
   if (!isTradingTimeUtcPlus4(now)) {
     return false;
   }
 
-  // RSI проверка в зависимости от стороны
   if (side === 'short') {
     if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
       return false;
@@ -393,13 +332,20 @@ export function canOpenTrade(params: {
     if (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG) {
       return false;
     }
+  } else {
+    return false;
   }
 
   if (lastAtr < MIN_LAST_ATR || lastAtr > MAX_LAST_ATR) {
     return false;
   }
 
-  if (adx < MIN_ENTRY_ADX || adx > MAX_ENTRY_ADX) {
+  // ИЗМЕНЕНИЕ: ADX проверяется с отдельным минимумом по стороне.
+  const minAdx = side === 'short'
+    ? MIN_ENTRY_ADX_SHORT
+    : MIN_ENTRY_ADX_LONG;
+
+  if (adx < minAdx || adx > MAX_ENTRY_ADX) {
     return false;
   }
 
@@ -407,7 +353,6 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  // Минимум 90% ATR расстояния от EMA20
   if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
     return false;
   }
@@ -441,23 +386,9 @@ export function analyzeMarket(
     SimpleMASignal: false
   });
 
-  const rsi = RSI.calculate({
-    period: 14,
-    values: closes
-  });
-
-  const atr = ATR.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const bb = BollingerBands.calculate({
-    period: 20,
-    values: closes,
-    stdDev: 2
-  });
+  const rsi = RSI.calculate({ period: 14, values: closes });
+  const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
+  const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
 
   if (
     !regimeInfo.ready ||
@@ -469,11 +400,8 @@ export function analyzeMarket(
   ) {
     const lastCandle = last(candles);
     const signalTime = lastCandle?.time ?? Date.now();
-
     const signalTimeIso = new Date(
-      signalTime < 1_000_000_000_000
-        ? signalTime * 1000
-        : signalTime
+      signalTime < 1_000_000_000_000 ? signalTime * 1000 : signalTime
     ).toISOString();
 
     return {
@@ -497,8 +425,7 @@ export function analyzeMarket(
         bbMiddle: 0,
         bbLower: 0,
         regimeReady: false,
-        regimeIndicators:
-          regimeInfo.indicators ?? ({} as RegimeIndicators),
+        regimeIndicators: regimeInfo.indicators ?? ({} as RegimeIndicators),
         entryExtensionAtr: null,
         maxEntryExtensionAtr: null,
         entryTooExtended: false,
@@ -520,7 +447,6 @@ export function analyzeMarket(
   const price = last(closes);
   const lastMacd = last(macd);
   const previousMacd = macd[macd.length - 2];
-
   const lastRsi = last(rsi);
   const lastAtr = last(atr);
   const lastBb = last(bb);
@@ -546,24 +472,18 @@ export function analyzeMarket(
     previousMacd.MACD > previousMacd.signal &&
     lastMacd.MACD < lastMacd.signal;
 
-  const riskCapital =
-    STARTING_BALANCE * MAX_RISK_PER_TRADE;
+  const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
 
   let side: 'long' | 'short' | 'none' = 'none';
   let buy = false;
   let sell = false;
-
   let takeProfitPrice: number | null = null;
   let stopLossPrice: number | null = null;
   let positionSize: number | null = null;
-
   let skipReason: string | null = null;
-
   let entryExtensionAtr: number | null = null;
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
-
-  // ========== ЛОНГ: TREND UP ==========
 
   if (
     ENABLE_TREND_UP_TRADES &&
@@ -574,15 +494,9 @@ export function analyzeMarket(
   ) {
     side = 'long';
     buy = true;
-
-    stopLossPrice =
-      price - lastAtr * STOP_LOSS_ATR_MULTIPLIER;
-
-    takeProfitPrice =
-      price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
+    stopLossPrice = price - lastAtr * STOP_LOSS_ATR_MULTIPLIER;
+    takeProfitPrice = price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
   }
-
-  // ========== ШОРТ: TREND DOWN ==========
 
   if (
     regime === 'trend_down' &&
@@ -592,29 +506,14 @@ export function analyzeMarket(
   ) {
     side = 'short';
     sell = true;
-
-    stopLossPrice =
-      price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
-
-    takeProfitPrice =
-      price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
+    stopLossPrice = price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
+    takeProfitPrice = price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
   }
 
-  // ========== ПРОБОЙ: BREAKOUT WATCH ==========
-
-  if (
-    ENABLE_BREAKOUT_TRADES &&
-    regime === 'breakout_watch'
-  ) {
-    const candleBody = Math.abs(
-      lastCandle.close - lastCandle.open
-    );
-
-    const atrBuffer =
-      lastAtr * BREAKOUT_ATR_BUFFER_K;
-
-    const minBody =
-      lastAtr * BREAKOUT_BODY_ATR_MIN;
+  if (ENABLE_BREAKOUT_TRADES && regime === 'breakout_watch') {
+    const candleBody = Math.abs(lastCandle.close - lastCandle.open);
+    const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
+    const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
 
     const breakoutUp =
       lastCandle.close > lastBb.upper + atrBuffer &&
@@ -628,15 +527,10 @@ export function analyzeMarket(
       lastRsi < 55 &&
       lastRsi > 25;
 
-    const atrPct =
-      lastClose > 0
-        ? lastAtr / lastClose
-        : 0;
-
-    const bbWidth =
-      lastBb.middle !== 0
-        ? (lastBb.upper - lastBb.lower) / lastBb.middle
-        : 0;
+    const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
+    const bbWidth = lastBb.middle !== 0
+      ? (lastBb.upper - lastBb.lower) / lastBb.middle
+      : 0;
 
     const volatilityOkForBreakout =
       atrPct >= BREAKOUT_MIN_ATR_PCT &&
@@ -647,91 +541,57 @@ export function analyzeMarket(
     let extremumOk = true;
 
     if (breakoutUp || breakoutDown) {
-      const sideForExtremum =
-        breakoutUp ? 'long' : 'short';
-
-      const { extremePrice } =
-        findLocalExtremum(
-          candles,
-          sideForExtremum,
-          EXTREMUM_LOOKBACK
-        );
+      const sideForExtremum = breakoutUp ? 'long' : 'short';
+      const { extremePrice } = findLocalExtremum(
+        candles,
+        sideForExtremum,
+        EXTREMUM_LOOKBACK
+      );
 
       if (extremePrice !== 0 && lastAtr > 0) {
-        const distanceFromExtremum =
-          sideForExtremum === 'long'
-            ? lastClose - extremePrice
-            : extremePrice - lastClose;
+        const distanceFromExtremum = sideForExtremum === 'long'
+          ? lastClose - extremePrice
+          : extremePrice - lastClose;
+        const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
 
-        const distanceAtr =
-          Math.abs(distanceFromExtremum) / lastAtr;
-
-        if (
-          distanceAtr > MAX_EXTREMUM_DISTANCE_ATR
-        ) {
+        if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
           extremumOk = false;
         }
       }
     }
 
-    if (
-      volatilityOkForBreakout &&
-      extremumOk
-    ) {
+    if (volatilityOkForBreakout && extremumOk) {
       if (breakoutUp) {
         side = 'long';
         buy = true;
         sell = false;
-
-        stopLossPrice =
-          price - lastAtr * 1.5;
-
-        takeProfitPrice =
-          price + lastAtr * 2.2;
+        stopLossPrice = price - lastAtr * 1.5;
+        takeProfitPrice = price + lastAtr * 2.2;
       } else if (breakoutDown) {
         side = 'short';
         sell = true;
         buy = false;
-
-        stopLossPrice =
-          price + lastAtr * 1.5;
-
-        takeProfitPrice =
-          price - lastAtr * 2.2;
+        stopLossPrice = price + lastAtr * 1.5;
+        takeProfitPrice = price - lastAtr * 2.2;
       }
     }
   }
 
-  // ========== БЛОКИРОВКА: HIGH VOLATILITY / RANGE ==========
-
-  if (
-    regime === 'high_volatility' ||
-    regime === 'range'
-  ) {
+  if (regime === 'high_volatility' || regime === 'range') {
     buy = false;
     sell = false;
     side = 'none';
     takeProfitPrice = null;
     stopLossPrice = null;
     positionSize = null;
-
     if (skipReason == null) {
       skipReason = `Trading disabled for regime: ${regime}`;
     }
   }
 
-  // ========== ПРОВЕРКА СЛИППЕЙДЖА ОТ СИГНАЛА ==========
-
-  if (
-    (buy || sell) &&
-    signalPrice != null &&
-    lastAtr > 0
-  ) {
-    const distanceFromSignal =
-      Math.abs(price - signalPrice);
-
-    const signalDistanceAtr =
-      distanceFromSignal / lastAtr;
+  if ((buy || sell) && signalPrice != null && lastAtr > 0) {
+    const distanceFromSignal = Math.abs(price - signalPrice);
+    const signalDistanceAtr = distanceFromSignal / lastAtr;
 
     if (signalDistanceAtr > 1.0) {
       buy = false;
@@ -740,57 +600,31 @@ export function analyzeMarket(
       takeProfitPrice = null;
       stopLossPrice = null;
       positionSize = null;
-
-      skipReason =
-        `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
-        `from signal (max 1.00 ATR)`;
+      skipReason = `Price moved ${signalDistanceAtr.toFixed(2)} ATR from signal (max 1.00 ATR)`;
     }
   }
 
-  // ========== РАССТОЯНИЕ ОТ EMA20 / BB ==========
+  if (side !== 'none' && lastAtr > 0) {
+    const referencePrice = regime === 'breakout_watch'
+      ? side === 'long' ? lastBb.upper : lastBb.lower
+      : regimeIndicators.ema20;
 
-  if (
-    side !== 'none' &&
-    lastAtr > 0
-  ) {
-    const referencePrice =
-      regime === 'breakout_watch'
-        ? side === 'long'
-          ? lastBb.upper
-          : lastBb.lower
-        : regimeIndicators.ema20;
+    const distanceFromRef = side === 'long'
+      ? price - referencePrice
+      : referencePrice - price;
 
-    // Направленное расстояние:
-    // long: price - referencePrice
-    // short: referencePrice - price
-    const distanceFromRef =
-      side === 'long'
-        ? price - referencePrice
-        : referencePrice - price;
+    entryExtensionAtr = distanceFromRef / lastAtr;
+    maxEntryExtensionAtr = regime === 'breakout_watch'
+      ? 1.5
+      : MAX_ENTRY_EXTENSION_TREND_ATR;
 
-    entryExtensionAtr =
-      distanceFromRef / lastAtr;
-
-    maxEntryExtensionAtr =
-      regime === 'breakout_watch'
-        ? 1.5
-        : MAX_ENTRY_EXTENSION_TREND_ATR;
-
-    entryTooExtended =
-      entryExtensionAtr > maxEntryExtensionAtr;
+    entryTooExtended = entryExtensionAtr > maxEntryExtensionAtr;
 
     if (entryTooExtended) {
-      const direction =
-        side === 'long'
-          ? 'above'
-          : 'below';
-
-      const refLabel =
-        regime === 'breakout_watch'
-          ? side === 'long'
-            ? 'BB.upper'
-            : 'BB.lower'
-          : 'EMA20';
+      const direction = side === 'long' ? 'above' : 'below';
+      const refLabel = regime === 'breakout_watch'
+        ? side === 'long' ? 'BB.upper' : 'BB.lower'
+        : 'EMA20';
 
       buy = false;
       sell = false;
@@ -798,31 +632,18 @@ export function analyzeMarket(
       takeProfitPrice = null;
       stopLossPrice = null;
       positionSize = null;
-
-      skipReason =
-        `Entry too extended: ` +
-        `${entryExtensionAtr.toFixed(2)} ATR ` +
-        `${direction} ${refLabel} ` +
-        `(max ${maxEntryExtensionAtr.toFixed(2)} ATR, ` +
-        `regime ${regime})`;
+      skipReason = `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ${direction} ${refLabel} (max ${maxEntryExtensionAtr.toFixed(2)} ATR, regime ${regime})`;
     }
   }
 
-  // ========== ФИНАЛЬНАЯ ПРОВЕРКА ВХОДА ==========
+  if (side !== 'none' && stopLossPrice != null) {
+    const entryDistanceFromEma20 = side === 'long'
+      ? price - regimeIndicators.ema20
+      : regimeIndicators.ema20 - price;
 
-  if (
-    side !== 'none' &&
-    stopLossPrice != null
-  ) {
-    const entryDistanceFromEma20 =
-      side === 'long'
-        ? price - regimeIndicators.ema20
-        : regimeIndicators.ema20 - price;
-
-    const entryDistanceFromEma20Atr =
-      lastAtr > 0
-        ? entryDistanceFromEma20 / lastAtr
-        : 0;
+    const entryDistanceFromEma20Atr = lastAtr > 0
+      ? entryDistanceFromEma20 / lastAtr
+      : 0;
 
     const canOpen = canOpenTrade({
       symbol,
@@ -844,51 +665,28 @@ export function analyzeMarket(
       takeProfitPrice = null;
       stopLossPrice = null;
       positionSize = null;
-
-      skipReason =
-        'Entry filters failed ' +
-        '(RSI/ADX/ATR/BB/EMA20/trading window)';
+      skipReason = 'Entry filters failed (RSI/ADX/ATR/BB/EMA20/trading window)';
     }
   }
 
-  // ========== РАЗМЕР ПОЗИЦИИ ==========
-
-  if (
-    side !== 'none' &&
-    stopLossPrice != null
-  ) {
-    const riskPerUnit =
-      Math.abs(price - stopLossPrice);
-
-    positionSize =
-      riskPerUnit > 0
-        ? riskCapital / riskPerUnit
-        : null;
+  if (side !== 'none' && stopLossPrice != null) {
+    const riskPerUnit = Math.abs(price - stopLossPrice);
+    positionSize = riskPerUnit > 0 ? riskCapital / riskPerUnit : null;
   }
 
-  // ========== ВРЕМЯ СИГНАЛА ==========
-
   const signalTime = lastCandle.time;
-
   const signalTimeIso = new Date(
-    signalTime < 1_000_000_000_000
-      ? signalTime * 1000
-      : signalTime
+    signalTime < 1_000_000_000_000 ? signalTime * 1000 : signalTime
   ).toISOString();
 
-  // ========== РАССТОЯНИЕ ОТ EMA20 ДЛЯ ЛОГА ==========
-
-  const entryDistanceFromEma20ForLog =
-    side !== 'none'
-      ? side === 'long'
-        ? price - regimeIndicators.ema20
-        : regimeIndicators.ema20 - price
-      : null;
+  const entryDistanceFromEma20ForLog = side !== 'none'
+    ? side === 'long'
+      ? price - regimeIndicators.ema20
+      : regimeIndicators.ema20 - price
+    : null;
 
   const entryDistanceFromEma20AtrForLog =
-    side !== 'none' &&
-    lastAtr > 0 &&
-    entryDistanceFromEma20ForLog != null
+    side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null
       ? entryDistanceFromEma20ForLog / lastAtr
       : null;
 
@@ -924,15 +722,11 @@ export function analyzeMarket(
       bbWidth: regimeIndicators.bbWidth,
       ema20: regimeIndicators.ema20,
       ema200: regimeIndicators.ema200,
-      priceVsEma200:
-        regimeIndicators.ema200 > 0
-          ? (price - regimeIndicators.ema200) /
-            regimeIndicators.ema200
-          : null,
-      entryDistanceFromEma20:
-        entryDistanceFromEma20ForLog,
-      entryDistanceFromEma20Atr:
-        entryDistanceFromEma20AtrForLog,
+      priceVsEma200: regimeIndicators.ema200 > 0
+        ? (price - regimeIndicators.ema200) / regimeIndicators.ema200
+        : null,
+      entryDistanceFromEma20: entryDistanceFromEma20ForLog,
+      entryDistanceFromEma20Atr: entryDistanceFromEma20AtrForLog,
       isCandleClosed: false
     }
   };
