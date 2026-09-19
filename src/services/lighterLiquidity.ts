@@ -96,7 +96,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
 
   //блеклист
   'UNI',
-  'SOXL'
+  'SOXL',
+  'AI'
 ]);
 
 function toNumber(
