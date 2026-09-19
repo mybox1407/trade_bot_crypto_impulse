@@ -15,6 +15,11 @@ export type LighterPosition = {
   side: 'long' | 'short';
   quantity: number;
   entryPrice: number;
+  takeProfitPrice?: number;
+  stopLossPrice?: number;
+  exchangeStopLossOrderId?: string;
+  exchangeTakeProfitOrderId?: string;
+  orderId?: string;
 };
 
 type ReconciliationMismatch = {
