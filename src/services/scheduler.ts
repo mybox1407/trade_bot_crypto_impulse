@@ -703,7 +703,7 @@ async function reconcileLocalPositionsWithExchange(
       }
 
       // Fallback: reconstruct from the remote position.
-      // fetchAccountPositions() already returns the normalized LighterPosition shape.
+      // fetchAccountPositions() now returns the extended LighterPosition shape.
       
       const side: 'long' | 'short' =
         remote.side === 'long' || remote.side === 'short'
@@ -766,12 +766,7 @@ async function reconcileLocalPositionsWithExchange(
         exchangeTakeProfitPrice: takeProfitPrice,
         exchangeStopLossOrderId,
         exchangeTakeProfitOrderId,
-        metadata: {
-          regime: 'reconciled-remote',
-          signalTime: Date.now(),
-          signalTimeIso: new Date().toISOString(),
-          reconciliationSource: 'remote-position'
-        },
+        metadata: buildPositionMetadata('reconciled-remote', {}, Date.now(), new Date().toISOString()),
         executionOrderId: remote.orderId,
         clientOrderId: `${symbol}-${Date.now()}-remote-restore`
       };
