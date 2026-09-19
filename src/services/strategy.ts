@@ -29,7 +29,7 @@ export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 65;
 
 // ADX
-export const MIN_ENTRY_ADX = 25;
+export const MIN_ENTRY_ADX = 28;
 export const MAX_ENTRY_ADX = 40;
 
 // ATR: абсолютное значение для конкретного тикера
