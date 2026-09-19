@@ -703,75 +703,46 @@ async function reconcileLocalPositionsWithExchange(
       }
 
       // Fallback: reconstruct from the remote position.
-      // Map Lighter API fields to VirtualPosition schema.
-      const sideRaw = String(remote.side ?? '').toLowerCase();
-      const side = sideRaw === 'long' || sideRaw === 'short'
-        ? sideRaw
-        : null;
-
-      // Lighter may return these under various aliases.
-      const entryPrice = Number(
-        remote.averageFillPrice ??
-        remote.average_fill_price ??
-        remote.entryPrice ??
-        remote.entry_price ??
-        remote.openPrice ??
-        remote.open_price ??
-        remote.price
-      );
-
-      const quantity = Number(
-        remote.quantity ??
-        remote.size ??
-        remote.positionSize ??
-        remote.position_size ??
-        remote.amount
-      );
-
-      const takeProfitPrice = Number(
-        remote.takeProfitPrice ??
-        remote.take_profit_price ??
-        remote.tpPrice ??
-        remote.tp_price ??
-        remote.take_profit
-      );
-
-      const stopLossPrice = Number(
-        remote.stopLossPrice ??
-        remote.stop_loss_price ??
-        remote.slPrice ??
-        remote.sl_price ??
-        remote.stop_loss
-      );
-
-      const exchangeStopLossOrderId =
-        remote.exchangeStopLossOrderId ??
-        remote.exchange_stop_loss_order_id ??
-        remote.stopLossOrderId ??
-        remote.stop_loss_order_id;
-
-      const exchangeTakeProfitOrderId =
-        remote.exchangeTakeProfitOrderId ??
-        remote.exchange_take_profit_order_id ??
-        remote.takeProfitOrderId ??
-        remote.take_profit_order_id;
-
+      // fetchAccountPositions() already returns the normalized LighterPosition shape.
+      
+      const side: 'long' | 'short' =
+        remote.side === 'long' || remote.side === 'short'
+          ? remote.side
+          : (() => {
+              throw new Error(
+                `Invalid remote position side for ${remote.symbol}: ${String(remote.side)}`
+              );
+            })();
+      
+      const entryPrice = Number(remote.entryPrice);
+      const quantity = Number(remote.quantity);
+      
+      const takeProfitPrice = Number(remote.takeProfitPrice);
+      const stopLossPrice = Number(remote.stopLossPrice);
+      
+      const exchangeStopLossOrderId = remote.exchangeStopLossOrderId;
+      const exchangeTakeProfitOrderId = remote.exchangeTakeProfitOrderId;
+      
       const validRestore =
-        side != null &&
-        Number.isFinite(entryPrice) && entryPrice > 0 &&
-        Number.isFinite(quantity) && quantity > 0 &&
-        Number.isFinite(takeProfitPrice) && takeProfitPrice > 0 &&
-        Number.isFinite(stopLossPrice) && stopLossPrice > 0;
-
+        Number.isFinite(entryPrice) &&
+        entryPrice > 0 &&
+        Number.isFinite(quantity) &&
+        quantity > 0 &&
+        Number.isFinite(takeProfitPrice) &&
+        takeProfitPrice > 0 &&
+        Number.isFinite(stopLossPrice) &&
+        stopLossPrice > 0;
+      
       if (!validRestore) {
         markReconciliationPending(symbol);
+      
         tradeError(
           'LOCAL_POSITION_MISSING',
           'Remote position has no local state and does not contain enough data for a safe restore',
           {
             symbol: remote.symbol,
             marketId: remote.marketId,
-            remoteSide: remote.side ?? null,
+            remoteSide: remote.side,
             entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
             quantity: Number.isFinite(quantity) ? quantity : null,
             takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
@@ -779,10 +750,10 @@ async function reconcileLocalPositionsWithExchange(
             hasPendingFilledOpen: Boolean(pending)
           }
         );
+      
         continue;
       }
-
-      // Build input matching openPosition() schema.
+      
       const restoreInput = {
         symbol: remote.symbol,
         marketId: remote.marketId,
@@ -793,18 +764,18 @@ async function reconcileLocalPositionsWithExchange(
         stopLossPrice,
         exchangeStopLossPrice: stopLossPrice,
         exchangeTakeProfitPrice: takeProfitPrice,
-        exchangeStopLossOrderId: exchangeStopLossOrderId as string | undefined,
-        exchangeTakeProfitOrderId: exchangeTakeProfitOrderId as string | undefined,
+        exchangeStopLossOrderId,
+        exchangeTakeProfitOrderId,
         metadata: {
           regime: 'reconciled-remote',
           signalTime: Date.now(),
           signalTimeIso: new Date().toISOString(),
           reconciliationSource: 'remote-position'
         },
-        executionOrderId: (remote.orderId ?? remote.order_id) as string | undefined,
+        executionOrderId: remote.orderId,
         clientOrderId: `${symbol}-${Date.now()}-remote-restore`
       };
-
+      
       const openResult = openPosition(restoreInput);
 
       if (!openResult.ok) {
