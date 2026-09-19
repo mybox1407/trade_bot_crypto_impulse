@@ -152,12 +152,33 @@ function parsePosition(rawInput: Record<string, unknown>): LighterPosition | nul
 
   const symbol = getString(raw, 'symbol', 'market_symbol', 'marketSymbol') ?? `MARKET_${marketId}`;
 
+  // TP/SL и orderId (если биржа их возвращает)
+  const takeProfitPrice =
+    toNumber(raw.take_profit_price ?? raw.takeProfitPrice ?? raw.tp_price ?? raw.tpPrice ?? raw.take_profit) ?? undefined;
+
+  const stopLossPrice =
+    toNumber(raw.stop_loss_price ?? raw.stopLossPrice ?? raw.sl_price ?? raw.slPrice ?? raw.stop_loss) ?? undefined;
+
+  const exchangeStopLossOrderId =
+    getString(raw, 'stop_loss_order_id', 'stopLossOrderId', 'exchange_stop_loss_order_id') ?? undefined;
+
+  const exchangeTakeProfitOrderId =
+    getString(raw, 'take_profit_order_id', 'takeProfitOrderId', 'exchange_take_profit_order_id') ?? undefined;
+
+  const orderId =
+    getString(raw, 'order_id', 'orderId') ?? undefined;
+
   return {
     symbol: normalizeSymbol(symbol),
     marketId,
     side,
     quantity: Math.abs(quantity),
-    entryPrice
+    entryPrice,
+    takeProfitPrice,
+    stopLossPrice,
+    exchangeStopLossOrderId,
+    exchangeTakeProfitOrderId,
+    orderId
   };
 }
 
