@@ -10,7 +10,7 @@ import {
 import { SignerClient } from 'zklighter-sdk';
 
 const LIGHTER_API_URL = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
-const LIGHTER_WS_URL = process.env.LIGHTER_WS_URL ?? 'wss://mainnet.zklighter.elliot.ai/stream';
+const LIGHTER_WS_URL = process.env.LIGHTER_WS_URL ?? ' wss://ws.rh.lighter.xyz/stream'; //wss://mainnet.zklighter.elliot.ai/stream
 const ORDER_WAIT_TIMEOUT_MS = 15_000;
 const REST_RECONCILIATION_TIMEOUT_MS = 45_000;
 const REST_POLL_INTERVAL_MS = 1_500;
