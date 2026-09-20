@@ -29,12 +29,12 @@ export const MAX_ENTRY_RSI_LONG = 65;
 // ADX
 // ИЗМЕНЕНИЕ: отдельные минимальные пороги для Short и Long.
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 29;
+export const MIN_ENTRY_ADX_LONG = 27; // было 29
 export const MAX_ENTRY_ADX = 40;
 
-// ATR
-export const MIN_LAST_ATR = 0.005;
-export const MAX_LAST_ATR = 5.0;
+// ATR (доля от цены, как atrPct: 0.005 = 0.5%)
+export const MIN_LAST_ATR_PCT = 0.005;   // было MIN_LAST_ATR = 0.005 (абсолютный)
+export const MAX_LAST_ATR_PCT = 0.05;    // было MAX_LAST_ATR = 5.0 (абсолютный)
 
 // Ширина Bollinger Bands
 export const MIN_BB_WIDTH = 0.05;
@@ -298,7 +298,7 @@ export function canOpenTrade(params: {
   symbol: string;
   side: 'long' | 'short' | 'none';
   lastRsi: number;
-  lastAtr: number;
+  atrPct: number;                // было lastAtr: number
   adx: number;
   bbWidth: number;
   entryDistanceFromEma20: number;
@@ -310,7 +310,7 @@ export function canOpenTrade(params: {
     symbol,
     side,
     lastRsi,
-    lastAtr,
+    atrPct,                      // было lastAtr
     adx,
     bbWidth,
     entryDistanceFromEma20Atr,
@@ -336,7 +336,8 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  if (lastAtr < MIN_LAST_ATR || lastAtr > MAX_LAST_ATR) {
+  // ФИКС: проверяем atrPct (доля цены) вместо абсолютного lastAtr
+  if (atrPct < MIN_LAST_ATR_PCT || atrPct > MAX_LAST_ATR_PCT) {
     return false;
   }
 
@@ -649,7 +650,7 @@ export function analyzeMarket(
       symbol,
       side,
       lastRsi,
-      lastAtr,
+      atrPct: regimeIndicators.atrPct,          // ФИКС: передаём atrPct вместо lastAtr
       adx: regimeIndicators.adx,
       bbWidth: regimeIndicators.bbWidth,
       entryDistanceFromEma20,
