@@ -37,7 +37,7 @@ export const MIN_LAST_ATR_PCT = 0.005;   // было MIN_LAST_ATR = 0.005 (аб�
 export const MAX_LAST_ATR_PCT = 0.05;    // было MAX_LAST_ATR = 5.0 (абсолютный)
 
 // Ширина Bollinger Bands
-export const MIN_BB_WIDTH = 0.05;
+export const MIN_BB_WIDTH = 0.052;
 
 // Минимальное расстояние от EMA20
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
