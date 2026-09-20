@@ -29,7 +29,7 @@ export const MAX_ENTRY_RSI_LONG = 65;
 // ADX
 // ИЗМЕНЕНИЕ: отдельные минимальные пороги для Short и Long.
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 27; // было 29
+export const MIN_ENTRY_ADX_LONG = 29; 
 export const MAX_ENTRY_ADX = 40;
 
 // ATR (доля от цены, как atrPct: 0.005 = 0.5%)
