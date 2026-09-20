@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 
 const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
-  'wss://mainnet.zklighter.elliot.ai/stream';
+  ' wss://ws.rh.lighter.xyz/stream';
 
 export interface Candle {
   time: number;
