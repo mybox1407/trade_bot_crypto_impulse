@@ -1,9 +1,8 @@
 import WebSocket from 'ws';
-import { SignerClient } from 'zklighter-sdk';
 
 const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
-  'wss://api.rh.lighter.xyz/api/v1/ws';
+  'wss://mainnet.zklighter.elliot.ai/stream';
 
 export interface Candle {
   time: number;
@@ -55,6 +54,7 @@ interface MarketStatsMessage {
 
 function toFiniteNumber(value: unknown): number | null {
   const number = Number(value);
+
   return Number.isFinite(number) ? number : null;
 }
 
@@ -65,41 +65,13 @@ export class LighterWsClient {
   private stopped = false;
   private lastMessageTime = 0;
   private staleDataTimeout?: NodeJS.Timeout;
-  private authToken?: string;
 
   constructor(
     private readonly marketId: number,
     private readonly resolution: string,
     private readonly onCandle: (candle: Candle) => void,
     private readonly onPrice: (price: MarketPrice) => void
-  ) {
-    // Создаём SignerClient и токен (как в scheduler.ts)
-    const secret = process.env.LIGHTER_API_SECRET ?? '';
-    const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-    const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-    
-    if (secret) {
-      const key = secret.startsWith('0x') ? secret.slice(2) : secret;
-      const signerClient = new SignerClient(
-        process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai',
-        key,
-        apiKeyIndex,
-        accountIndex
-      );
-      
-      const [authToken] = signerClient.create_auth_token_with_expiry(
-        8 * 3600, // 8 часов
-        undefined,
-        apiKeyIndex
-      );
-      
-      this.authToken = authToken ?? undefined;
-      
-      console.log(`[Auth] Token created for account=${accountIndex}, keyIndex=${apiKeyIndex}`);
-    } else {
-      console.warn('[Auth] No API credentials found, connecting without auth');
-    }
-  }
+  ) {}
 
   connect(): void {
     this.stopped = false;
@@ -150,28 +122,19 @@ export class LighterWsClient {
 
       this.lastMessageTime = Date.now();
 
-      // Сначала отправляем авторизацию (если есть токен)
-      if (this.authToken) {
-        ws.send(
-          JSON.stringify({
-            type: 'auth',
-            token: this.authToken
-          })
-        );
-        
-        console.log(
-          `[${new Date().toISOString()}] Sent auth token ` +
-            `market=${this.marketId}`
-        );
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `candle/${this.marketId}/${this.resolution}`
+        })
+      );
 
-        // Небольшая задержка перед подписками после auth
-        setTimeout(() => {
-          this.sendSubscriptions(ws);
-        }, 100);
-      } else {
-        // Без авторизации отправляем подписки сразу
-        this.sendSubscriptions(ws);
-      }
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `market_stats/${this.marketId}`
+        })
+      );
 
       this.pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -283,27 +246,6 @@ export class LighterWsClient {
         }, 3_000);
       }
     });
-  }
-
-  private sendSubscriptions(ws: WebSocket): void {
-    ws.send(
-      JSON.stringify({
-        type: 'subscribe',
-        channel: `candle/${this.marketId}/${this.resolution}`
-      })
-    );
-
-    ws.send(
-      JSON.stringify({
-        type: 'subscribe',
-        channel: `market_stats/${this.marketId}`
-      })
-    );
-
-    console.log(
-      `[${new Date().toISOString()}] Sent subscriptions ` +
-        `market=${this.marketId}`
-    );
   }
 
   private scheduleStaleDataCheck(): void {
