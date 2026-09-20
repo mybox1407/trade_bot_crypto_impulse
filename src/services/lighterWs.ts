@@ -1,8 +1,8 @@
-// src/services/lighterWs.ts
+import WebSocket from 'ws';
 
-const LIGHTER_REST_URL =
-  process.env.LIGHTER_REST_URL ??
-  'https://mainnet.zklighter.elliot.ai/api/v1';
+const LIGHTER_WS_URL =
+  process.env.LIGHTER_WS_URL ??
+  'wss://mainnet.zklighter.elliot.ai/stream';
 
 export interface Candle {
   time: number;
@@ -33,132 +33,240 @@ interface LighterCandle {
   i?: number;
 }
 
-interface CandleResponse {
-  code: number;
-  r: string;
-  c: LighterCandle[];
+interface CandleMessage {
+  type: string;
+  channel?: string;
+  candles?: LighterCandle[];
 }
 
-interface OrderBookDetailsResponse {
-  code: number;
-  order_book_details?: Array<{
-    last_trade_price?: number;
-    mark_price?: number;
-    index_price?: number;
-  }>;
-  spot_order_book_details?: Array<{
-    last_trade_price?: number;
-    mark_price?: number;
-    index_price?: number;
-  }>;
+interface MarketStatsMessage {
+  type: string;
+  channel?: string;
+  market_stats?: {
+    last_trade_price?: string;
+    mark_price?: string;
+    index_price?: string;
+    mid_price?: string;
+    best_bid_price?: string;
+    best_ask_price?: string;
+  };
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
 }
 
 export class LighterWsClient {
-  private pollTimer?: NodeJS.Timeout;
+  private ws?: WebSocket;
+  private reconnectTimer?: NodeJS.Timeout;
+  private pingTimer?: NodeJS.Timeout;
   private stopped = false;
-  private lastCandleTime = 0;
-  private readonly baseUrl: string;
+  private lastMessageTime = 0;
+  private staleDataTimeout?: NodeJS.Timeout;
 
   constructor(
     private readonly marketId: number,
     private readonly resolution: string,
     private readonly onCandle: (candle: Candle) => void,
     private readonly onPrice: (price: MarketPrice) => void
-  ) {
-    this.baseUrl = LIGHTER_REST_URL;
-    console.log(
-      `[Lighter REST] Endpoint: ${this.baseUrl}, ` +
-      `market=${this.marketId}, resolution=${this.resolution}`
-    );
-  }
+  ) {}
 
   connect(): void {
     this.stopped = false;
-    this.fetchLoop();
+    this.lastMessageTime = Date.now();
+    this.open();
   }
 
   stop(): void {
     this.stopped = true;
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = undefined;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
     }
+
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = undefined;
+    }
+
+    if (this.staleDataTimeout) {
+      clearTimeout(this.staleDataTimeout);
+      this.staleDataTimeout = undefined;
+    }
+
+    this.ws?.close();
+    this.ws = undefined;
   }
 
-  private async fetchLoop(): Promise<void> {
-    if (this.stopped) return;
+  private open(): void {
+    if (this.stopped) {
+      return;
+    }
 
-    try {
-      const now = Math.floor(Date.now() / 1000);
-      const start = this.lastCandleTime > 0 
-        ? Math.floor(this.lastCandleTime / 1000)
-        : now - 3600;
+    console.log(
+      `[${new Date().toISOString()}] Connecting to Lighter WebSocket ` +
+        `market=${this.marketId}, timeframe=${this.resolution}`
+    );
 
-      const url = `${this.baseUrl}/candles?market_id=${this.marketId}` +
-        `&resolution=${this.resolution}&start_timestamp=${start}` +
-        `&end_timestamp=${now}&count_back=100`;
+    const ws = new WebSocket(LIGHTER_WS_URL);
+    this.ws = ws;
 
-      const response = await fetch(url);
-      const data: CandleResponse = await response.json();
+    ws.on('open', () => {
+      console.log(
+        `[${new Date().toISOString()}] Lighter WebSocket connected ` +
+          `market=${this.marketId}`
+      );
 
-      if (data.code === 200 && data.c) {
-        for (const candle of data.c) {
-          if (candle.t <= this.lastCandleTime) continue;
+      this.lastMessageTime = Date.now();
 
-          this.onCandle({
-            time: candle.t,
-            open: candle.o,
-            high: candle.h,
-            low: candle.l,
-            close: candle.c,
-            volume: candle.v
-          });
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `candle/${this.marketId}/${this.resolution}`
+        })
+      );
 
-          this.lastCandleTime = candle.t;
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `market_stats/${this.marketId}`
+        })
+      );
+
+      this.pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
         }
-      } else {
+      }, 30_000);
+
+      this.scheduleStaleDataCheck();
+    });
+
+    ws.on('message', raw => {
+      try {
+        this.lastMessageTime = Date.now();
+
+        const message = JSON.parse(
+          raw.toString()
+        ) as CandleMessage | MarketStatsMessage;
+
+        if (
+          message.type === 'subscribed/candle' ||
+          message.type === 'update/candle'
+        ) {
+          const candleMessage = message as CandleMessage;
+
+          for (const candle of candleMessage.candles ?? []) {
+            const normalized: Candle = {
+              time: candle.t,
+              open: candle.o,
+              high: candle.h,
+              low: candle.l,
+              close: candle.c,
+              volume: candle.v
+            };
+
+            if (
+              !Number.isFinite(normalized.time) ||
+              !Number.isFinite(normalized.open) ||
+              !Number.isFinite(normalized.high) ||
+              !Number.isFinite(normalized.low) ||
+              !Number.isFinite(normalized.close) ||
+              !Number.isFinite(normalized.volume)
+            ) {
+              console.error(
+                `[${new Date().toISOString()}] Invalid Lighter candle`,
+                candle
+              );
+
+              continue;
+            }
+
+            this.onCandle(normalized);
+          }
+
+          return;
+        }
+
+        if (
+          message.type === 'subscribed/market_stats' ||
+          message.type === 'update/market_stats'
+        ) {
+          const statsMessage = message as MarketStatsMessage;
+          const stats = statsMessage.market_stats;
+
+          this.onPrice({
+            lastTradePrice: toFiniteNumber(
+              stats?.last_trade_price
+            ),
+            markPrice: toFiniteNumber(stats?.mark_price),
+            indexPrice: toFiniteNumber(stats?.index_price),
+            midPrice: toFiniteNumber(stats?.mid_price),
+            bestBid: toFiniteNumber(stats?.best_bid_price),
+            bestAsk: toFiniteNumber(stats?.best_ask_price)
+          });
+        }
+      } catch (error) {
         console.error(
-          `[${new Date().toISOString()}] Lighter REST candles error code=${data.code}`
+          `[${new Date().toISOString()}] Invalid Lighter WebSocket message`,
+          error
         );
       }
+    });
 
-      await this.fetchPrice();
-    } catch (error) {
+    ws.on('error', error => {
       console.error(
-        `[${new Date().toISOString()}] Lighter REST fetch error:`,
+        `[${new Date().toISOString()}] Lighter WebSocket error`,
         error
       );
-    }
+    });
 
-    this.pollTimer = setTimeout(() => this.fetchLoop(), 5000);
+    ws.on('close', (code, reason) => {
+      if (this.pingTimer) {
+        clearInterval(this.pingTimer);
+        this.pingTimer = undefined;
+      }
+
+      if (this.staleDataTimeout) {
+        clearTimeout(this.staleDataTimeout);
+        this.staleDataTimeout = undefined;
+      }
+
+      console.warn(
+        `[${new Date().toISOString()}] Lighter WebSocket closed ` +
+          `code=${code} reason=${reason.toString()}`
+      );
+
+      if (!this.stopped) {
+        this.reconnectTimer = setTimeout(() => {
+          this.open();
+        }, 3_000);
+      }
+    });
   }
 
-  private async fetchPrice(): Promise<void> {
-    try {
-      const url = `${this.baseUrl}/orderBookDetails?market_id=${this.marketId}`;
-      const response = await fetch(url);
-      const data: OrderBookDetailsResponse = await response.json();
-
-      if (data.code === 200) {
-        const details = data.order_book_details?.[0] ?? 
-                        data.spot_order_book_details?.[0];
-        
-        if (details) {
-          this.onPrice({
-            lastTradePrice: details.last_trade_price ?? null,
-            markPrice: details.mark_price ?? null,
-            indexPrice: details.index_price ?? null,
-            midPrice: null,
-            bestBid: null,
-            bestAsk: null
-          });
-        }
-      }
-    } catch (error) {
-      console.error(
-        `[${new Date().toISOString()}] Lighter REST price fetch error:`,
-        error
-      );
+  private scheduleStaleDataCheck(): void {
+    if (this.stopped) {
+      return;
     }
+
+    this.staleDataTimeout = setTimeout(() => {
+      const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+      const staleThreshold = 90_000;
+
+      if (timeSinceLastMessage > staleThreshold) {
+        console.warn(
+          `[${new Date().toISOString()}] Lighter WebSocket stale data detected ` +
+            `market=${this.marketId}, last message ${Math.floor(timeSinceLastMessage / 1000)}s ago`
+        );
+
+        this.ws?.close();
+      } else {
+        this.scheduleStaleDataCheck();
+      }
+    }, 60_000);
   }
 }
