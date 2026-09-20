@@ -7,6 +7,7 @@ cd lighter_trade_live
 npm install protobufjs
 npm install -D @types/protobufjs
 npm install
+npm install https-proxy-agent socks-proxy-agent
 docker compose up -d --build
 
 
