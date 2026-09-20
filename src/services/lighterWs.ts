@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import HttpsProxyAgent from 'https-proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SignerClient } from 'zklighter-sdk';
 
 const LIGHTER_WS_URL =
