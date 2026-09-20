@@ -4,7 +4,7 @@ import { SignerClient } from 'zklighter-sdk';
 
 const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
-  'wss://mainnet.zklighter.elliot.ai/stream';
+  'wss://mainnet.zklighter.elliot.ai';
 
 export interface Candle {
   time: number;
