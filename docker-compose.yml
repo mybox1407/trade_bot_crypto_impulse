@@ -19,6 +19,8 @@ services:
       - LIGHTER_WS_URL=${LIGHTER_WS_URL:-wss://mainnet.zklighter.elliot.ai/stream}
       - LIGHTER_MARKET_SLIPPAGE_BPS=${LIGHTER_MARKET_SLIPPAGE_BPS:-0.5}
 
+      - PROXY_URL=${PROXY_URL:-}
+
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 
