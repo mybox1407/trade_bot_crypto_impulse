@@ -67,7 +67,7 @@ export class LighterWsClient {
   private stopped = false;
   private lastMessageTime = 0;
   private staleDataTimeout?: NodeJS.Timeout;
-  private proxyAgent?: HttpsProxyAgent;
+  private proxyAgent?: HttpsProxyAgent<string>;
   private authToken?: string;
 
   constructor(
