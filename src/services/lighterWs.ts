@@ -1,8 +1,23 @@
 import WebSocket from 'ws';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const LIGHTER_WS_URL =
   process.env.LIGHTER_WS_URL ??
   'wss://mainnet.zklighter.elliot.ai/stream';
+
+const PROXY_URL = process.env.PROXY_URL;
+
+const LIGHTER_WS_AGENT = PROXY_URL
+  ? new HttpsProxyAgent(PROXY_URL)
+  : undefined;
+
+function maskedProxyUrl(value: string | undefined): string {
+  if (!value) {
+    return 'direct';
+  }
+
+  return value.replace(/:\/\/([^:]+):([^@]+)@/, '://***:***@');
+}
 
 export interface Candle {
   time: number;
@@ -65,6 +80,7 @@ export class LighterWsClient {
   private stopped = false;
   private lastMessageTime = 0;
   private staleDataTimeout?: NodeJS.Timeout;
+  private reconnectAttempt = 0;
 
   constructor(
     private readonly marketId: number,
@@ -106,15 +122,27 @@ export class LighterWsClient {
       return;
     }
 
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      return;
+    }
+
     console.log(
       `[${new Date().toISOString()}] Connecting to Lighter WebSocket ` +
-        `market=${this.marketId}, timeframe=${this.resolution}`
+        `market=${this.marketId}, timeframe=${this.resolution}, ` +
+        `proxy=${maskedProxyUrl(PROXY_URL)}`
     );
 
-    const ws = new WebSocket(LIGHTER_WS_URL);
+    const ws = new WebSocket(LIGHTER_WS_URL, {
+      agent: LIGHTER_WS_AGENT,
+      handshakeTimeout: 15_000,
+      perMessageDeflate: true
+    });
+
     this.ws = ws;
 
     ws.on('open', () => {
+      this.reconnectAttempt = 0;
+
       console.log(
         `[${new Date().toISOString()}] Lighter WebSocket connected ` +
           `market=${this.marketId}`
@@ -135,6 +163,10 @@ export class LighterWsClient {
           channel: `market_stats/${this.marketId}`
         })
       );
+
+      if (this.pingTimer) {
+        clearInterval(this.pingTimer);
+      }
 
       this.pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -224,6 +256,13 @@ export class LighterWsClient {
       );
     });
 
+    ws.on('unexpected-response', (_request, response) => {
+      console.error(
+        `[${new Date().toISOString()}] Lighter WebSocket handshake rejected ` +
+          `status=${response.statusCode}`
+      );
+    });
+
     ws.on('close', (code, reason) => {
       if (this.pingTimer) {
         clearInterval(this.pingTimer);
@@ -235,15 +274,27 @@ export class LighterWsClient {
         this.staleDataTimeout = undefined;
       }
 
+      if (this.ws === ws) {
+        this.ws = undefined;
+      }
+
       console.warn(
         `[${new Date().toISOString()}] Lighter WebSocket closed ` +
           `code=${code} reason=${reason.toString()}`
       );
 
       if (!this.stopped) {
+        const delay = Math.min(
+          60_000,
+          1_000 * 2 ** Math.min(this.reconnectAttempt, 6)
+        );
+
+        this.reconnectAttempt += 1;
+
         this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = undefined;
           this.open();
-        }, 3_000);
+        }, delay);
       }
     });
   }
