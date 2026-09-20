@@ -94,6 +94,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'SKHY',
   'DRAM',
   'USDJPY',
+  'STABLECOINX',
 
   //блеклист
   'UNI',
