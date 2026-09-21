@@ -1,3 +1,4 @@
+src/services/strategy.ts
 import {
   MACD,
   RSI,
@@ -27,17 +28,20 @@ export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 65;
 
 // ADX
-// ИЗМЕНЕНИЕ: отдельные минимальные пороги для Short и Long.
 export const MIN_ENTRY_ADX_SHORT = 25;
 export const MIN_ENTRY_ADX_LONG = 29; 
 export const MAX_ENTRY_ADX = 40;
 
 // ATR (доля от цены, как atrPct: 0.005 = 0.5%)
-export const MIN_LAST_ATR_PCT = 0.005;   // было MIN_LAST_ATR = 0.005 (абсолютный)
-export const MAX_LAST_ATR_PCT = 0.05;    // было MAX_LAST_ATR = 5.0 (абсолютный)
+// ИЗМЕНЕНИЕ: раздельные верхние лимиты для Long и Short
+export const MIN_LAST_ATR_PCT = 0.005;
+export const MAX_LAST_ATR_PCT_LONG = 0.0195;   // ИЗМЕНЕНО: было MAX_LAST_ATR_PCT = 0.05
+export const MAX_LAST_ATR_PCT_SHORT = 0.025;   // ИЗМЕНЕНО: новое
 
 // Ширина Bollinger Bands
-export const MIN_BB_WIDTH = 0.052;
+// ИЗМЕНЕНИЕ: раздельные минимальные лимиты для Long и Short
+export const MIN_BB_WIDTH_LONG = 0.054;        // ИЗМЕНЕНО: было MIN_BB_WIDTH = 0.052
+export const MIN_BB_WIDTH_SHORT = 0.05;        // ИЗМЕНЕНО: новое
 
 // Минимальное расстояние от EMA20
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
@@ -49,6 +53,9 @@ export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 
 // Не брать растянутый вход
 export const REJECT_ENTRY_TOO_EXTENDED = true;
+
+// ИЗМЕНЕНИЕ: блеклист тикеров для Long
+export const LONG_BLACKLIST = ['VVV', 'ENA'];   // ИЗМЕНЕНО: добавлено
 
 // Управление сделкой
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
@@ -298,7 +305,7 @@ export function canOpenTrade(params: {
   symbol: string;
   side: 'long' | 'short' | 'none';
   lastRsi: number;
-  atrPct: number;                // было lastAtr: number
+  atrPct: number;
   adx: number;
   bbWidth: number;
   entryDistanceFromEma20: number;
@@ -310,7 +317,7 @@ export function canOpenTrade(params: {
     symbol,
     side,
     lastRsi,
-    atrPct,                      // было lastAtr
+    atrPct,
     adx,
     bbWidth,
     entryDistanceFromEma20Atr,
@@ -322,6 +329,14 @@ export function canOpenTrade(params: {
 
   if (!isTradingTimeUtcPlus4(now)) {
     return false;
+  }
+
+  // ИЗМЕНЕНИЕ: проверка блеклиста для Long
+  if (side === 'long') {
+    const baseSymbol = symbol.split('/')[0].toUpperCase();
+    if (LONG_BLACKLIST.includes(baseSymbol)) {
+      return false;
+    }
   }
 
   if (side === 'short') {
@@ -336,12 +351,13 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  // ФИКС: проверяем atrPct (доля цены) вместо абсолютного lastAtr
-  if (atrPct < MIN_LAST_ATR_PCT || atrPct > MAX_LAST_ATR_PCT) {
+  // ИЗМЕНЕНИЕ: проверка atrPct с раздельными лимитами для Long и Short
+  const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
+  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) {
     return false;
   }
 
-  // ИЗМЕНЕНИЕ: ADX проверяется с отдельным минимумом по стороне.
+  // ADX проверяется с отдельным минимумом по стороне.
   const minAdx = side === 'short'
     ? MIN_ENTRY_ADX_SHORT
     : MIN_ENTRY_ADX_LONG;
@@ -350,7 +366,9 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  if (bbWidth < MIN_BB_WIDTH) {
+  // ИЗМЕНЕНИЕ: проверка BB Width с раздельными лимитами для Long и Short
+  const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT;
+  if (bbWidth < minBbWidth) {
     return false;
   }
 
@@ -650,7 +668,7 @@ export function analyzeMarket(
       symbol,
       side,
       lastRsi,
-      atrPct: regimeIndicators.atrPct,          // ФИКС: передаём atrPct вместо lastAtr
+      atrPct: regimeIndicators.atrPct,
       adx: regimeIndicators.adx,
       bbWidth: regimeIndicators.bbWidth,
       entryDistanceFromEma20,
