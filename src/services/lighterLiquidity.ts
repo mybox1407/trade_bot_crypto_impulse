@@ -101,7 +101,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'UNI',
   'SOXL',
   'AI',
-  '1000PEPE'
+  '1000PEPE',
+  'ARB'
 ]);
 
 function toNumber(
