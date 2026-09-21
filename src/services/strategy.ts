@@ -1,4 +1,4 @@
-src/services/strategy.ts
+//src/services/strategy.ts
 import {
   MACD,
   RSI,
