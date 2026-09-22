@@ -55,7 +55,7 @@ export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
 // ИЗМЕНЕНИЕ: блеклист тикеров для Long
-export const LONG_BLACKLIST = ['VVV', 'ENA'];   // ИЗМЕНЕНО: добавлено
+export const LONG_BLACKLIST = ['VVV', 'ENA', 'ONDO'];   // ИЗМЕНЕНО: добавлено
 
 // Управление сделкой
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
