@@ -34,11 +34,11 @@ export const MAX_ENTRY_ADX = 40;
 
 // ATR (доля от цены, как atrPct: 0.005 = 0.5%)
 export const MIN_LAST_ATR_PCT = 0.005;
-export const MAX_LAST_ATR_PCT_LONG = 0.020; // ИЗМЕНЕНО: было 0.0195
+export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
 // Ширина Bollinger Bands
-export const MIN_BB_WIDTH_LONG = 0.054;
+export const MIN_BB_WIDTH_LONG = 0.053;
 export const MAX_BB_WIDTH_LONG = 0.090; // ИЗМЕНЕНО: добавлен верхний лимит
 export const MIN_BB_WIDTH_SHORT = 0.05;
 // Для Short верхнего лимита нет (как в конфигурации)
@@ -49,7 +49,7 @@ export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
 
 // Максимальное растяжение входа относительно EMA20
-export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.4; // ИЗМЕНЕНО: было 1.5
+export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 
 // Не брать растянутый вход
 export const REJECT_ENTRY_TOO_EXTENDED = true;
