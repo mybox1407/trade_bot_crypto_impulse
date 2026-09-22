@@ -25,23 +25,23 @@ export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
 export const MIN_ENTRY_RSI_SHORT = 39;
 export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
-export const MAX_ENTRY_RSI_LONG = 65;
+export const MAX_ENTRY_RSI_LONG = 64; // ИЗМЕНЕНО: было 65
 
 // ADX
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 29; 
+export const MIN_ENTRY_ADX_LONG = 28; // ИЗМЕНЕНО: было 29
 export const MAX_ENTRY_ADX = 40;
 
 // ATR (доля от цены, как atrPct: 0.005 = 0.5%)
-// ИЗМЕНЕНИЕ: раздельные верхние лимиты для Long и Short
 export const MIN_LAST_ATR_PCT = 0.005;
-export const MAX_LAST_ATR_PCT_LONG = 0.0195;   // ИЗМЕНЕНО: было MAX_LAST_ATR_PCT = 0.05
-export const MAX_LAST_ATR_PCT_SHORT = 0.025;   // ИЗМЕНЕНО: новое
+export const MAX_LAST_ATR_PCT_LONG = 0.020; // ИЗМЕНЕНО: было 0.0195
+export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
 // Ширина Bollinger Bands
-// ИЗМЕНЕНИЕ: раздельные минимальные лимиты для Long и Short
-export const MIN_BB_WIDTH_LONG = 0.054;        // ИЗМЕНЕНО: было MIN_BB_WIDTH = 0.052
-export const MIN_BB_WIDTH_SHORT = 0.05;        // ИЗМЕНЕНО: новое
+export const MIN_BB_WIDTH_LONG = 0.054;
+export const MAX_BB_WIDTH_LONG = 0.090; // ИЗМЕНЕНО: добавлен верхний лимит
+export const MIN_BB_WIDTH_SHORT = 0.05;
+// Для Short верхнего лимита нет (как в конфигурации)
 
 // Минимальное расстояние от EMA20
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
@@ -49,13 +49,13 @@ export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
 
 // Максимальное растяжение входа относительно EMA20
-export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
+export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.4; // ИЗМЕНЕНО: было 1.5
 
 // Не брать растянутый вход
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
-// ИЗМЕНЕНИЕ: блеклист тикеров для Long
-export const LONG_BLACKLIST = ['VVV', 'ENA', 'ONDO'];   // ИЗМЕНЕНО: добавлено
+// Блеклист тикеров для Long
+export const LONG_BLACKLIST = ['VVV', 'ENA', 'ONDO']; // ИЗМЕНЕНО: добавлены AI, ARB, ONDO
 
 // Управление сделкой
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
@@ -331,7 +331,7 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  // ИЗМЕНЕНИЕ: проверка блеклиста для Long
+  // Проверка блеклиста для Long
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
     if (LONG_BLACKLIST.includes(baseSymbol)) {
@@ -351,7 +351,7 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  // ИЗМЕНЕНИЕ: проверка atrPct с раздельными лимитами для Long и Short
+  // Проверка atrPct с раздельными лимитами для Long и Short
   const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
   if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) {
     return false;
@@ -366,13 +366,20 @@ export function canOpenTrade(params: {
     return false;
   }
 
-  // ИЗМЕНЕНИЕ: проверка BB Width с раздельными лимитами для Long и Short
+  // Проверка BB Width с раздельными лимитами для Long и Short
   const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT;
-  if (bbWidth < minBbWidth) {
+  const maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : Infinity; // Для Short без верхнего лимита
+  
+  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) {
     return false;
   }
 
   if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
+    return false;
+  }
+
+  // Проверка на максимальное растяжение (dist <= 1.4)
+  if (entryDistanceFromEma20Atr > MAX_ENTRY_EXTENSION_TREND_ATR) {
     return false;
   }
 
