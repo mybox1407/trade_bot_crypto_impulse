@@ -57,7 +57,7 @@ export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
 // Blacklist только для Long
-export const LONG_BLACKLIST = ['VVV', 'ENA', 'ONDO', 'AI', 'ARB'];
+export const LONG_BLACKLIST = ['ONDO', 'AI'];
 
 // Управление сделкой
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
