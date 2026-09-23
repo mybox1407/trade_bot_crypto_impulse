@@ -98,11 +98,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'TAO',
 
   //блеклист
-  'UNI',
-  'SOXL',
   'AI',
-  '1000PEPE',
-  'ARB'
+  '1000PEPE'
 ]);
 
 function toNumber(
