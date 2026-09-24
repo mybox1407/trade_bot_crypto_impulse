@@ -1,15 +1,4 @@
-/*
- * scheduler.ts — corrected fill/local-state synchronization + ML metadata.
- *
- * Important contract:
- * - beginPositionOpening/endPositionOpening protect only order submission.
- * - openPosition must not reject a confirmed fill because an opening request
- *   is still marked as active.
- * - A confirmed fill is persisted in pending reconciliation state before any
- *   local-state failure is reported.
- * - Remote positions without local state are restored only when enough
- *   information is available; otherwise the symbol remains blocked.
- */
+/* Full scheduler update: startup ML metadata is read from the model sidecar. */
 
 import {
   SIGNAL_CHECK_INTERVAL_MS,
@@ -78,8 +67,15 @@ import {
 import type { EnsureProtectiveOrdersRequest } from './execution/types';
 import {
   startModelTrainingScheduler,
-  isModelAvailable
+  isModelAvailable,
+  getModelInfo
 } from './ml/mlScheduler';
+
+type ModelInfo = {
+  available: boolean;
+  trainedAt: string | null;
+  trainingRows: number | null;
+};
 
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
@@ -96,11 +92,12 @@ let positionCheckRunning = false;
 let schedulerStopping = false;
 let schedulerStarted = false;
 const symbolLocks = new Map<string, number>();
-
-// The scheduler starts training once and then keeps the daily training loop.
-// A signal is not allowed before the first training attempt finishes.
 let mlTrainingReady = false;
-
+let mlModelInfo: ModelInfo = {
+  available: false,
+  trainedAt: null,
+  trainingRows: null
+};
 
 type SignalResult = {
   symbol: string;
@@ -288,12 +285,7 @@ async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
   }
 }
 
-function buildPositionMetadata(
-  regime: string,
-  indicators: any,
-  signalTime?: number,
-  signalTimeIso?: string
-) {
+function buildPositionMetadata(regime: string, indicators: any, signalTime?: number, signalTimeIso?: string) {
   return {
     regime,
     macdCrossUp: indicators?.macdCrossUp ?? false,
@@ -350,12 +342,7 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     exchangeTakeProfitPrice: input.exchangeTakeProfitPrice,
     exchangeStopLossOrderId: input.protectionStopLossOrderId,
     exchangeTakeProfitOrderId: input.protectionTakeProfitOrderId,
-    metadata: buildPositionMetadata(
-      input.regime,
-      input.indicators,
-      input.signalTime,
-      input.signalTimeIso
-    ),
+    metadata: buildPositionMetadata(input.regime, input.indicators, input.signalTime, input.signalTimeIso),
     executionOrderId: input.orderId,
     clientOrderId: input.clientOrderId
   };
@@ -366,9 +353,7 @@ function tryRestorePendingFilledOpen(symbol: string): boolean {
   const pending = pendingFilledOpens.get(key);
   if (!pending) return false;
 
-  const existing = getPositions().find(position =>
-    normalizeSymbol(position.symbol) === key && position.marketId === pending.marketId
-  );
+  const existing = getPositions().find(position => normalizeSymbol(position.symbol) === key && position.marketId === pending.marketId);
   if (existing) {
     clearPendingFilledOpen(key);
     unlockSymbol(key);
@@ -396,10 +381,7 @@ function tryRestorePendingFilledOpen(symbol: string): boolean {
   return true;
 }
 
-async function ensurePositionProtection(
-  position: ReturnType<typeof getPositions>[number],
-  activeMarket: { priceDecimals: number; sizeDecimals: number }
-): Promise<void> {
+async function ensurePositionProtection(position: ReturnType<typeof getPositions>[number], activeMarket: { priceDecimals: number; sizeDecimals: number }): Promise<void> {
   if (position.marketId == null) throw new Error(`Missing marketId for ${position.symbol}`);
   if (!executionService.ensureProtectiveOrders) throw new Error('Execution service does not support protective-order recovery');
   const request: EnsureProtectiveOrdersRequest = {
@@ -415,17 +397,10 @@ async function ensurePositionProtection(
     takeProfitPrice: position.exchangeTakeProfitPrice
   };
   const protection = await executionService.ensureProtectiveOrders(request);
-  if (!protection.stopLossOrderId || !protection.takeProfitOrderId) {
-    throw new Error(`Protective orders were not fully confirmed for ${position.symbol}`);
-  }
+  if (!protection.stopLossOrderId || !protection.takeProfitOrderId) throw new Error(`Protective orders were not fully confirmed for ${position.symbol}`);
   const updated = updatePositionMetadata(position.id, { reconciliationIssue: undefined });
   if (!updated) throw new Error(`Failed to update protection state for ${position.symbol}`);
-  tradeLog('PROTECTION_RECOVERED', {
-    symbol: position.symbol,
-    marketId: position.marketId,
-    stopLossOrderId: protection.stopLossOrderId,
-    takeProfitOrderId: protection.takeProfitOrderId
-  });
+  tradeLog('PROTECTION_RECOVERED', { symbol: position.symbol, marketId: position.marketId, stopLossOrderId: protection.stopLossOrderId, takeProfitOrderId: protection.takeProfitOrderId });
 }
 
 async function hasKnownRemotePosition(remote: any, pending?: PendingFilledOpen): Promise<boolean> {
@@ -446,16 +421,9 @@ async function checkSignals(): Promise<void> {
       const symbol = normalizeSymbol(rawSymbol);
       try {
         if (!mlTrainingReady || !isModelAvailable()) {
-          results.push({
-            symbol,
-            status: 'not-ready',
-            regime: 'ml-not-ready',
-            hasSignal: false,
-            reason: 'ML model is not available yet'
-          });
+          results.push({ symbol, status: 'not-ready', regime: 'ml-not-ready', hasSignal: false, reason: 'ML model is not available yet' });
           continue;
         }
-
         if (tryRestorePendingFilledOpen(symbol)) {
           results.push({ symbol, status: 'not-ready', regime: 'reconciled', hasSignal: false, reason: 'Confirmed fill restored into local state' });
           continue;
@@ -490,78 +458,67 @@ async function checkSignals(): Promise<void> {
           continue;
         }
 
-        const buy = (result as any).buy as boolean;
-        const sell = (result as any).sell as boolean;
-        const side = (result as any).side as 'long' | 'short' | 'none';
-        const price = (result as any).price as number;
-        const takeProfitPrice = (result as any).takeProfitPrice as number | null;
-        const stopLossPrice = (result as any).stopLossPrice as number | null;
-        const positionSize = (result as any).positionSize as number | null;
-        const regime = (result as any).regime as string;
-        const skipReason = (result as any).skipReason as string | null;
-        const signalTime = (result as any).signalTime as number | undefined;
-        const signalTimeIso = (result as any).signalTimeIso as string | undefined;
-        const indicators = (result as any).indicators as any;
-        const mlProbability = (result as any).mlProbability as number | null | undefined;
-        const mlThreshold = (result as any).mlThreshold as number | null | undefined;
-        const mlPassed = (result as any).mlPassed as boolean | null | undefined;
-        const mlTrainedAt = (result as any).mlTrainedAt as string | null | undefined;
+        const buy = result.buy;
+        const sell = result.sell;
+        const side = result.side;
+        const price = result.price;
+        const takeProfitPrice = result.takeProfitPrice;
+        const stopLossPrice = result.stopLossPrice;
+        const positionSize = result.positionSize;
+        const regime = result.regime;
+        const skipReason = result.skipReason;
+        const signalTime = result.signalTime;
+        const signalTimeIso = result.signalTimeIso;
+        const indicators = result.indicators;
+        const mlProbability = result.mlProbability;
+        const mlThreshold = result.mlThreshold;
+        const mlPassed = result.mlPassed;
+        const mlTrainedAt = result.mlTrainedAt;
         const isTradingWindow = isTradingTimeUtcPlus4(new Date());
 
         logSignalCheck({
           timestamp: new Date().toISOString(),
           symbol,
           timeframe: '15m',
-          side: side ?? 'none',
-          price: price ?? 0,
-          regime: regime ?? 'unknown',
-          takeProfitPrice: takeProfitPrice ?? null,
-          stopLossPrice: stopLossPrice ?? null,
-          positionSize: positionSize ?? null,
-          macdCrossUp: indicators?.macdCrossUp ?? false,
-          macdCrossDown: indicators?.macdCrossDown ?? false,
-          lastRsi: indicators?.lastRsi ?? 0,
-          lastAtr: indicators?.lastAtr ?? 0,
+          side,
+          price,
+          regime,
+          takeProfitPrice,
+          stopLossPrice,
+          positionSize,
+          macdCrossUp: indicators.macdCrossUp,
+          macdCrossDown: indicators.macdCrossDown,
+          lastRsi: indicators.lastRsi,
+          lastAtr: indicators.lastAtr,
           rsiBull: false,
           rsiBear: false,
-          bbUpper: indicators?.bbUpper ?? 0,
-          bbMiddle: indicators?.bbMiddle ?? 0,
-          bbLower: indicators?.bbLower ?? 0,
-          adx: indicators?.adx ?? 0,
-          adxRising: indicators?.regimeIndicators?.adxRising ?? false,
-          ema20: indicators?.ema20 ?? 0,
-          ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-          ema200: indicators?.ema200 ?? 0,
-          bbWidth: indicators?.bbWidth ?? 0,
-          atrPct: indicators?.atrPct ?? 0,
+          bbUpper: indicators.bbUpper,
+          bbMiddle: indicators.bbMiddle,
+          bbLower: indicators.bbLower,
+          adx: indicators.adx,
+          adxRising: indicators.regimeIndicators.adxRising,
+          ema20: indicators.ema20,
+          ema50: indicators.regimeIndicators.ema50,
+          ema200: indicators.ema200,
+          bbWidth: indicators.bbWidth,
+          atrPct: indicators.atrPct,
           signalTriggered: buy || sell,
           positionOpened: false,
-          entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? null,
-          entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? null,
-          entryTooExtended: indicators?.entryTooExtended ?? false,
-          signalTimeIso: signalTimeIso ?? new Date().toISOString(),
+          openPositionError: skipReason ?? undefined,
+          entryDistanceFromEma20: indicators.entryDistanceFromEma20 ?? undefined,
+          entryDistanceFromEma20Atr: indicators.entryDistanceFromEma20Atr ?? undefined,
+          entryTooExtended: indicators.entryTooExtended,
+          signalTimeIso,
           isTradingWindow,
-          mlProbability: mlProbability ?? null,
-          mlThreshold: mlThreshold ?? null,
-          mlPassed: mlPassed ?? null,
-          mlTrainedAt: mlTrainedAt ?? null
+          mlProbability,
+          mlThreshold,
+          mlPassed,
+          mlTrainedAt
         });
 
         if (skipReason || (!buy && !sell)) {
           const reason = skipReason ?? 'No signal';
-          results.push({
-            symbol,
-            status: 'no-signal',
-            regime,
-            hasSignal: false,
-            side,
-            price,
-            reason,
-            mlProbability,
-            mlThreshold,
-            mlPassed,
-            mlTrainedAt
-          });
+          results.push({ symbol, status: 'no-signal', regime, hasSignal: false, side, price, reason, mlProbability, mlThreshold, mlPassed, mlTrainedAt });
           continue;
         }
         if (side !== 'long' && side !== 'short') throw new Error('Signal side is invalid');
@@ -615,20 +572,13 @@ async function checkSignals(): Promise<void> {
             orderId: executionResult.orderId,
             clientOrderId,
             regime,
-            indicators: {
-              ...indicators,
-              mlProbability,
-              mlThreshold,
-              mlPassed,
-              mlTrainedAt
-            },
+            indicators: { ...indicators, mlProbability, mlThreshold, mlPassed, mlTrainedAt },
             signalTime,
             signalTimeIso,
             protectionStopLossOrderId: executionResult.protectiveOrders?.stopLossOrderId,
             protectionTakeProfitOrderId: executionResult.protectiveOrders?.takeProfitOrderId,
             createdAt: Date.now()
           };
-
           savePendingFilledOpen(pending);
 
           endPositionOpening(symbol);
@@ -677,119 +627,58 @@ async function checkSignals(): Promise<void> {
         results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
     }
-    await sendAggregatedSignalSummary({
-      results,
-      errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined,
-      equity: getBalance()
-    });
+    await sendAggregatedSignalSummary({ results, errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined, equity: getBalance() });
   } finally {
     signalCheckRunning = false;
   }
 }
 
-async function reconcileLocalPositionsWithExchange(
-  localPositions: ReturnType<typeof getPositions>
-): Promise<void> {
+async function reconcileLocalPositionsWithExchange(localPositions: ReturnType<typeof getPositions>): Promise<void> {
   if (PAPER_TRADING || !signerClient) return;
-
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-
   try {
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
-
-    const remoteByMarketId = new Map(
-      remotePositions.map(position => [position.marketId, position])
-    );
-    const remoteBySymbol = new Map(
-      remotePositions.map(position => [normalizeSymbol(position.symbol), position])
-    );
+    const remoteByMarketId = new Map(remotePositions.map(position => [position.marketId, position]));
+    const remoteBySymbol = new Map(remotePositions.map(position => [normalizeSymbol(position.symbol), position]));
 
     for (const local of localPositions) {
       const symbol = normalizeSymbol(local.symbol);
-      const remote = local.marketId != null
-        ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol))
-        : remoteBySymbol.get(symbol);
-
+      const remote = local.marketId != null ? (remoteByMarketId.get(local.marketId) ?? remoteBySymbol.get(symbol)) : remoteBySymbol.get(symbol);
       if (remote) continue;
 
       const markPrice = getMarkPrice(symbol);
-      const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0
-        ? markPrice
-        : local.entryPrice;
-      const tpHit = markPrice != null && Number.isFinite(markPrice) && (
-        local.side === 'long'
-          ? markPrice >= local.takeProfitPrice
-          : markPrice <= local.takeProfitPrice
-      );
+      const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0 ? markPrice : local.entryPrice;
+      const tpHit = markPrice != null && Number.isFinite(markPrice) && (local.side === 'long' ? markPrice >= local.takeProfitPrice : markPrice <= local.takeProfitPrice);
       const closeReason = tpHit ? 'take_profit' : 'stop_loss';
-
-      const closeResult = closePosition(local.id, closePrice, closeReason, {
-        executionOrderId: 'exchange-auto-close',
-        clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`,
-        fee: 0
-      });
+      const closeResult = closePosition(local.id, closePrice, closeReason, { executionOrderId: 'exchange-auto-close', clientOrderId: `${symbol}-${Date.now()}-reconcile-${closeReason}`, fee: 0 });
 
       if (!closeResult.ok) {
         markReconciliationPending(symbol);
-        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, {
-          symbol,
-          positionId: local.id,
-          closeReason
-        });
+        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, { symbol, positionId: local.id, closeReason });
       } else {
         unlockSymbol(symbol);
-        tradeLog('POSITION_CLOSED', {
-          symbol,
-          positionId: local.id,
-          closeReason,
-          closePrice
-        });
+        tradeLog('POSITION_CLOSED', { symbol, positionId: local.id, closeReason, closePrice });
       }
     }
 
-    const localByMarketId = new Map(
-      getPositions()
-        .filter(position => position.marketId != null)
-        .map(position => [position.marketId as number, position])
-    );
-    const localBySymbol = new Map(
-      getPositions().map(position => [normalizeSymbol(position.symbol), position])
-    );
+    const localByMarketId = new Map(getPositions().filter(position => position.marketId != null).map(position => [position.marketId as number, position]));
+    const localBySymbol = new Map(getPositions().map(position => [normalizeSymbol(position.symbol), position]));
 
     for (const remote of remotePositions) {
       const symbol = normalizeSymbol(remote.symbol);
-      const hasLocal =
-        localByMarketId.has(remote.marketId) ||
-        localBySymbol.has(symbol);
-
+      const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(symbol);
       if (hasLocal) continue;
 
       const pending = pendingFilledOpens.get(symbol);
-      if (
-        pending &&
-        Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS &&
-        await hasKnownRemotePosition(remote, pending)
-      ) {
+      if (pending && Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS && await hasKnownRemotePosition(remote, pending)) {
         const restored = tryRestorePendingFilledOpen(symbol);
         if (restored) {
-          tradeLog('LOCAL_POSITION_RECONCILED', {
-            symbol,
-            marketId: remote.marketId,
-            source: 'pending-filled-open'
-          });
+          tradeLog('LOCAL_POSITION_RECONCILED', { symbol, marketId: remote.marketId, source: 'pending-filled-open' });
           continue;
         }
       }
 
-      const side: 'long' | 'short' =
-        remote.side === 'long' || remote.side === 'short'
-          ? remote.side
-          : (() => {
-              throw new Error(
-                `Invalid remote position side for ${remote.symbol}: ${String(remote.side)}`
-              );
-            })();
-
+      const side: 'long' | 'short' = remote.side === 'long' || remote.side === 'short' ? remote.side : (() => { throw new Error(`Invalid remote position side for ${remote.symbol}: ${String(remote.side)}`); })();
       const entryPrice = Number(remote.entryPrice);
       const quantity = Number(remote.quantity);
       const takeProfitPrice = Number(remote.takeProfitPrice);
@@ -797,32 +686,10 @@ async function reconcileLocalPositionsWithExchange(
       const exchangeStopLossOrderId = remote.exchangeStopLossOrderId;
       const exchangeTakeProfitOrderId = remote.exchangeTakeProfitOrderId;
 
-      const validRestore =
-        Number.isFinite(entryPrice) &&
-        entryPrice > 0 &&
-        Number.isFinite(quantity) &&
-        quantity > 0 &&
-        Number.isFinite(takeProfitPrice) &&
-        takeProfitPrice > 0 &&
-        Number.isFinite(stopLossPrice) &&
-        stopLossPrice > 0;
-
+      const validRestore = Number.isFinite(entryPrice) && entryPrice > 0 && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(takeProfitPrice) && takeProfitPrice > 0 && Number.isFinite(stopLossPrice) && stopLossPrice > 0;
       if (!validRestore) {
         markReconciliationPending(symbol);
-        tradeError(
-          'LOCAL_POSITION_MISSING',
-          'Remote position has no local state and does not contain enough data for a safe restore',
-          {
-            symbol: remote.symbol,
-            marketId: remote.marketId,
-            remoteSide: remote.side,
-            entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
-            quantity: Number.isFinite(quantity) ? quantity : null,
-            takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
-            stopLossPrice: Number.isFinite(stopLossPrice) ? stopLossPrice : null,
-            hasPendingFilledOpen: Boolean(pending)
-          }
-        );
+        tradeError('LOCAL_POSITION_MISSING', 'Remote position has no local state and does not contain enough data for a safe restore', { symbol: remote.symbol, marketId: remote.marketId, remoteSide: remote.side, entryPrice: Number.isFinite(entryPrice) ? entryPrice : null, quantity: Number.isFinite(quantity) ? quantity : null, takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : null, stopLossPrice: Number.isFinite(stopLossPrice) ? stopLossPrice : null, hasPendingFilledOpen: Boolean(pending) });
         continue;
       }
 
@@ -838,44 +705,23 @@ async function reconcileLocalPositionsWithExchange(
         exchangeTakeProfitPrice: takeProfitPrice,
         exchangeStopLossOrderId,
         exchangeTakeProfitOrderId,
-        metadata: buildPositionMetadata(
-          'reconciled-remote',
-          {},
-          Date.now(),
-          new Date().toISOString()
-        ),
+        metadata: buildPositionMetadata('reconciled-remote', {}, Date.now(), new Date().toISOString()),
         executionOrderId: remote.orderId,
         clientOrderId: `${symbol}-${Date.now()}-remote-restore`
       };
-
       const openResult = openPosition(restoreInput);
 
       if (!openResult.ok) {
         markReconciliationPending(symbol);
-        tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
-          symbol: remote.symbol,
-          marketId: remote.marketId,
-          source: 'remote-position'
-        });
+        tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, { symbol: remote.symbol, marketId: remote.marketId, source: 'remote-position' });
         continue;
       }
 
       unlockSymbol(symbol);
-      tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', {
-        symbol: remote.symbol,
-        marketId: remote.marketId,
-        positionId: openResult.position?.id ?? null,
-        entryPrice,
-        quantity,
-        takeProfitPrice,
-        stopLossPrice
-      });
+      tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', { symbol: remote.symbol, marketId: remote.marketId, positionId: openResult.position?.id ?? null, entryPrice, quantity, takeProfitPrice, stopLossPrice });
     }
   } catch (error) {
-    tradeError('EXCHANGE_SYNC_FAILED', error, {
-      accountIndex,
-      localPositions: localPositions.length
-    });
+    tradeError('EXCHANGE_SYNC_FAILED', error, { accountIndex, localPositions: localPositions.length });
     throw error;
   }
 }
@@ -927,12 +773,11 @@ export async function startScheduler(): Promise<void> {
     initializeSignerClient();
 
     await startModelTrainingScheduler();
-    mlTrainingReady = isModelAvailable();
+    mlModelInfo = getModelInfo();
+    mlTrainingReady = mlModelInfo.available && isModelAvailable();
 
     if (!mlTrainingReady) {
-      throw new Error(
-        'ML model is not available after startup training'
-      );
+      throw new Error('ML model is not available after startup training');
     }
 
     await refreshTopMarkets();
@@ -957,11 +802,14 @@ export async function startScheduler(): Promise<void> {
       signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
       positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
       balance: getBalance(),
-      mlModelAvailable: mlTrainingReady
+      mlModelAvailable: mlModelInfo.available,
+      mlTrainedAt: mlModelInfo.trainedAt,
+      mlTrainingRows: mlModelInfo.trainingRows
     });
   } catch (error) {
     schedulerStarted = false;
     mlTrainingReady = false;
+    mlModelInfo = { available: false, trainedAt: null, trainingRows: null };
     stopMarketRefresh();
     stopReconciliationLoop();
     stopBalanceSyncLoop();
@@ -997,4 +845,5 @@ export async function stopScheduler(): Promise<void> {
   await flushPositionPersistence().catch(error => tradeError('POSITION_PERSISTENCE_FLUSH_FAILED', error));
   schedulerStarted = false;
   mlTrainingReady = false;
+  mlModelInfo = { available: false, trainedAt: null, trainingRows: null };
 }
