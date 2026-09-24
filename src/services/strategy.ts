@@ -45,7 +45,7 @@ export const MIN_BB_WIDTH_SHORT = 0.04; //Было 0.05
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
-export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.2; //Было 1.5
+export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.8; //Было 1.2
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
 // Blacklist только для Long
