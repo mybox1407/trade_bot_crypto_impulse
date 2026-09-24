@@ -3,29 +3,38 @@ services:
     build: .
     container_name: lighter_live
     restart: unless-stopped
+    init: true
+
     ports:
       - "3007:3007"
 
     environment:
-      - PORT=3007
-      - NODE_ENV=production
-      - PAPER_TRADING=${PAPER_TRADING:-false}
+      PORT: "3007"
+      NODE_ENV: production
+      PAPER_TRADING: "${PAPER_TRADING:-false}"
 
-      - LIGHTER_API_KEY=${LIGHTER_API_KEY:-}
-      - LIGHTER_API_SECRET=${LIGHTER_API_SECRET:-}
-      - LIGHTER_API_KEY_INDEX=${LIGHTER_API_KEY_INDEX:-0}
-      - LIGHTER_ACCOUNT_INDEX=${LIGHTER_ACCOUNT_INDEX:-0}
-      - LIGHTER_API_URL=${LIGHTER_API_URL:-https://mainnet.zklighter.elliot.ai}
-      - LIGHTER_WS_URL=${LIGHTER_WS_URL:-wss://mainnet.zklighter.elliot.ai/stream}
-      - LIGHTER_MARKET_SLIPPAGE_BPS=${LIGHTER_MARKET_SLIPPAGE_BPS:-0.5}
+      LIGHTER_API_KEY: "${LIGHTER_API_KEY:-}"
+      LIGHTER_API_SECRET: "${LIGHTER_API_SECRET:-}"
+      LIGHTER_API_KEY_INDEX: "${LIGHTER_API_KEY_INDEX:-0}"
+      LIGHTER_ACCOUNT_INDEX: "${LIGHTER_ACCOUNT_INDEX:-0}"
+      LIGHTER_API_URL: "${LIGHTER_API_URL:-https://mainnet.zklighter.elliot.ai}"
+      LIGHTER_WS_URL: "${LIGHTER_WS_URL:-wss://mainnet.zklighter.elliot.ai/stream}"
+      LIGHTER_MARKET_SLIPPAGE_BPS: "${LIGHTER_MARKET_SLIPPAGE_BPS:-0.5}"
 
-      - PROXY_URL=${PROXY_URL:-}
+      PROXY_URL: "${PROXY_URL:-}"
 
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+
+      # Linux Python ML environment.
+      # Recommended: create this virtualenv inside the image.
+      PYTHON_BIN: "${PYTHON_BIN:-/app/.venv/bin/python}"
+      ML_DIR: "${ML_DIR:-/app/ml}"
+      LOG_DIR: "${LOG_DIR:-/app/logs}"
 
     volumes:
       - ./logs:/app/logs
+      - ./ml:/app/ml
 
     healthcheck:
       test:
@@ -41,3 +50,5 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+    stop_grace_period: 30s
