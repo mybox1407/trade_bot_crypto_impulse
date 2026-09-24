@@ -52,6 +52,9 @@ export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
 export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
+// Blacklist только для Long
+export const LONG_BLACKLIST = [];
+
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 1.8;
 export const ENABLE_TRAILING_STOP = false;
