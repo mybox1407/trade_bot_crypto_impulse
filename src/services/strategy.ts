@@ -21,12 +21,8 @@ export const ENABLE_BREAKOUT_TRADES = false;
 export const ENABLE_ML_FILTER = true;
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [
-  [0, 3],
-  [6, 8],
-  [11, 13],
-  [14, 17],
-  [18, 21],
-  [22, 24]
+  [0, 23]
+ 
 ];
 
 export const MIN_ENTRY_RSI_SHORT = 39;
