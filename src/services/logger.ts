@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const LOG_DIR = '/app/logs';
+const LOG_DIR = process.env.LOG_DIR ?? '/app/logs';
 
 type CsvValue =
   | string
@@ -10,10 +10,7 @@ type CsvValue =
   | null
   | undefined;
 
-const FILE_HEADERS: Record<
-  string,
-  string[]
-> = {
+const FILE_HEADERS: Record<string, string[]> = {
   'signal_log.csv': [
     'timestamp',
     'symbol',
@@ -47,7 +44,11 @@ const FILE_HEADERS: Record<
     'entryDistanceFromEma20Atr',
     'entryTooExtended',
     'signalTimeIso',
-    'isTradingWindow'
+    'isTradingWindow',
+    'mlProbability',
+    'mlThreshold',
+    'mlPassed',
+    'mlTrainedAt'
   ],
 
   'position_open_log.csv': [
@@ -83,6 +84,10 @@ const FILE_HEADERS: Record<
     'entryDistanceFromEma20Percent',
     'entryDistanceFromEma20Atr',
     'entryTooExtended',
+    'mlProbability',
+    'mlThreshold',
+    'mlPassed',
+    'mlTrainedAt',
     'signalTime',
     'signalTimeIso'
   ],
@@ -205,13 +210,13 @@ function escapeCsvValue(
     return '';
   }
 
-  const stringValue =
-    String(value);
+  const stringValue = String(value);
 
   if (
     stringValue.includes(',') ||
     stringValue.includes('"') ||
-    stringValue.includes('\n')
+    stringValue.includes('\n') ||
+    stringValue.includes('\r')
   ) {
     return (
       `"${stringValue.replace(
@@ -230,8 +235,10 @@ function writeRow(
 ): void {
   ensureDirExists();
 
-  const filePath =
-    path.join(LOG_DIR, fileName);
+  const filePath = path.join(
+    LOG_DIR,
+    fileName
+  );
 
   const headers =
     FILE_HEADERS[fileName] ??
@@ -243,8 +250,7 @@ function writeRow(
   );
 
   const values = headers.map(
-    header =>
-      escapeCsvValue(row[header])
+    header => escapeCsvValue(row[header])
   );
 
   fs.appendFileSync(
@@ -288,6 +294,10 @@ export function logSignalCheck(row: {
   entryTooExtended?: boolean;
   signalTimeIso?: string;
   isTradingWindow?: boolean;
+  mlProbability?: number | null;
+  mlThreshold?: number | null;
+  mlPassed?: boolean | null;
+  mlTrainedAt?: string | null;
 }): void {
   writeRow(
     'signal_log.csv',
@@ -328,6 +338,10 @@ export function logPositionOpen(row: {
   entryDistanceFromEma20Percent: number;
   entryDistanceFromEma20Atr: number;
   entryTooExtended: boolean;
+  mlProbability?: number | null;
+  mlThreshold?: number | null;
+  mlPassed?: boolean | null;
+  mlTrainedAt?: string | null;
   signalTime?: number;
   signalTimeIso?: string;
 }): void {
