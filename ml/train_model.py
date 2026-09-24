@@ -30,8 +30,8 @@ TRAIN_FILE = BASE_DIR / "trade_log_analyzed.csv"
 MODEL_FILE = BASE_DIR / "trade_model.joblib"
 MODEL_META_FILE = BASE_DIR / "trade_model_meta.json"
 
-N_ESTIMATORS = 600
-LEARNING_RATE = 0.99
+N_ESTIMATORS = 350
+LEARNING_RATE = 0.13
 MAX_DEPTH = 4
 MIN_SAMPLES_LEAF = 15
 SUBSAMPLE = 0.85
