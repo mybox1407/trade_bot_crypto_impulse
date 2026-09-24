@@ -7,18 +7,19 @@ import {
   EMA
 } from 'technicalindicators';
 
+import {
+  predictTrade,
+  MlPredictionResult
+} from './ml/mlModel';
+
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
+export const ENABLE_ML_FILTER = true;
 
-// Время проверяется в UTC+4.
-// Разрешённые интервалы:
-// 00:00–03:00, 06:00–08:00, 11:00–13:00,
-// 14:00–17:00, 18:00–21:00, 22:00–00:00.
-// Конечная граница интервала не включается.
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [
   [0, 3],
   [6, 8],
@@ -28,38 +29,31 @@ const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> 
   [22, 24]
 ];
 
-// RSI
 export const MIN_ENTRY_RSI_SHORT = 39;
 export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 64;
 
-// ADX
 export const MIN_ENTRY_ADX_SHORT = 25;
 export const MIN_ENTRY_ADX_LONG = 29.5;
 export const MAX_ENTRY_ADX = 40;
 
-// ATR
 export const MIN_LAST_ATR_PCT = 0.005;
 export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
-// Bollinger Bands
 export const MIN_BB_WIDTH_LONG = 0.053;
 export const MAX_BB_WIDTH_LONG = 0.090;
 export const MIN_BB_WIDTH_SHORT = 0.05;
 
-// Расстояние от EMA20
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
 export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
-// Blacklist только для Long
 export const LONG_BLACKLIST = ['ONDO', 'AI'];
 
-// Управление сделкой
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 1.8;
 export const ENABLE_TRAILING_STOP = false;
@@ -214,6 +208,10 @@ export type StrategyResult = {
   skipReason: string | null;
   signalTime: number;
   signalTimeIso: string;
+  mlProbability: number | null;
+  mlThreshold: number | null;
+  mlPassed: boolean | null;
+  mlTrainedAt: string | null;
   indicators: StrategyIndicators;
 };
 
@@ -396,12 +394,28 @@ export function canOpenTrade(params: {
   return true;
 }
 
-export function analyzeMarket(
+function resetSignalState(state: {
+  buy: boolean;
+  sell: boolean;
+  side: 'long' | 'short' | 'none';
+  takeProfitPrice: number | null;
+  stopLossPrice: number | null;
+  positionSize: number | null;
+}): void {
+  state.buy = false;
+  state.sell = false;
+  state.side = 'none';
+  state.takeProfitPrice = null;
+  state.stopLossPrice = null;
+  state.positionSize = null;
+}
+
+export async function analyzeMarket(
   candles: Candle[],
   symbol: string,
   signalPrice?: number,
   now = new Date()
-): StrategyResult {
+): Promise<StrategyResult> {
   const closes = candles.map(candle => candle.close);
   const highs = candles.map(candle => candle.high);
   const lows = candles.map(candle => candle.low);
@@ -447,6 +461,10 @@ export function analyzeMarket(
       skipReason: 'Indicators not ready',
       signalTime,
       signalTimeIso,
+      mlProbability: null,
+      mlThreshold: null,
+      mlPassed: null,
+      mlTrainedAt: null,
       indicators: {
         macdCrossUp: false,
         macdCrossDown: false,
@@ -512,6 +530,10 @@ export function analyzeMarket(
   let entryExtensionAtr: number | null = null;
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
+  let mlProbability: number | null = null;
+  let mlThreshold: number | null = null;
+  let mlPassed: boolean | null = null;
+  let mlTrainedAt: string | null = null;
 
   if (!tradingWindow.allowed) {
     skipReason = tradingWindow.message;
@@ -538,7 +560,11 @@ export function analyzeMarket(
     takeProfitPrice = price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
   }
 
-  if (ENABLE_BREAKOUT_TRADES && tradingWindow.allowed && regime === 'breakout_watch') {
+  if (
+    ENABLE_BREAKOUT_TRADES &&
+    tradingWindow.allowed &&
+    regime === 'breakout_watch'
+  ) {
     const candleBody = Math.abs(lastCandle.close - lastCandle.open);
     const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
     const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
@@ -570,7 +596,11 @@ export function analyzeMarket(
 
     if (breakoutUp || breakoutDown) {
       const sideForExtremum = breakoutUp ? 'long' : 'short';
-      const { extremePrice } = findLocalExtremum(candles, sideForExtremum, EXTREMUM_LOOKBACK);
+      const { extremePrice } = findLocalExtremum(
+        candles,
+        sideForExtremum,
+        EXTREMUM_LOOKBACK
+      );
 
       if (extremePrice !== 0 && lastAtr > 0) {
         const distanceFromExtremum = sideForExtremum === 'long'
@@ -602,12 +632,14 @@ export function analyzeMarket(
   }
 
   if (regime === 'high_volatility' || regime === 'range') {
-    buy = false;
-    sell = false;
-    side = 'none';
-    takeProfitPrice = null;
-    stopLossPrice = null;
-    positionSize = null;
+    resetSignalState({
+      buy,
+      sell,
+      side,
+      takeProfitPrice,
+      stopLossPrice,
+      positionSize
+    });
     skipReason = `Trading disabled for regime: ${regime}`;
   }
 
@@ -616,13 +648,17 @@ export function analyzeMarket(
     const signalDistanceAtr = distanceFromSignal / lastAtr;
 
     if (signalDistanceAtr > 1.0) {
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
-      skipReason = `Price moved ${signalDistanceAtr.toFixed(2)} ATR from signal (max 1.00 ATR)`;
+      resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+      skipReason =
+        `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
+        `(max 1.00 ATR)`;
     }
   }
 
@@ -640,13 +676,17 @@ export function analyzeMarket(
     entryTooExtended = entryExtensionAtr > maxEntryExtensionAtr;
 
     if (entryTooExtended) {
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
-      skipReason = `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR (max ${maxEntryExtensionAtr.toFixed(2)} ATR)`;
+      resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+      skipReason =
+        `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
+        `(max ${maxEntryExtensionAtr.toFixed(2)} ATR)`;
     }
   }
 
@@ -673,22 +713,98 @@ export function analyzeMarket(
     });
 
     if (!canOpen) {
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
+      resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
 
       if (skipReason == null) {
-        skipReason = 'Entry filters failed (RSI/ADX/ATR/BB/EMA20/trading window/blacklist)';
+        skipReason =
+          'Entry filters failed ' +
+          '(RSI/ADX/ATR/BB/EMA20/trading window/blacklist)';
       }
+    }
+  }
+
+  if (
+    ENABLE_ML_FILTER &&
+    side !== 'none' &&
+    stopLossPrice != null
+  ) {
+    const entryDistanceFromEma20 = side === 'long'
+      ? price - regimeIndicators.ema20
+      : regimeIndicators.ema20 - price;
+
+    const entryDistanceFromEma20Atr = lastAtr > 0
+      ? entryDistanceFromEma20 / lastAtr
+      : 0;
+
+    try {
+      const prediction: MlPredictionResult =
+        await predictTrade({
+          entryPrice: price,
+          ema20: regimeIndicators.ema20,
+          ema50: regimeIndicators.ema50,
+          ema200: regimeIndicators.ema200,
+          lastRsi,
+          adx: regimeIndicators.adx,
+          bbWidth: regimeIndicators.bbWidth,
+          atrPct: regimeIndicators.atrPct,
+          lastAtr,
+          entryDistanceFromEma20Atr,
+          side,
+          hourUtc: now.getUTCHours()
+        });
+
+      mlProbability = prediction.probability;
+      mlThreshold = prediction.threshold;
+      mlPassed = prediction.passed;
+      mlTrainedAt = prediction.trainedAt;
+
+      if (!prediction.passed) {
+        resetSignalState({
+          buy,
+          sell,
+          side,
+          takeProfitPrice,
+          stopLossPrice,
+          positionSize
+        });
+
+        skipReason =
+          `ML filter rejected trade: ` +
+          `probability=${prediction.probability.toFixed(4)}, ` +
+          `threshold=${prediction.threshold.toFixed(4)}`;
+      }
+    } catch (error) {
+      resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      mlPassed = false;
+
+      const message = error instanceof Error
+        ? error.message
+        : String(error);
+
+      skipReason = `ML prediction failed: ${message}`;
     }
   }
 
   if (side !== 'none' && stopLossPrice != null) {
     const riskPerUnit = Math.abs(price - stopLossPrice);
-    positionSize = riskPerUnit > 0 ? riskCapital / riskPerUnit : null;
+    positionSize = riskPerUnit > 0
+      ? riskCapital / riskPerUnit
+      : null;
   }
 
   const entryDistanceFromEma20ForLog = side !== 'none'
@@ -698,7 +814,9 @@ export function analyzeMarket(
     : null;
 
   const entryDistanceFromEma20AtrForLog =
-    side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null
+    side !== 'none' &&
+    lastAtr > 0 &&
+    entryDistanceFromEma20ForLog != null
       ? entryDistanceFromEma20ForLog / lastAtr
       : null;
 
@@ -714,6 +832,10 @@ export function analyzeMarket(
     skipReason,
     signalTime,
     signalTimeIso,
+    mlProbability,
+    mlThreshold,
+    mlPassed,
+    mlTrainedAt,
     indicators: {
       macdCrossUp,
       macdCrossDown,
@@ -744,8 +866,6 @@ export function analyzeMarket(
   };
 }
 
-// Пример Telegram-интеграции.
-// Используйте эту функцию в месте, где вызывается analyzeMarket.
 export type TelegramSender = (message: string) => Promise<void>;
 
 export async function notifyStrategyResult(
@@ -755,13 +875,22 @@ export async function notifyStrategyResult(
 ): Promise<void> {
   if (result.skipReason != null) {
     await sendTelegramMessage(
-      `⚠️ ${symbol}\n${result.skipReason}`
+      `⚠️ ${symbol}\n` +
+      `${result.skipReason}\n` +
+      `ML probability: ${result.mlProbability != null
+        ? result.mlProbability.toFixed(4)
+        : '-'}\n` +
+      `ML threshold: ${result.mlThreshold != null
+        ? result.mlThreshold.toFixed(4)
+        : '-'}\n` +
+      `ML trained at: ${result.mlTrainedAt ?? '-'}`
     );
     return;
   }
 
   if (result.buy || result.sell) {
     const direction = result.buy ? 'LONG' : 'SHORT';
+
     await sendTelegramMessage(
       `📊 ${symbol} ${direction}\n` +
       `Цена: ${result.price}\n` +
@@ -773,6 +902,8 @@ export async function notifyStrategyResult(
       `ATR %: ${(result.indicators.atrPct * 100).toFixed(3)}%\n` +
       `BB Width: ${result.indicators.bbWidth.toFixed(5)}\n` +
       `Distance EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\n` +
+      `ML probability: ${result.mlProbability?.toFixed(4) ?? '-'}\n` +
+      `ML threshold: ${result.mlThreshold?.toFixed(4) ?? '-'}\n` +
       `Режим: ${result.regime}`
     );
   }
