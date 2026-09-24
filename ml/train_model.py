@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import math
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -364,6 +366,52 @@ def vector(row: Dict[str, str]) -> List[float]:
     ]
 
 
+def save_artifact_atomically(
+    artifact: dict,
+    destination: Path,
+) -> None:
+    destination.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=".joblib.tmp",
+            dir=destination.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(
+                temporary_file.name
+            )
+
+            joblib.dump(
+                artifact,
+                temporary_file,
+                compress=3,
+            )
+
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+
+        os.replace(
+            temporary_path,
+            destination,
+        )
+
+    finally:
+        if (
+            temporary_path is not None
+            and temporary_path.exists()
+        ):
+            temporary_path.unlink(
+                missing_ok=True
+            )
+
+
 def main() -> None:
     if not TRAIN_FILE.exists():
         raise FileNotFoundError(
@@ -455,17 +503,28 @@ def main() -> None:
         classifier__sample_weight=sample_weights,
     )
 
+    trained_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
     artifact = {
         "model": model,
         "feature_names": FEATURE_NAMES,
         "threshold": MODEL_THRESHOLD,
         "version": 1,
+        "trained_at": trained_at,
+        "training_rows": len(train_rows),
+        "tp_rows": int(
+            np.sum(y_train == 1)
+        ),
+        "sl_rows": int(
+            np.sum(y_train == 0)
+        ),
     }
 
-    joblib.dump(
+    save_artifact_atomically(
         artifact,
         MODEL_FILE,
-        compress=3,
     )
 
     classifier = model.named_steps[
@@ -475,14 +534,23 @@ def main() -> None:
     print("")
     print("==================== MODEL ====================")
     print(f"Rows: {len(train_rows)}")
-    print(f"TP: {int(np.sum(y_train == 1))}")
-    print(f"SL: {int(np.sum(y_train == 0))}")
+    print(
+        f"TP: {int(np.sum(y_train == 1))}"
+    )
+    print(
+        f"SL: {int(np.sum(y_train == 0))}"
+    )
     print(
         "Config weighted rows: "
         f"{int(np.sum(sample_weights > 1.0))}"
     )
-    print(f"Features: {len(FEATURE_NAMES)}")
-    print(f"Threshold: {MODEL_THRESHOLD}")
+    print(
+        f"Features: {len(FEATURE_NAMES)}"
+    )
+    print(
+        f"Threshold: {MODEL_THRESHOLD}"
+    )
+    print(f"Trained at UTC: {trained_at}")
     print(f"Model saved: {MODEL_FILE}")
 
     print("")
@@ -503,4 +571,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        print(
+            f"Training failed: {error}"
+        )
+        raise
