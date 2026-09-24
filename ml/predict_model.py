@@ -184,20 +184,20 @@ def main() -> None:
 
     artifact = joblib.load(MODEL_FILE)
 
-    model = artifact["model"]
-    threshold = float(
-        artifact.get("threshold", 0.5)
-    )
-
     expected_features = artifact.get(
         "feature_names"
     )
 
     if expected_features != FEATURE_NAMES:
         raise RuntimeError(
-            "Feature names/order mismatch "
-            "between model and predictor."
+            "Feature names/order mismatch."
         )
+
+    model = artifact["model"]
+
+    threshold = float(
+        artifact.get("threshold", 0.5)
+    )
 
     X = np.asarray(
         [features],
@@ -212,6 +212,12 @@ def main() -> None:
         "probability": probability,
         "threshold": threshold,
         "passed": probability >= threshold,
+        "trained_at": artifact.get(
+            "trained_at"
+        ),
+        "training_rows": artifact.get(
+            "training_rows"
+        ),
     }
 
     print(
@@ -236,4 +242,5 @@ if __name__ == "__main__":
             ),
             file=sys.stderr,
         )
+
         sys.exit(1)
