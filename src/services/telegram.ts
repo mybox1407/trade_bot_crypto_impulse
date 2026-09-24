@@ -72,6 +72,10 @@ export function notifyPositionOpen(data: {
   positionId: string;
   regime: string;
   balance: number;
+  mlProbability?: number | null;
+  mlThreshold?: number | null;
+  mlPassed?: boolean | null;
+  mlTrainedAt?: string | null;
 }) {
   const emoji =
     data.side === 'long'
@@ -83,6 +87,23 @@ export function notifyPositionOpen(data: {
       ? 'LONG'
       : 'SHORT';
 
+  const mlProbability =
+    data.mlProbability != null
+      ? data.mlProbability.toFixed(4)
+      : 'N/A';
+
+  const mlThreshold =
+    data.mlThreshold != null
+      ? data.mlThreshold.toFixed(4)
+      : 'N/A';
+
+  const mlPassed =
+    data.mlPassed == null
+      ? 'N/A'
+      : data.mlPassed
+        ? 'YES'
+        : 'NO';
+
   const text =
     `${emoji} POSITION OPENED ${emoji}\n\n` +
     `Symbol: ${data.symbol}\n` +
@@ -93,6 +114,10 @@ export function notifyPositionOpen(data: {
     `Take Profit: ${data.takeProfitPrice.toFixed(4)}\n` +
     `Stop Loss: ${data.stopLossPrice.toFixed(4)}\n\n` +
     `Regime: ${data.regime}\n` +
+    `ML Probability: ${mlProbability}\n` +
+    `ML Threshold: ${mlThreshold}\n` +
+    `ML Passed: ${mlPassed}\n` +
+    `ML Model Trained: ${data.mlTrainedAt ?? 'N/A'}\n` +
     `Balance: $${data.balance.toFixed(2)}\n` +
     `Position ID: ${data.positionId}\n\n` +
     `${new Date().toISOString()}`;
@@ -234,14 +259,27 @@ export function notifyStartup(data: {
   signalInterval: number;
   positionInterval: number;
   balance: number;
+  mlModelAvailable?: boolean;
+  mlTrainedAt?: string | null;
+  mlTrainingRows?: number | null;
 }) {
+  const mlStatus =
+    data.mlModelAvailable == null
+      ? 'N/A'
+      : data.mlModelAvailable
+        ? 'AVAILABLE'
+        : 'NOT AVAILABLE';
+
   const text =
     `🤖 TRADING BOT STARTED 🤖\n\n` +
     `Port: ${data.port}\n` +
     `Trading Pairs: ${data.tradingPairs.join(', ')}\n` +
     `Signal Check: every ${data.signalInterval}s\n` +
     `Position Check: every ${data.positionInterval}s\n\n` +
-    `Balance: $${data.balance.toFixed(2)}\n\n` +
+    `Balance: $${data.balance.toFixed(2)}\n` +
+    `ML Model: ${mlStatus}\n` +
+    `ML Trained At: ${data.mlTrainedAt ?? 'N/A'}\n` +
+    `ML Training Rows: ${data.mlTrainingRows ?? 'N/A'}\n\n` +
     `Bot is running...\n\n` +
     `${new Date().toISOString()}`;
 
@@ -258,6 +296,10 @@ export function notifySignalCheck(data: {
   side?: 'long' | 'short';
   price?: number;
   reason?: string;
+  mlProbability?: number | null;
+  mlThreshold?: number | null;
+  mlPassed?: boolean | null;
+  mlTrainedAt?: string | null;
 }) {
   const emoji =
     data.hasSignal
@@ -272,11 +314,26 @@ export function notifySignalCheck(data: {
         `${data.price?.toFixed(4)}`
       : 'No signal';
 
+  const mlText =
+    `ML Probability: ${data.mlProbability != null
+      ? data.mlProbability.toFixed(4)
+      : 'N/A'}\n` +
+    `ML Threshold: ${data.mlThreshold != null
+      ? data.mlThreshold.toFixed(4)
+      : 'N/A'}\n` +
+    `ML Passed: ${data.mlPassed == null
+      ? 'N/A'
+      : data.mlPassed
+        ? 'YES'
+        : 'NO'}\n` +
+    `ML Trained At: ${data.mlTrainedAt ?? 'N/A'}`;
+
   const text =
     `${emoji} ${data.symbol}\n\n` +
     `Regime: ${data.regime}\n` +
     `Signal: ${signalText}\n` +
-    `Reason: ${data.reason ?? 'Conditions not met'}\n\n` +
+    `Reason: ${data.reason ?? 'Conditions not met'}\n` +
+    `${mlText}\n\n` +
     `${new Date().toISOString()}`;
 
   return sendMessage({
@@ -294,35 +351,113 @@ export async function sendAggregatedSignalSummary(data: {
     side?: string;
     price?: number;
     reason?: string;
+    mlProbability?: number | null;
+    mlThreshold?: number | null;
+    mlPassed?: boolean | null;
+    mlTrainedAt?: string | null;
   }>;
   errorsBySymbol?: Record<string, string>;
   equity?: number;
 }): Promise<void> {
   const { results, errorsBySymbol, equity } = data;
 
-  const active = results.filter(result => ['signal', 'no-signal', 'not-ready', 'error'].includes(result.status));
-  const signals = results.filter(result => result.status === 'signal').length;
-  const noSignals = results.filter(result => result.status === 'no-signal' || result.status === 'not-ready').length;
-  const errors = results.filter(result => result.status === 'error').length;
+  const active = results.filter(result => [
+    'signal',
+    'no-signal',
+    'not-ready',
+    'error'
+  ].includes(result.status));
 
-  if (!active.length && !signals && !errors && !errorsBySymbol) return;
+  const signals = results.filter(
+    result => result.status === 'signal'
+  ).length;
+
+  const noSignals = results.filter(
+    result =>
+      result.status === 'no-signal' ||
+      result.status === 'not-ready'
+  ).length;
+
+  const errors = results.filter(
+    result => result.status === 'error'
+  ).length;
+
+  if (
+    !active.length &&
+    !signals &&
+    !errors &&
+    !errorsBySymbol
+  ) {
+    return;
+  }
 
   const text = active.map(result => {
-    if (result.status === 'error') return `❌ ${result.symbol}: ERROR - ${result.reason}`;
-    if (result.status === 'not-ready') return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
-    if (result.status === 'signal') return `${result.side === 'long' ? '🟢' : '🔴'} ${result.symbol} [${result.regime}]: ${result.side?.toUpperCase()} @ ${result.price?.toFixed(4) ?? 'n/a'} - ${result.reason}`;
-    return `${result.symbol} [${result.regime}]: No signal - ${result.reason}`;
+    if (result.status === 'error') {
+      return (
+        `❌ ${result.symbol}: ERROR - ` +
+        `${result.reason}`
+      );
+    }
+
+    if (result.status === 'not-ready') {
+      return (
+        `⏳ ${result.symbol}: NOT READY - ` +
+        `${result.reason}`
+      );
+    }
+
+    if (result.status === 'signal') {
+      const mlProbability =
+        result.mlProbability != null
+          ? result.mlProbability.toFixed(4)
+          : 'N/A';
+
+      const mlThreshold =
+        result.mlThreshold != null
+          ? result.mlThreshold.toFixed(4)
+          : 'N/A';
+
+      return (
+        `${result.side === 'long' ? '🟢' : '🔴'} ` +
+        `${result.symbol} [${result.regime}]: ` +
+        `${result.side?.toUpperCase()} @ ` +
+        `${result.price?.toFixed(4) ?? 'n/a'}\n` +
+        `   ML: ${mlProbability}/${mlThreshold} ` +
+        `(${result.mlPassed ? 'PASS' : 'FAIL'})`
+      );
+    }
+
+    return (
+      `${result.symbol} [${result.regime}]: ` +
+      `No signal - ${result.reason}`
+    );
   }).join('\n');
 
   let errorSummary = '';
-  if (errorsBySymbol && Object.keys(errorsBySymbol).length > 0) {
-    const errorLines = Object.entries(errorsBySymbol)
+
+  if (
+    errorsBySymbol &&
+    Object.keys(errorsBySymbol).length > 0
+  ) {
+    const errorLines = Object.entries(
+      errorsBySymbol
+    )
       .slice(0, 5)
-      .map(([symbol, error]) => `• ${symbol}: ${error}`)
+      .map(
+        ([symbol, error]) =>
+          `• ${symbol}: ${error}`
+      )
       .join('\n');
 
-    const moreCount = Object.keys(errorsBySymbol).length - 5;
-    errorSummary = `\n\n⚠️ Errors summary:\n${errorLines}${moreCount > 0 ? `\n• ...and ${moreCount} more` : ''}`;
+    const moreCount =
+      Object.keys(errorsBySymbol).length - 5;
+
+    errorSummary =
+      `\n\n⚠️ Errors summary:\n` +
+      `${errorLines}` +
+      `${moreCount > 0
+        ? `\n• ...and ${moreCount} more`
+        : ''}`;
   }
 
   const equityText =
@@ -332,16 +467,20 @@ export async function sendAggregatedSignalSummary(data: {
 
   const message =
     `📊 Signal Check Summary\n\n` +
-    `📈 Open positions: ${results.filter(r => r.status === 'position-open').length}\n\n` +
+    `📈 Open positions: ` +
+    `${results.filter(
+      result => result.status === 'position-open'
+    ).length}\n\n` +
     `💰 Equity: ${equityText}\n\n` +
-    `🔍 Signal scan:\n${text}${errorSummary}\n\n` +
-    `📊 Signals: ${signals} | No signals: ${noSignals}\n` +
+    `🔍 Signal scan:\n${text}` +
+    `${errorSummary}\n\n` +
+    `📊 Signals: ${signals} | ` +
+    `No signals: ${noSignals}\n` +
     `⚠️ Errors: ${errors}\n\n` +
     `${new Date().toISOString()}`;
 
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return;
-
-  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text: message }, { timeout: 5000 });
+  await sendMessage({
+    chat_id: env.telegramChatId,
+    text: message
+  });
 }
