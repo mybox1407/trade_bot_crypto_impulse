@@ -1,28 +1,47 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
 import {
-  trainModel
+  trainModel,
+  isModelAvailable as isModelFileAvailable
 } from './mlModel';
 
 const DAY_MS =
   24 * 60 * 60 * 1000;
 
+const ML_DIR = path.resolve(
+  process.env.ML_DIR ??
+    path.join(process.cwd(), 'ml')
+);
+
+const MODEL_FILE = path.join(
+  ML_DIR,
+  'trade_model.joblib'
+);
+
 let trainingInProgress = false;
 let schedulerStarted = false;
 
 function sleep(
-  milliseconds: number,
+  milliseconds: number
 ): Promise<void> {
-  return new Promise(
-    resolve => {
-      setTimeout(
-        resolve,
-        milliseconds
-      );
-    }
+  return new Promise(resolve => {
+    setTimeout(
+      resolve,
+      milliseconds
+    );
+  });
+}
+
+export function isModelAvailable(): boolean {
+  return (
+    existsSync(MODEL_FILE) &&
+    isModelFileAvailable()
   );
 }
 
 export async function retrainModel(
-  reason: string,
+  reason: string
 ): Promise<boolean> {
   if (trainingInProgress) {
     console.warn(
@@ -42,8 +61,14 @@ export async function retrainModel(
   try {
     await trainModel();
 
+    if (!isModelAvailable()) {
+      throw new Error(
+        `Model was not created: ${MODEL_FILE}`
+      );
+    }
+
     console.log(
-      '[ML] Training finished successfully.'
+      '[ML] Training completed successfully.'
     );
 
     return true;
@@ -89,8 +114,7 @@ export async function startModelTrainingScheduler(): Promise<void> {
   if (!initialTrainingSucceeded) {
     console.warn(
       '[ML] Initial training failed. ' +
-      'Trading should remain disabled until ' +
-      'a valid model is available.'
+      'Existing model will be used if available.'
     );
   }
 
