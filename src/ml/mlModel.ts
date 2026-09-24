@@ -1,4 +1,12 @@
-import { spawn } from 'node:child_process';
+import {
+  spawn,
+  ChildProcess
+} from 'node:child_process';
+
+import {
+  existsSync
+} from 'node:fs';
+
 import path from 'node:path';
 
 export type MlPredictionInput = {
@@ -25,35 +33,45 @@ export type MlPredictionResult = {
 };
 
 const PYTHON_BIN =
-  process.env.PYTHON_BIN ?? 'python';
+  process.env.PYTHON_BIN ?? 'python3';
 
 const PROJECT_ROOT = path.resolve(
   process.cwd()
 );
 
+const ML_DIR = path.resolve(
+  process.env.ML_DIR ??
+    path.join(PROJECT_ROOT, 'ml')
+);
+
 const TRAIN_SCRIPT = path.join(
-  PROJECT_ROOT,
-  'ml',
+  ML_DIR,
   'train_model.py'
 );
 
 const PREDICT_SCRIPT = path.join(
-  PROJECT_ROOT,
-  'ml',
+  ML_DIR,
   'predict_model.py'
+);
+
+const MODEL_FILE = path.join(
+  ML_DIR,
+  'trade_model.joblib'
 );
 
 const ML_TIMEOUT_MS = 10_000;
 const TRAIN_TIMEOUT_MS = 30 * 60 * 1000;
 
-function collectProcessOutput(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{
+type ProcessResult = {
   code: number | null;
   stdout: string;
   stderr: string;
-}> {
+};
+
+function collectProcessOutput(
+  child: ChildProcess,
+  timeoutMs: number
+): Promise<ProcessResult> {
   return new Promise(
     (resolve, reject) => {
       let stdout = '';
@@ -61,11 +79,10 @@ function collectProcessOutput(
       let settled = false;
 
       const timeout = setTimeout(() => {
-        child.kill();
-
         if (settled) return;
 
         settled = true;
+        child.kill('SIGTERM');
 
         reject(
           new Error(
@@ -74,92 +91,160 @@ function collectProcessOutput(
         );
       }, timeoutMs);
 
-      child.stdout.on(
+      const finishError = (
+        error: Error
+      ): void => {
+        if (settled) return;
+
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
+
+      const finishSuccess = (
+        result: ProcessResult
+      ): void => {
+        if (settled) return;
+
+        settled = true;
+        clearTimeout(timeout);
+        resolve(result);
+      };
+
+      child.stdout?.on(
         'data',
-        (chunk: Buffer) => {
+        (chunk: Buffer | string) => {
           stdout += chunk.toString();
-        },
+        }
       );
 
-      child.stderr.on(
+      child.stderr?.on(
         'data',
-        (chunk: Buffer) => {
+        (chunk: Buffer | string) => {
           stderr += chunk.toString();
-        },
+        }
       );
 
       child.once(
         'error',
         (error: Error) => {
-          clearTimeout(timeout);
-
-          if (settled) return;
-
-          settled = true;
-          reject(error);
-        },
+          finishError(error);
+        }
       );
 
       child.once(
         'close',
         (code: number | null) => {
-          clearTimeout(timeout);
-
-          if (settled) return;
-
-          settled = true;
-
-          resolve({
+          finishSuccess({
             code,
             stdout,
-            stderr,
+            stderr
           });
-        },
+        }
       );
-    },
+    }
   );
 }
 
-export async function trainModel(): Promise<void> {
-  const child = spawn(
-    PYTHON_BIN,
-    [TRAIN_SCRIPT],
-    {
-      cwd: PROJECT_ROOT,
-      stdio: [
-        'ignore',
-        'pipe',
-        'pipe',
-      ],
-      windowsHide: true,
-    },
-  );
-
-  const result = await collectProcessOutput(
-    child,
-    TRAIN_TIMEOUT_MS,
-  );
-
-  if (result.code !== 0) {
+function ensureMlFilesExist(): void {
+  if (!existsSync(ML_DIR)) {
     throw new Error(
-      `ML training failed. ` +
-      `Code=${result.code}. ` +
-      `stderr=${result.stderr}`
+      `ML directory not found: ${ML_DIR}`
     );
   }
 
-  console.log(
-    '[ML] Training completed:\n' +
-    result.stdout
-  );
+  if (!existsSync(TRAIN_SCRIPT)) {
+    throw new Error(
+      `Training script not found: ${TRAIN_SCRIPT}`
+    );
+  }
+
+  if (!existsSync(PREDICT_SCRIPT)) {
+    throw new Error(
+      `Prediction script not found: ${PREDICT_SCRIPT}`
+    );
+  }
+}
+
+function ensureFiniteInput(
+  input: MlPredictionInput
+): void {
+  const numericValues = [
+    input.entryPrice,
+    input.ema20,
+    input.ema50,
+    input.ema200,
+    input.lastRsi,
+    input.adx,
+    input.bbWidth,
+    input.atrPct,
+    input.lastAtr,
+    input.entryDistanceFromEma20Atr,
+    input.hourUtc
+  ];
+
+  if (
+    numericValues.some(
+      value => !Number.isFinite(value)
+    )
+  ) {
+    throw new Error(
+      'ML input contains NaN or Infinity'
+    );
+  }
+
+  if (
+    input.entryPrice <= 0 ||
+    input.ema20 <= 0 ||
+    input.ema50 <= 0 ||
+    input.ema200 <= 0
+  ) {
+    throw new Error(
+      'ML input contains invalid EMA or entry price'
+    );
+  }
+
+  if (
+    input.lastAtr < 0 ||
+    input.atrPct < 0
+  ) {
+    throw new Error(
+      'ML input contains invalid ATR values'
+    );
+  }
+
+  if (
+    !Number.isInteger(input.hourUtc) ||
+    input.hourUtc < 0 ||
+    input.hourUtc > 23
+  ) {
+    throw new Error(
+      `Invalid UTC hour: ${input.hourUtc}`
+    );
+  }
+
+  if (
+    input.side !== 'long' &&
+    input.side !== 'short'
+  ) {
+    throw new Error(
+      `Invalid ML side: ${input.side}`
+    );
+  }
 }
 
 function parsePrediction(
-  stdout: string,
+  stdout: string
 ): MlPredictionResult {
-  const parsed = JSON.parse(
-    stdout.trim()
-  ) as {
+  const output = stdout.trim();
+
+  if (!output) {
+    throw new Error(
+      'Prediction process returned empty stdout'
+    );
+  }
+
+  let parsed: {
     probability?: unknown;
     threshold?: unknown;
     passed?: unknown;
@@ -167,6 +252,14 @@ function parsePrediction(
     training_rows?: unknown;
     error?: unknown;
   };
+
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    throw new Error(
+      `Invalid JSON from prediction process: ${output}`
+    );
+  }
 
   if (parsed.error) {
     throw new Error(
@@ -176,11 +269,27 @@ function parsePrediction(
 
   if (
     typeof parsed.probability !== 'number' ||
+    !Number.isFinite(parsed.probability)
+  ) {
+    throw new Error(
+      `Invalid probability from ML: ${output}`
+    );
+  }
+
+  if (
     typeof parsed.threshold !== 'number' ||
+    !Number.isFinite(parsed.threshold)
+  ) {
+    throw new Error(
+      `Invalid threshold from ML: ${output}`
+    );
+  }
+
+  if (
     typeof parsed.passed !== 'boolean'
   ) {
     throw new Error(
-      `Invalid ML response: ${stdout}`
+      `Invalid passed value from ML: ${output}`
     );
   }
 
@@ -195,43 +304,114 @@ function parsePrediction(
     trainingRows:
       typeof parsed.training_rows === 'number'
         ? parsed.training_rows
-        : null,
+        : null
   };
 }
 
+export function isModelAvailable(): boolean {
+  return existsSync(MODEL_FILE);
+}
+
+export async function trainModel(): Promise<void> {
+  ensureMlFilesExist();
+
+  const child = spawn(
+    PYTHON_BIN,
+    [TRAIN_SCRIPT],
+    {
+      cwd: ML_DIR,
+      stdio: [
+        'ignore',
+        'pipe',
+        'pipe'
+      ],
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ML_DIR
+      }
+    }
+  );
+
+  const result = await collectProcessOutput(
+    child,
+    TRAIN_TIMEOUT_MS
+  );
+
+  if (result.code !== 0) {
+    throw new Error(
+      `ML training failed. ` +
+      `Exit code: ${result.code}. ` +
+      `stderr: ${result.stderr || 'empty'}`
+    );
+  }
+
+  if (!isModelAvailable()) {
+    throw new Error(
+      `Training finished, but model was not created: ` +
+      `${MODEL_FILE}`
+    );
+  }
+
+  console.log(
+    '[ML] Training completed:\n' +
+    result.stdout
+  );
+
+  if (result.stderr.trim()) {
+    console.warn(
+      '[ML] Training stderr:\n' +
+      result.stderr
+    );
+  }
+}
+
 export async function predictTrade(
-  input: MlPredictionInput,
+  input: MlPredictionInput
 ): Promise<MlPredictionResult> {
+  ensureMlFilesExist();
+  ensureFiniteInput(input);
+
+  if (!isModelAvailable()) {
+    throw new Error(
+      `ML model not found: ${MODEL_FILE}`
+    );
+  }
+
   const child = spawn(
     PYTHON_BIN,
     [PREDICT_SCRIPT],
     {
-      cwd: PROJECT_ROOT,
+      cwd: ML_DIR,
       stdio: [
         'pipe',
         'pipe',
-        'pipe',
+        'pipe'
       ],
       windowsHide: true,
-    },
+      env: {
+        ...process.env,
+        ML_DIR
+      }
+    }
   );
 
-  child.stdin.write(
+  child.stdin?.write(
     JSON.stringify(input)
   );
 
-  child.stdin.end();
+  child.stdin?.end();
 
   const result = await collectProcessOutput(
     child,
-    ML_TIMEOUT_MS,
+    ML_TIMEOUT_MS
   );
 
   if (result.code !== 0) {
     throw new Error(
       `ML prediction failed. ` +
-      `Code=${result.code}. ` +
-      `stderr=${result.stderr}`
+      `Exit code: ${result.code}. ` +
+      `stderr: ${result.stderr || result.stdout}`
     );
   }
 
