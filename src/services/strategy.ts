@@ -32,17 +32,17 @@ const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> 
 export const MIN_ENTRY_RSI_SHORT = 39;
 export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
-export const MAX_ENTRY_RSI_LONG = 64;
+export const MAX_ENTRY_RSI_LONG = 65; //Было 64
 
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 29.5;
+export const MIN_ENTRY_ADX_LONG = 25; //Было 29.5
 export const MAX_ENTRY_ADX = 40;
 
 export const MIN_LAST_ATR_PCT = 0.005;
-export const MAX_LAST_ATR_PCT_LONG = 0.0195;
-export const MAX_LAST_ATR_PCT_SHORT = 0.025;
+export const MAX_LAST_ATR_PCT_LONG = 5; //Было 0.0195
+export const MAX_LAST_ATR_PCT_SHORT = 5; //Было 0.025
 
-export const MIN_BB_WIDTH_LONG = 0.053;
+export const MIN_BB_WIDTH_LONG = 0.05; //Было 0.053
 export const MAX_BB_WIDTH_LONG = 0.090;
 export const MIN_BB_WIDTH_SHORT = 0.05;
 
@@ -51,8 +51,6 @@ export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
 export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
 export const REJECT_ENTRY_TOO_EXTENDED = true;
-
-export const LONG_BLACKLIST = ['ONDO', 'AI'];
 
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 1.8;
