@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import os
 import tempfile
@@ -11,6 +12,14 @@ from typing import Dict, List
 import joblib
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -19,17 +28,15 @@ BASE_DIR = Path(__file__).resolve().parent
 
 TRAIN_FILE = BASE_DIR / "trade_log_analyzed.csv"
 MODEL_FILE = BASE_DIR / "trade_model.joblib"
+MODEL_META_FILE = BASE_DIR / "trade_model_meta.json"
 
-N_ESTIMATORS = 250
-LEARNING_RATE = 0.025
+N_ESTIMATORS = 600
+LEARNING_RATE = 0.99
 MAX_DEPTH = 4
 MIN_SAMPLES_LEAF = 15
 SUBSAMPLE = 0.85
 
-USE_CONFIG_WEIGHTING = True
-CONFIG_WEIGHT = 3.0
-
-MODEL_THRESHOLD = 0.50
+ML_PROB_THRESHOLD = 0.5
 
 
 FEATURE_NAMES = [
@@ -52,10 +59,6 @@ FEATURE_NAMES = [
     "price_above_ema50",
     "long_side",
     "short_side",
-    "hour_sin",
-    "hour_cos",
-    "hour_utc_norm",
-    "volatility_at_entry",
 ]
 
 
@@ -90,54 +93,6 @@ def to_float(
     )
 
 
-def parse_timestamp(value: str) -> float:
-    number = float(str(value).strip())
-    absolute = abs(number)
-
-    if absolute >= 1e14:
-        return number / 1_000_000
-
-    if absolute >= 1e11:
-        return number / 1_000
-
-    return number
-
-
-def get_entry_datetime(row: Dict[str, str]) -> datetime:
-    value = row.get("openedAt") or row.get("timestamp") or ""
-    value = str(value).strip()
-
-    try:
-        return datetime.fromtimestamp(
-            parse_timestamp(value),
-            tz=timezone.utc,
-        )
-    except (
-        TypeError,
-        ValueError,
-        OverflowError,
-        OSError,
-    ):
-        try:
-            parsed = datetime.fromisoformat(
-                value.replace("Z", "+00:00")
-            )
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(
-                    tzinfo=timezone.utc
-                )
-
-            return parsed.astimezone(timezone.utc)
-        except ValueError:
-            return datetime(
-                1970,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            )
-
-
 def valid_pnl(row: Dict[str, str]) -> bool:
     try:
         return bool(
@@ -152,12 +107,29 @@ def valid_pnl(row: Dict[str, str]) -> bool:
         return False
 
 
-def check_config(row: Dict[str, str]) -> bool:
+def extract_features(
+    row: Dict[str, str],
+) -> Dict[str, float]:
     try:
-        side = row.get(
-            "side",
-            "",
-        ).strip().lower()
+        entry = to_float(
+            row,
+            "entryPrice",
+        )
+
+        ema20 = to_float(
+            row,
+            "ema20",
+        )
+
+        ema50 = to_float(
+            row,
+            "ema50",
+        )
+
+        ema200 = to_float(
+            row,
+            "ema200",
+        )
 
         rsi = to_float(
             row,
@@ -171,16 +143,16 @@ def check_config(row: Dict[str, str]) -> bool:
             25.0,
         )
 
-        atr = to_float(
-            row,
-            "atrPct",
-            0.01,
-        )
-
         bb = to_float(
             row,
             "bbWidth",
             0.05,
+        )
+
+        atr = to_float(
+            row,
+            "atrPct",
+            0.01,
         )
 
         distance = to_float(
@@ -189,175 +161,93 @@ def check_config(row: Dict[str, str]) -> bool:
             1.0,
         )
 
-        extended = (
-            row.get(
-                "entryTooExtended",
-                "false",
-            )
-            .strip()
-            .lower()
-            == "true"
-        )
+        side = row.get(
+            "side",
+            "",
+        ).strip().lower()
 
-        ema20 = to_float(row, "ema20")
-        ema50 = to_float(row, "ema50")
-        ema200 = to_float(row, "ema200")
-        entry = to_float(row, "entryPrice")
+        return {
+            "rsi": rsi,
+            "adx": adx,
+            "bb_width": bb,
+            "atr_pct": atr,
+
+            "dist_ema200": (
+                abs(entry - ema200)
+                / max(abs(ema200), 0.001)
+            ),
+
+            "ema20_ema50_dist": (
+                abs(ema20 - ema50)
+                / max(abs(ema20), 0.001)
+            ),
+
+            "ema50_ema200_dist": (
+                abs(ema50 - ema200)
+                / max(abs(ema200), 0.001)
+            ),
+
+            "entry_dist_ema20_atr": distance,
+
+            "side": float(
+                side == "long"
+            ),
+
+            "rsi_overbought": float(
+                rsi > 70
+            ),
+
+            "rsi_oversold": float(
+                rsi < 30
+            ),
+
+            "adx_strong": float(
+                adx > 30
+            ),
+
+            "bb_wide": float(
+                bb > 0.08
+            ),
+
+            "ema20_above_ema50": float(
+                ema20 > ema50
+            ),
+
+            "ema50_above_ema200": float(
+                ema50 > ema200
+            ),
+
+            "price_above_ema20": float(
+                entry > ema20
+            ),
+
+            "price_above_ema50": float(
+                entry > ema50
+            ),
+
+            "long_side": float(
+                side == "long"
+            ),
+
+            "short_side": float(
+                side == "short"
+            ),
+        }
 
     except (
         TypeError,
         ValueError,
+        ZeroDivisionError,
     ):
-        return False
-
-    if side == "long":
-        return (
-            51 <= rsi <= 64
-            and 29.5 <= adx <= 40
-            and 0.005 <= atr <= 0.0195
-            and 0.053 <= bb <= 0.090
-            and 0.9 <= distance <= 1.5
-            and not extended
-            and ema20 > ema50 > ema200
-            and entry > ema200
-        )
-
-    if side == "short":
-        return (
-            39 <= rsi <= 42
-            and 25 <= adx <= 40
-            and 0.005 <= atr <= 0.025
-            and bb >= 0.05
-            and distance >= 0.9
-            and not extended
-            and ema20 < ema50 < ema200
-            and entry < ema200
-        )
-
-    return False
+        return {
+            name: 0.0
+            for name in FEATURE_NAMES
+        }
 
 
-def extract_features(
+def vector(
     row: Dict[str, str],
-) -> Dict[str, float]:
-    entry = to_float(row, "entryPrice")
-    ema20 = to_float(row, "ema20")
-    ema50 = to_float(row, "ema50")
-    ema200 = to_float(row, "ema200")
-
-    rsi = to_float(
-        row,
-        "lastRsi",
-        50.0,
-    )
-
-    adx = to_float(
-        row,
-        "adx",
-        25.0,
-    )
-
-    bb = to_float(
-        row,
-        "bbWidth",
-        0.05,
-    )
-
-    atr = to_float(
-        row,
-        "atrPct",
-        0.01,
-    )
-
-    last_atr = to_float(
-        row,
-        "lastAtr",
-        0.0,
-    )
-
-    distance = to_float(
-        row,
-        "entryDistanceFromEma20Atr",
-        1.0,
-    )
-
-    side = row.get(
-        "side",
-        "",
-    ).strip().lower()
-
-    hour = get_entry_datetime(row).hour
-
-    volatility_at_entry = (
-        last_atr / abs(entry)
-        if abs(entry) > 0.000001 and last_atr > 0
-        else atr
-    )
-
-    return {
-        "rsi": rsi,
-        "adx": adx,
-        "bb_width": bb,
-        "atr_pct": atr,
-
-        "dist_ema200": (
-            abs(entry - ema200)
-            / max(abs(ema200), 0.001)
-        ),
-
-        "ema20_ema50_dist": (
-            abs(ema20 - ema50)
-            / max(abs(ema20), 0.001)
-        ),
-
-        "ema50_ema200_dist": (
-            abs(ema50 - ema200)
-            / max(abs(ema50), 0.001)
-        ),
-
-        "entry_dist_ema20_atr": distance,
-
-        "side": float(side == "long"),
-
-        "rsi_overbought": float(rsi > 70),
-        "rsi_oversold": float(rsi < 30),
-        "adx_strong": float(adx > 30),
-        "bb_wide": float(bb > 0.08),
-
-        "ema20_above_ema50": float(
-            ema20 > ema50
-        ),
-
-        "ema50_above_ema200": float(
-            ema50 > ema200
-        ),
-
-        "price_above_ema20": float(
-            entry > ema20
-        ),
-
-        "price_above_ema50": float(
-            entry > ema50
-        ),
-
-        "long_side": float(side == "long"),
-        "short_side": float(side == "short"),
-
-        "hour_sin": math.sin(
-            2 * math.pi * hour / 24
-        ),
-
-        "hour_cos": math.cos(
-            2 * math.pi * hour / 24
-        ),
-
-        "hour_utc_norm": hour / 23.0,
-
-        "volatility_at_entry": volatility_at_entry,
-    }
-
-
-def vector(row: Dict[str, str]) -> List[float]:
+) -> List[float]:
     features = extract_features(row)
 
     return [
@@ -395,7 +285,9 @@ def save_artifact_atomically(
             )
 
             temporary_file.flush()
-            os.fsync(temporary_file.fileno())
+            os.fsync(
+                temporary_file.fileno()
+            )
 
         os.replace(
             temporary_path,
@@ -412,13 +304,143 @@ def save_artifact_atomically(
             )
 
 
+def save_meta_file(
+    trained_at: str,
+    training_rows: int,
+    tp_rows: int,
+    sl_rows: int,
+) -> None:
+    metadata = {
+        "trained_at": trained_at,
+        "training_rows": training_rows,
+        "tp_rows": tp_rows,
+        "sl_rows": sl_rows,
+        "feature_count": len(FEATURE_NAMES),
+        "threshold": ML_PROB_THRESHOLD,
+        "n_estimators": N_ESTIMATORS,
+        "learning_rate": LEARNING_RATE,
+        "max_depth": MAX_DEPTH,
+        "min_samples_leaf": MIN_SAMPLES_LEAF,
+        "subsample": SUBSAMPLE,
+    }
+
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json.tmp",
+            dir=MODEL_META_FILE.parent,
+            delete=False,
+            encoding="utf-8",
+        ) as temporary_file:
+            temporary_path = Path(
+                temporary_file.name
+            )
+
+            json.dump(
+                metadata,
+                temporary_file,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+            temporary_file.write("\n")
+            temporary_file.flush()
+            os.fsync(
+                temporary_file.fileno()
+            )
+
+        os.replace(
+            temporary_path,
+            MODEL_META_FILE,
+        )
+
+    finally:
+        if (
+            temporary_path is not None
+            and temporary_path.exists()
+        ):
+            temporary_path.unlink(
+                missing_ok=True
+            )
+
+
+def print_training_metrics(
+    model: Pipeline,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+) -> None:
+    probabilities = model.predict_proba(
+        x_train
+    )[:, 1]
+
+    predictions = (
+        probabilities >= ML_PROB_THRESHOLD
+    ).astype(int)
+
+    print(
+        "\n==================== "
+        "TRAIN METRICS ===================="
+    )
+
+    print(
+        "These metrics are calculated "
+        "on the training data."
+    )
+
+    print(
+        f"Accuracy: "
+        f"{accuracy_score(y_train, predictions):.2%}"
+    )
+
+    print(
+        f"Precision PROFIT: "
+        f"{precision_score(y_train, predictions, zero_division=0):.2%}"
+    )
+
+    print(
+        f"Recall PROFIT: "
+        f"{recall_score(y_train, predictions, zero_division=0):.2%}"
+    )
+
+    if len(np.unique(y_train)) == 2:
+        print(
+            f"ROC-AUC: "
+            f"{roc_auc_score(y_train, probabilities):.4f}"
+        )
+
+    print("Confusion matrix:")
+    print(
+        confusion_matrix(
+            y_train,
+            predictions,
+        )
+    )
+
+    print("Classification report:")
+    print(
+        classification_report(
+            y_train,
+            predictions,
+            target_names=[
+                "LOSS",
+                "PROFIT",
+            ],
+            zero_division=0,
+        )
+    )
+
+
 def main() -> None:
     if not TRAIN_FILE.exists():
         raise FileNotFoundError(
             f"Training file not found: {TRAIN_FILE}"
         )
 
-    all_rows = read_csv(TRAIN_FILE)
+    all_rows = read_csv(
+        TRAIN_FILE
+    )
 
     train_rows = [
         row
@@ -426,16 +448,20 @@ def main() -> None:
         if row.get(
             "res",
             "",
-        ).strip().upper() in {"TP", "SL"}
+        ).strip().upper() in {
+            "TP",
+            "SL",
+        }
         and valid_pnl(row)
     ]
 
     if not train_rows:
         raise RuntimeError(
-            "No rows with res=TP/SL and valid netPnL."
+            "No rows with res=TP/SL "
+            "and valid netPnL."
         )
 
-    X_train = np.asarray(
+    x_train = np.asarray(
         [
             vector(row)
             for row in train_rows
@@ -458,24 +484,45 @@ def main() -> None:
 
     if len(np.unique(y_train)) < 2:
         raise RuntimeError(
-            "Training data must contain both TP and SL."
+            "Training data must contain "
+            "both TP and SL."
         )
 
-    if USE_CONFIG_WEIGHTING:
-        sample_weights = np.asarray(
-            [
-                CONFIG_WEIGHT
-                if check_config(row)
-                else 1.0
-                for row in train_rows
-            ],
-            dtype=float,
-        )
-    else:
-        sample_weights = np.ones(
-            len(train_rows),
-            dtype=float,
-        )
+    tp_rows = int(
+        np.sum(y_train == 1)
+    )
+
+    sl_rows = int(
+        np.sum(y_train == 0)
+    )
+
+    print(
+        "\n==================== DATA ===================="
+    )
+
+    print(
+        f"Training file: {TRAIN_FILE}"
+    )
+
+    print(
+        f"Training rows: {len(train_rows)}"
+    )
+
+    print(
+        f"TP rows: {tp_rows}"
+    )
+
+    print(
+        f"SL rows: {sl_rows}"
+    )
+
+    print(
+        "Test file: disabled"
+    )
+
+    print(
+        "Configuration filters: disabled"
+    )
 
     model = Pipeline(
         [
@@ -498,63 +545,24 @@ def main() -> None:
     )
 
     model.fit(
-        X_train,
+        x_train,
         y_train,
-        classifier__sample_weight=sample_weights,
     )
 
-    trained_at = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    artifact = {
-        "model": model,
-        "feature_names": FEATURE_NAMES,
-        "threshold": MODEL_THRESHOLD,
-        "version": 1,
-        "trained_at": trained_at,
-        "training_rows": len(train_rows),
-        "tp_rows": int(
-            np.sum(y_train == 1)
-        ),
-        "sl_rows": int(
-            np.sum(y_train == 0)
-        ),
-    }
-
-    save_artifact_atomically(
-        artifact,
-        MODEL_FILE,
+    print_training_metrics(
+        model,
+        x_train,
+        y_train,
     )
 
     classifier = model.named_steps[
         "classifier"
     ]
 
-    print("")
-    print("==================== MODEL ====================")
-    print(f"Rows: {len(train_rows)}")
     print(
-        f"TP: {int(np.sum(y_train == 1))}"
+        "\n==================== "
+        "FEATURE IMPORTANCE ===================="
     )
-    print(
-        f"SL: {int(np.sum(y_train == 0))}"
-    )
-    print(
-        "Config weighted rows: "
-        f"{int(np.sum(sample_weights > 1.0))}"
-    )
-    print(
-        f"Features: {len(FEATURE_NAMES)}"
-    )
-    print(
-        f"Threshold: {MODEL_THRESHOLD}"
-    )
-    print(f"Trained at UTC: {trained_at}")
-    print(f"Model saved: {MODEL_FILE}")
-
-    print("")
-    print("Feature importance:")
 
     for name, importance in sorted(
         zip(
@@ -565,9 +573,56 @@ def main() -> None:
         reverse=True,
     ):
         print(
-            f"{name:<28} "
+            f"{name:<28}"
             f"{importance:.6f}"
         )
+
+    trained_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    artifact = {
+        "model": model,
+        "feature_names": FEATURE_NAMES,
+        "threshold": ML_PROB_THRESHOLD,
+        "version": 1,
+        "trained_at": trained_at,
+        "training_rows": len(train_rows),
+        "tp_rows": tp_rows,
+        "sl_rows": sl_rows,
+    }
+
+    save_artifact_atomically(
+        artifact,
+        MODEL_FILE,
+    )
+
+    save_meta_file(
+        trained_at=trained_at,
+        training_rows=len(train_rows),
+        tp_rows=tp_rows,
+        sl_rows=sl_rows,
+    )
+
+    print(
+        "\n==================== SAVED ===================="
+    )
+
+    print(
+        f"Model saved: {MODEL_FILE}"
+    )
+
+    print(
+        f"Metadata saved: {MODEL_META_FILE}"
+    )
+
+    print(
+        f"Trained at UTC: {trained_at}"
+    )
+
+    print(
+        f"Threshold: {ML_PROB_THRESHOLD}"
+    )
 
 
 if __name__ == "__main__":
