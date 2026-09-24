@@ -20,6 +20,8 @@ export type MlPredictionResult = {
   probability: number;
   threshold: number;
   passed: boolean;
+  trainedAt: string | null;
+  trainingRows: number | null;
 };
 
 const PYTHON_BIN =
@@ -29,6 +31,12 @@ const PROJECT_ROOT = path.resolve(
   process.cwd()
 );
 
+const TRAIN_SCRIPT = path.join(
+  PROJECT_ROOT,
+  'ml',
+  'train_model.py'
+);
+
 const PREDICT_SCRIPT = path.join(
   PROJECT_ROOT,
   'ml',
@@ -36,87 +44,35 @@ const PREDICT_SCRIPT = path.join(
 );
 
 const ML_TIMEOUT_MS = 10_000;
+const TRAIN_TIMEOUT_MS = 30 * 60 * 1000;
 
-function parsePrediction(
-  stdout: string,
-): MlPredictionResult {
-  const parsed = JSON.parse(
-    stdout.trim()
-  ) as Partial<MlPredictionResult> & {
-    error?: string;
-  };
-
-  if (parsed.error) {
-    throw new Error(parsed.error);
-  }
-
-  if (
-    typeof parsed.probability !== 'number' ||
-    typeof parsed.threshold !== 'number' ||
-    typeof parsed.passed !== 'boolean'
-  ) {
-    throw new Error(
-      `Invalid ML response: ${stdout}`
-    );
-  }
-
-  return {
-    probability: parsed.probability,
-    threshold: parsed.threshold,
-    passed: parsed.passed,
-  };
-}
-
-export function predictTrade(
-  input: MlPredictionInput,
-): Promise<MlPredictionResult> {
+function collectProcessOutput(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}> {
   return new Promise(
     (resolve, reject) => {
-      const child = spawn(
-        PYTHON_BIN,
-        [PREDICT_SCRIPT],
-        {
-          cwd: PROJECT_ROOT,
-          stdio: [
-            'pipe',
-            'pipe',
-            'pipe',
-          ],
-          windowsHide: true,
-        },
-      );
-
       let stdout = '';
       let stderr = '';
       let settled = false;
 
-      const finishError = (
-        error: Error,
-      ): void => {
-        if (settled) return;
-
-        settled = true;
-        reject(error);
-      };
-
-      const finishSuccess = (
-        result: MlPredictionResult,
-      ): void => {
-        if (settled) return;
-
-        settled = true;
-        resolve(result);
-      };
-
       const timeout = setTimeout(() => {
         child.kill();
 
-        finishError(
+        if (settled) return;
+
+        settled = true;
+
+        reject(
           new Error(
-            `ML prediction timeout after ${ML_TIMEOUT_MS} ms`
-          ),
+            `Python process timeout after ${timeoutMs} ms`
+          )
         );
-      }, ML_TIMEOUT_MS);
+      }, timeoutMs);
 
       child.stdout.on(
         'data',
@@ -136,7 +92,11 @@ export function predictTrade(
         'error',
         (error: Error) => {
           clearTimeout(timeout);
-          finishError(error);
+
+          if (settled) return;
+
+          settled = true;
+          reject(error);
         },
       );
 
@@ -147,38 +107,135 @@ export function predictTrade(
 
           if (settled) return;
 
-          if (code !== 0) {
-            finishError(
-              new Error(
-                `ML process failed. ` +
-                `Code=${code}. ` +
-                `stderr=${stderr}`
-              ),
-            );
-            return;
-          }
+          settled = true;
 
-          try {
-            const result = parsePrediction(
-              stdout
-            );
-
-            finishSuccess(result);
-          } catch (error) {
-            finishError(
-              error instanceof Error
-                ? error
-                : new Error(String(error)),
-            );
-          }
+          resolve({
+            code,
+            stdout,
+            stderr,
+          });
         },
       );
-
-      child.stdin.write(
-        JSON.stringify(input)
-      );
-
-      child.stdin.end();
     },
+  );
+}
+
+export async function trainModel(): Promise<void> {
+  const child = spawn(
+    PYTHON_BIN,
+    [TRAIN_SCRIPT],
+    {
+      cwd: PROJECT_ROOT,
+      stdio: [
+        'ignore',
+        'pipe',
+        'pipe',
+      ],
+      windowsHide: true,
+    },
+  );
+
+  const result = await collectProcessOutput(
+    child,
+    TRAIN_TIMEOUT_MS,
+  );
+
+  if (result.code !== 0) {
+    throw new Error(
+      `ML training failed. ` +
+      `Code=${result.code}. ` +
+      `stderr=${result.stderr}`
+    );
+  }
+
+  console.log(
+    '[ML] Training completed:\n' +
+    result.stdout
+  );
+}
+
+function parsePrediction(
+  stdout: string,
+): MlPredictionResult {
+  const parsed = JSON.parse(
+    stdout.trim()
+  ) as {
+    probability?: unknown;
+    threshold?: unknown;
+    passed?: unknown;
+    trained_at?: unknown;
+    training_rows?: unknown;
+    error?: unknown;
+  };
+
+  if (parsed.error) {
+    throw new Error(
+      String(parsed.error)
+    );
+  }
+
+  if (
+    typeof parsed.probability !== 'number' ||
+    typeof parsed.threshold !== 'number' ||
+    typeof parsed.passed !== 'boolean'
+  ) {
+    throw new Error(
+      `Invalid ML response: ${stdout}`
+    );
+  }
+
+  return {
+    probability: parsed.probability,
+    threshold: parsed.threshold,
+    passed: parsed.passed,
+    trainedAt:
+      typeof parsed.trained_at === 'string'
+        ? parsed.trained_at
+        : null,
+    trainingRows:
+      typeof parsed.training_rows === 'number'
+        ? parsed.training_rows
+        : null,
+  };
+}
+
+export async function predictTrade(
+  input: MlPredictionInput,
+): Promise<MlPredictionResult> {
+  const child = spawn(
+    PYTHON_BIN,
+    [PREDICT_SCRIPT],
+    {
+      cwd: PROJECT_ROOT,
+      stdio: [
+        'pipe',
+        'pipe',
+        'pipe',
+      ],
+      windowsHide: true,
+    },
+  );
+
+  child.stdin.write(
+    JSON.stringify(input)
+  );
+
+  child.stdin.end();
+
+  const result = await collectProcessOutput(
+    child,
+    ML_TIMEOUT_MS,
+  );
+
+  if (result.code !== 0) {
+    throw new Error(
+      `ML prediction failed. ` +
+      `Code=${result.code}. ` +
+      `stderr=${result.stderr}`
+    );
+  }
+
+  return parsePrediction(
+    result.stdout
   );
 }
