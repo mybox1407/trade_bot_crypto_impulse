@@ -32,6 +32,14 @@ export type MlPredictionResult = {
   trainingRows: number | null;
 };
 
+export type MlModelInfo = {
+  available: boolean;
+  trainedAt: string | null;
+  trainingRows: number | null;
+  tpRows: number | null;
+  slRows: number | null;
+};
+
 const PYTHON_BIN =
   process.env.PYTHON_BIN ?? 'python3';
 
@@ -59,6 +67,11 @@ const MODEL_FILE = path.join(
   'trade_model.joblib'
 );
 
+const MODEL_META_FILE = path.join(
+  ML_DIR,
+  'trade_model_meta.json'
+);
+
 const ML_TIMEOUT_MS = 10_000;
 const TRAIN_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -77,19 +90,6 @@ function collectProcessOutput(
       let stdout = '';
       let stderr = '';
       let settled = false;
-
-      const timeout = setTimeout(() => {
-        if (settled) return;
-
-        settled = true;
-        child.kill('SIGTERM');
-
-        reject(
-          new Error(
-            `Python process timeout after ${timeoutMs} ms`
-          )
-        );
-      }, timeoutMs);
 
       const finishError = (
         error: Error
@@ -110,6 +110,23 @@ function collectProcessOutput(
         clearTimeout(timeout);
         resolve(result);
       };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+
+        try {
+          child.stdin?.destroy();
+          child.kill('SIGTERM');
+        } catch {
+          // Процесс уже мог завершиться.
+        }
+
+        finishError(
+          new Error(
+            `Python process timeout after ${timeoutMs} ms`
+          )
+        );
+      }, timeoutMs);
 
       child.stdout?.on(
         'data',
@@ -310,6 +327,73 @@ function parsePrediction(
 
 export function isModelAvailable(): boolean {
   return existsSync(MODEL_FILE);
+}
+
+export function getModelInfo(): MlModelInfo {
+  if (!isModelAvailable()) {
+    return {
+      available: false,
+      trainedAt: null,
+      trainingRows: null,
+      tpRows: null,
+      slRows: null
+    };
+  }
+
+  if (!existsSync(MODEL_META_FILE)) {
+    return {
+      available: true,
+      trainedAt: null,
+      trainingRows: null,
+      tpRows: null,
+      slRows: null
+    };
+  }
+
+  try {
+    const metadataText =
+      require('node:fs').readFileSync(
+        MODEL_META_FILE,
+        'utf8'
+      );
+
+    const metadata = JSON.parse(
+      metadataText
+    ) as {
+      trained_at?: unknown;
+      training_rows?: unknown;
+      tp_rows?: unknown;
+      sl_rows?: unknown;
+    };
+
+    return {
+      available: true,
+      trainedAt:
+        typeof metadata.trained_at === 'string'
+          ? metadata.trained_at
+          : null,
+      trainingRows:
+        typeof metadata.training_rows === 'number'
+          ? metadata.training_rows
+          : null,
+      tpRows:
+        typeof metadata.tp_rows === 'number'
+          ? metadata.tp_rows
+          : null,
+      slRows:
+        typeof metadata.sl_rows === 'number'
+          ? metadata.sl_rows
+          : null
+    };
+  } catch {
+    return {
+      available: true,
+      trainedAt: null,
+      trainingRows: null,
+      tpRows: null,
+      slRows: null
+    };
+  }
 }
 
 export async function trainModel(): Promise<void> {
