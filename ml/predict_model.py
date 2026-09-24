@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Dict, List
+
+import joblib
+import numpy as np
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -31,10 +33,6 @@ FEATURE_NAMES = [
     "price_above_ema50",
     "long_side",
     "short_side",
-    "hour_sin",
-    "hour_cos",
-    "hour_utc_norm",
-    "volatility_at_entry",
 ]
 
 
@@ -49,22 +47,58 @@ def number(
             f"Missing field: {key}"
         )
 
-    return float(value)
+    result = float(value)
+
+    if not np.isfinite(result):
+        raise ValueError(
+            f"Field {key} is not finite: {value}"
+        )
+
+    return result
 
 
 def build_features(
     data: Dict,
 ) -> List[float]:
-    entry = number(data, "entryPrice")
-    ema20 = number(data, "ema20")
-    ema50 = number(data, "ema50")
-    ema200 = number(data, "ema200")
+    entry = number(
+        data,
+        "entryPrice",
+    )
 
-    rsi = number(data, "lastRsi")
-    adx = number(data, "adx")
-    bb = number(data, "bbWidth")
-    atr = number(data, "atrPct")
-    last_atr = number(data, "lastAtr")
+    ema20 = number(
+        data,
+        "ema20",
+    )
+
+    ema50 = number(
+        data,
+        "ema50",
+    )
+
+    ema200 = number(
+        data,
+        "ema200",
+    )
+
+    rsi = number(
+        data,
+        "lastRsi",
+    )
+
+    adx = number(
+        data,
+        "adx",
+    )
+
+    bb = number(
+        data,
+        "bbWidth",
+    )
+
+    atr = number(
+        data,
+        "atrPct",
+    )
 
     distance = number(
         data,
@@ -72,28 +106,39 @@ def build_features(
     )
 
     side = str(
-        data.get("side", "")
+        data.get(
+            "side",
+            "",
+        )
     ).strip().lower()
 
-    hour = int(
-        number(data, "hourUtc")
-    )
-
-    if side not in {"long", "short"}:
+    if side not in {
+        "long",
+        "short",
+    }:
         raise ValueError(
             f"Invalid side: {side}"
         )
 
-    if not 0 <= hour <= 23:
+    if entry <= 0:
         raise ValueError(
-            f"Invalid hourUtc: {hour}"
+            f"Invalid entryPrice: {entry}"
         )
 
-    volatility_at_entry = (
-        last_atr / abs(entry)
-        if abs(entry) > 0.000001 and last_atr > 0
-        else atr
-    )
+    if ema20 <= 0:
+        raise ValueError(
+            f"Invalid ema20: {ema20}"
+        )
+
+    if ema50 <= 0:
+        raise ValueError(
+            f"Invalid ema50: {ema50}"
+        )
+
+    if ema200 <= 0:
+        raise ValueError(
+            f"Invalid ema200: {ema200}"
+        )
 
     values = {
         "rsi": rsi,
@@ -118,12 +163,25 @@ def build_features(
 
         "entry_dist_ema20_atr": distance,
 
-        "side": float(side == "long"),
+        "side": float(
+            side == "long"
+        ),
 
-        "rsi_overbought": float(rsi > 70),
-        "rsi_oversold": float(rsi < 30),
-        "adx_strong": float(adx > 30),
-        "bb_wide": float(bb > 0.08),
+        "rsi_overbought": float(
+            rsi > 70
+        ),
+
+        "rsi_oversold": float(
+            rsi < 30
+        ),
+
+        "adx_strong": float(
+            adx > 30
+        ),
+
+        "bb_wide": float(
+            bb > 0.08
+        ),
 
         "ema20_above_ema50": float(
             ema20 > ema50
@@ -141,32 +199,36 @@ def build_features(
             entry > ema50
         ),
 
-        "long_side": float(side == "long"),
-        "short_side": float(side == "short"),
-
-        "hour_sin": math.sin(
-            2 * math.pi * hour / 24
+        "long_side": float(
+            side == "long"
         ),
 
-        "hour_cos": math.cos(
-            2 * math.pi * hour / 24
+        "short_side": float(
+            side == "short"
         ),
-
-        "hour_utc_norm": hour / 23.0,
-
-        "volatility_at_entry": volatility_at_entry,
     }
 
-    return [
+    features = [
         values[name]
         for name in FEATURE_NAMES
     ]
 
+    feature_array = np.asarray(
+        features,
+        dtype=float,
+    )
+
+    if not np.all(
+        np.isfinite(feature_array)
+    ):
+        raise ValueError(
+            "Feature vector contains NaN or Infinity"
+        )
+
+    return features
+
 
 def main() -> None:
-    import joblib
-    import numpy as np
-
     if not MODEL_FILE.exists():
         raise FileNotFoundError(
             f"Model not found: {MODEL_FILE}"
@@ -176,12 +238,10 @@ def main() -> None:
 
     if not input_text:
         raise ValueError(
-            "Empty stdin input."
+            "Empty stdin input"
         )
 
     data = json.loads(input_text)
-    features = build_features(data)
-
     artifact = joblib.load(MODEL_FILE)
 
     expected_features = artifact.get(
@@ -190,14 +250,13 @@ def main() -> None:
 
     if expected_features != FEATURE_NAMES:
         raise RuntimeError(
-            "Feature names/order mismatch."
+            "Feature names/order mismatch. "
+            f"Model expects: {expected_features}; "
+            f"predictor provides: {FEATURE_NAMES}"
         )
 
+    features = build_features(data)
     model = artifact["model"]
-
-    threshold = float(
-        artifact.get("threshold", 0.5)
-    )
 
     X = np.asarray(
         [features],
@@ -206,6 +265,13 @@ def main() -> None:
 
     probability = float(
         model.predict_proba(X)[0, 1]
+    )
+
+    threshold = float(
+        artifact.get(
+            "threshold",
+            0.5,
+        )
     )
 
     result = {
