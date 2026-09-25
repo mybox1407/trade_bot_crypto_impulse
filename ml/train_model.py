@@ -51,16 +51,17 @@ TRAIN_USE_CONFIG_FILTER = False
 USE_CONFIG_WEIGHTING = True
 CONFIG_WEIGHT = 2.0
 
+# LOSS penalty: сделки с pnl <= 0 получают повышенный вес.
+# Это делает ложный PROFIT дороже для модели:
+# модель становится осторожнее и чаще предсказывает LOSS.
+# Начни с 1.25 или 1.50. Значения > 2.0 часто слишком сильно режут PROFIT.
+USE_LOSS_PENALTY = True
+LOSS_PENALTY = 1.4
+
 # Вероятность PROFIT, с которой бот допускает сделку.
-ML_PROB_THRESHOLD = 0.7
+ML_PROB_THRESHOLD = 0.6
 
 # Параметры модели.
-# N_ESTIMATORS = 340
-# LEARNING_RATE = 0.009
-# MAX_DEPTH = 4
-# MIN_SAMPLES_LEAF = 25
-# SUBSAMPLE = 0.78
-# RANDOM_STATE = 42
 N_ESTIMATORS = 390
 LEARNING_RATE = 0.007
 MAX_DEPTH = 4
@@ -769,6 +770,7 @@ def main() -> None:
         np.sum(y_train == 0)
     )
 
+    # Базовый вес: усиление сделок, соответствующих ручной конфигурации.
     if USE_CONFIG_WEIGHTING:
         sample_weights = np.asarray(
             [
@@ -790,6 +792,18 @@ def main() -> None:
         )
 
         config_weighted_rows = 0
+
+    # LOSS penalty: сделки с pnl <= 0 становятся важнее для loss-функции.
+    # Это уменьшает склонность модели выдавать PROFIT на убыточных примерах.
+    if USE_LOSS_PENALTY:
+        loss_weight_mask = y_train == 0
+        sample_weights[loss_weight_mask] *= LOSS_PENALTY
+
+    weighted_loss_count = int(
+        np.sum(
+            (y_train == 0) & (sample_weights > 1.0)
+        )
+    )
 
     print(
         "\n==================== DATA ===================="
@@ -833,6 +847,31 @@ def main() -> None:
     print(
         f"Config weight: "
         f"{CONFIG_WEIGHT if USE_CONFIG_WEIGHTING else 1.0}"
+    )
+
+    print(
+        f"LOSS penalty enabled: "
+        f"{USE_LOSS_PENALTY}"
+    )
+
+    print(
+        f"LOSS penalty: "
+        f"{LOSS_PENALTY if USE_LOSS_PENALTY else 1.0}"
+    )
+
+    print(
+        f"LOSS с итоговым весом > 1: "
+        f"{weighted_loss_count}"
+    )
+
+    print(
+        f"Средний вес PROFIT: "
+        f"{float(np.mean(sample_weights[y_train == 1])):.4f}"
+    )
+
+    print(
+        f"Средний вес LOSS: "
+        f"{float(np.mean(sample_weights[y_train == 0])):.4f}"
     )
 
     print(
@@ -917,6 +956,12 @@ def main() -> None:
             if USE_CONFIG_WEIGHTING
             else 1.0
         ),
+        "loss_penalty": USE_LOSS_PENALTY,
+        "loss_penalty_value": (
+            LOSS_PENALTY
+            if USE_LOSS_PENALTY
+            else 1.0
+        ),
         "timestamp_unit": TIMESTAMP_UNIT,
     }
 
@@ -942,6 +987,12 @@ def main() -> None:
         "config_weight": (
             CONFIG_WEIGHT
             if USE_CONFIG_WEIGHTING
+            else 1.0
+        ),
+        "loss_penalty": USE_LOSS_PENALTY,
+        "loss_penalty_value": (
+            LOSS_PENALTY
+            if USE_LOSS_PENALTY
             else 1.0
         ),
         "n_estimators": N_ESTIMATORS,
