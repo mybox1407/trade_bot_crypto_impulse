@@ -224,6 +224,29 @@ const BREAKOUT_MAX_ATR_PCT = 0.035;
 const BREAKOUT_MIN_BB_WIDTH = 0.03;
 const BREAKOUT_MAX_BB_WIDTH = 0.08;
 
+type SignalState = {
+  buy: boolean;
+  sell: boolean;
+  side: 'long' | 'short' | 'none';
+  takeProfitPrice: number | null;
+  stopLossPrice: number | null;
+  positionSize: number | null;
+};
+
+function resetSignalState(
+  state: SignalState
+): SignalState {
+  return {
+    ...state,
+    buy: false,
+    sell: false,
+    side: 'none',
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    positionSize: null
+  };
+}
+
 export function detectMarketRegime(candles: Candle[]): {
   regime: MarketRegime;
   ready: boolean;
@@ -389,22 +412,6 @@ export function canOpenTrade(params: {
   if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return false;
 
   return true;
-}
-
-function resetSignalState(state: {
-  buy: boolean;
-  sell: boolean;
-  side: 'long' | 'short' | 'none';
-  takeProfitPrice: number | null;
-  stopLossPrice: number | null;
-  positionSize: number | null;
-}): void {
-  state.buy = false;
-  state.sell = false;
-  state.side = 'none';
-  state.takeProfitPrice = null;
-  state.stopLossPrice = null;
-  state.positionSize = null;
 }
 
 export async function analyzeMarket(
@@ -629,7 +636,7 @@ export async function analyzeMarket(
   }
 
   if (regime === 'high_volatility' || regime === 'range') {
-    resetSignalState({
+    const resetState = resetSignalState({
       buy,
       sell,
       side,
@@ -637,6 +644,14 @@ export async function analyzeMarket(
       stopLossPrice,
       positionSize
     });
+
+    buy = resetState.buy;
+    sell = resetState.sell;
+    side = resetState.side;
+    takeProfitPrice = resetState.takeProfitPrice;
+    stopLossPrice = resetState.stopLossPrice;
+    positionSize = resetState.positionSize;
+
     skipReason = `Trading disabled for regime: ${regime}`;
   }
 
@@ -645,7 +660,7 @@ export async function analyzeMarket(
     const signalDistanceAtr = distanceFromSignal / lastAtr;
 
     if (signalDistanceAtr > 1.0) {
-      resetSignalState({
+      const resetState = resetSignalState({
         buy,
         sell,
         side,
@@ -653,6 +668,14 @@ export async function analyzeMarket(
         stopLossPrice,
         positionSize
       });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+
       skipReason =
         `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
         `(max 1.00 ATR)`;
@@ -673,7 +696,7 @@ export async function analyzeMarket(
     entryTooExtended = entryExtensionAtr > maxEntryExtensionAtr;
 
     if (entryTooExtended) {
-      resetSignalState({
+      const resetState = resetSignalState({
         buy,
         sell,
         side,
@@ -681,6 +704,14 @@ export async function analyzeMarket(
         stopLossPrice,
         positionSize
       });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+
       skipReason =
         `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
         `(max ${maxEntryExtensionAtr.toFixed(2)} ATR)`;
@@ -710,7 +741,7 @@ export async function analyzeMarket(
     });
 
     if (!canOpen) {
-      resetSignalState({
+      const resetState = resetSignalState({
         buy,
         sell,
         side,
@@ -718,6 +749,13 @@ export async function analyzeMarket(
         stopLossPrice,
         positionSize
       });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
 
       if (skipReason == null) {
         skipReason =
@@ -754,7 +792,7 @@ export async function analyzeMarket(
           lastAtr,
           entryDistanceFromEma20Atr,
           side,
-          hourUtc: now.getUTCHours()
+          openedAt: signalTimeIso
         });
 
       mlProbability = prediction.probability;
@@ -763,7 +801,7 @@ export async function analyzeMarket(
       mlTrainedAt = prediction.trainedAt;
 
       if (!prediction.passed) {
-        resetSignalState({
+        const resetState = resetSignalState({
           buy,
           sell,
           side,
@@ -772,13 +810,20 @@ export async function analyzeMarket(
           positionSize
         });
 
+        buy = resetState.buy;
+        sell = resetState.sell;
+        side = resetState.side;
+        takeProfitPrice = resetState.takeProfitPrice;
+        stopLossPrice = resetState.stopLossPrice;
+        positionSize = resetState.positionSize;
+
         skipReason =
           `ML filter rejected trade: ` +
           `probability=${prediction.probability.toFixed(4)}, ` +
           `threshold=${prediction.threshold.toFixed(4)}`;
       }
     } catch (error) {
-      resetSignalState({
+      const resetState = resetSignalState({
         buy,
         sell,
         side,
@@ -786,6 +831,13 @@ export async function analyzeMarket(
         stopLossPrice,
         positionSize
       });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
 
       mlPassed = false;
 
@@ -842,7 +894,7 @@ export async function analyzeMarket(
       bbMiddle: lastBb.middle,
       bbLower: lastBb.lower,
       regimeReady: regimeInfo.ready,
-      regimeIndicators,
+      regimeIndicators: regimeIndicators,
       entryExtensionAtr,
       maxEntryExtensionAtr,
       entryTooExtended,
