@@ -1,13 +1,19 @@
+// src/services/ml/mlModel.ts
+
 import {
   spawn,
   ChildProcess
 } from 'node:child_process';
 
 import {
-  existsSync
+  existsSync,
+  readFileSync
 } from 'node:fs';
 
 import path from 'node:path';
+
+
+// ==================== TYPES ====================
 
 export type MlPredictionInput = {
   entryPrice: number;
@@ -21,8 +27,16 @@ export type MlPredictionInput = {
   lastAtr: number;
   entryDistanceFromEma20Atr: number;
   side: 'long' | 'short';
-  hourUtc: number;
+
+  /**
+   * Время формирования сигнала или открытия сделки.
+   *
+   * Пример:
+   * 2026-09-25T11:30:00.000Z
+   */
+  openedAt: string;
 };
+
 
 export type MlPredictionResult = {
   probability: number;
@@ -32,54 +46,94 @@ export type MlPredictionResult = {
   trainingRows: number | null;
 };
 
+
 export type MlModelInfo = {
   available: boolean;
   trainedAt: string | null;
   trainingRows: number | null;
-  tpRows: number | null;
-  slRows: number | null;
+  profitRows: number | null;
+  lossRows: number | null;
 };
 
-const PYTHON_BIN =
-  process.env.PYTHON_BIN ?? 'python3';
-
-const PROJECT_ROOT = path.resolve(
-  process.cwd()
-);
-
-const ML_DIR = path.resolve(
-  process.env.ML_DIR ??
-    path.join(PROJECT_ROOT, 'ml')
-);
-
-const TRAIN_SCRIPT = path.join(
-  ML_DIR,
-  'train_model.py'
-);
-
-const PREDICT_SCRIPT = path.join(
-  ML_DIR,
-  'predict_model.py'
-);
-
-const MODEL_FILE = path.join(
-  ML_DIR,
-  'trade_model.joblib'
-);
-
-const MODEL_META_FILE = path.join(
-  ML_DIR,
-  'trade_model_meta.json'
-);
-
-const ML_TIMEOUT_MS = 10_000;
-const TRAIN_TIMEOUT_MS = 30 * 60 * 1000;
 
 type ProcessResult = {
   code: number | null;
   stdout: string;
   stderr: string;
 };
+
+
+type PredictionJson = {
+  probability?: unknown;
+  threshold?: unknown;
+  passed?: unknown;
+  trained_at?: unknown;
+  training_rows?: unknown;
+  feature_count?: unknown;
+  error?: unknown;
+};
+
+
+type ModelMetadataJson = {
+  trained_at?: unknown;
+  training_rows?: unknown;
+  profit_rows?: unknown;
+  loss_rows?: unknown;
+
+  // Для совместимости со старыми meta-файлами.
+  tp_rows?: unknown;
+  sl_rows?: unknown;
+};
+
+
+// ==================== PATHS ====================
+
+const PYTHON_BIN =
+  process.env.PYTHON_BIN ?? 'python3';
+
+
+const PROJECT_ROOT = path.resolve(
+  process.cwd()
+);
+
+
+const ML_DIR = path.resolve(
+  process.env.ML_DIR ??
+    path.join(PROJECT_ROOT, 'ml')
+);
+
+
+const TRAIN_SCRIPT = path.join(
+  ML_DIR,
+  'train_model.py'
+);
+
+
+const PREDICT_SCRIPT = path.join(
+  ML_DIR,
+  'predict_model.py'
+);
+
+
+const MODEL_FILE = path.join(
+  ML_DIR,
+  'trade_model.joblib'
+);
+
+
+const MODEL_META_FILE = path.join(
+  ML_DIR,
+  'trade_model_meta.json'
+);
+
+
+// ==================== TIMEOUTS ====================
+
+const ML_TIMEOUT_MS = 10_000;
+const TRAIN_TIMEOUT_MS = 30 * 60 * 1000;
+
+
+// ==================== PROCESS ====================
 
 function collectProcessOutput(
   child: ChildProcess,
@@ -91,10 +145,34 @@ function collectProcessOutput(
       let stderr = '';
       let settled = false;
 
+      const timeout = setTimeout(
+        () => {
+          if (settled) {
+            return;
+          }
+
+          try {
+            child.stdin?.destroy();
+            child.kill('SIGTERM');
+          } catch {
+            // Процесс уже мог завершиться.
+          }
+
+          finishError(
+            new Error(
+              `Python process timeout after ${timeoutMs} ms`
+            )
+          );
+        },
+        timeoutMs
+      );
+
       const finishError = (
         error: Error
       ): void => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
 
         settled = true;
         clearTimeout(timeout);
@@ -104,29 +182,14 @@ function collectProcessOutput(
       const finishSuccess = (
         result: ProcessResult
       ): void => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
 
         settled = true;
         clearTimeout(timeout);
         resolve(result);
       };
-
-      const timeout = setTimeout(() => {
-        if (settled) return;
-
-        try {
-          child.stdin?.destroy();
-          child.kill('SIGTERM');
-        } catch {
-          // Процесс уже мог завершиться.
-        }
-
-        finishError(
-          new Error(
-            `Python process timeout after ${timeoutMs} ms`
-          )
-        );
-      }, timeoutMs);
 
       child.stdout?.on(
         'data',
@@ -163,6 +226,9 @@ function collectProcessOutput(
   );
 }
 
+
+// ==================== VALIDATION ====================
+
 function ensureMlFilesExist(): void {
   if (!existsSync(ML_DIR)) {
     throw new Error(
@@ -183,6 +249,7 @@ function ensureMlFilesExist(): void {
   }
 }
 
+
 function ensureFiniteInput(
   input: MlPredictionInput
 ): void {
@@ -196,8 +263,7 @@ function ensureFiniteInput(
     input.bbWidth,
     input.atrPct,
     input.lastAtr,
-    input.entryDistanceFromEma20Atr,
-    input.hourUtc
+    input.entryDistanceFromEma20Atr
   ];
 
   if (
@@ -231,12 +297,21 @@ function ensureFiniteInput(
   }
 
   if (
-    !Number.isInteger(input.hourUtc) ||
-    input.hourUtc < 0 ||
-    input.hourUtc > 23
+    !input.openedAt ||
+    typeof input.openedAt !== 'string'
   ) {
     throw new Error(
-      `Invalid UTC hour: ${input.hourUtc}`
+      'ML input requires openedAt'
+    );
+  }
+
+  const openedAtMs = Date.parse(
+    input.openedAt
+  );
+
+  if (!Number.isFinite(openedAtMs)) {
+    throw new Error(
+      `Invalid openedAt: ${input.openedAt}`
     );
   }
 
@@ -250,6 +325,9 @@ function ensureFiniteInput(
   }
 }
 
+
+// ==================== PREDICTION PARSING ====================
+
 function parsePrediction(
   stdout: string
 ): MlPredictionResult {
@@ -261,17 +339,12 @@ function parsePrediction(
     );
   }
 
-  let parsed: {
-    probability?: unknown;
-    threshold?: unknown;
-    passed?: unknown;
-    trained_at?: unknown;
-    training_rows?: unknown;
-    error?: unknown;
-  };
+  let parsed: PredictionJson;
 
   try {
-    parsed = JSON.parse(output);
+    parsed = JSON.parse(
+      output
+    ) as PredictionJson;
   } catch {
     throw new Error(
       `Invalid JSON from prediction process: ${output}`
@@ -294,11 +367,29 @@ function parsePrediction(
   }
 
   if (
+    parsed.probability < 0 ||
+    parsed.probability > 1
+  ) {
+    throw new Error(
+      `Probability outside [0, 1]: ${output}`
+    );
+  }
+
+  if (
     typeof parsed.threshold !== 'number' ||
     !Number.isFinite(parsed.threshold)
   ) {
     throw new Error(
       `Invalid threshold from ML: ${output}`
+    );
+  }
+
+  if (
+    parsed.threshold < 0 ||
+    parsed.threshold > 1
+  ) {
+    throw new Error(
+      `Threshold outside [0, 1]: ${output}`
     );
   }
 
@@ -314,20 +405,27 @@ function parsePrediction(
     probability: parsed.probability,
     threshold: parsed.threshold,
     passed: parsed.passed,
+
     trainedAt:
       typeof parsed.trained_at === 'string'
         ? parsed.trained_at
         : null,
+
     trainingRows:
-      typeof parsed.training_rows === 'number'
+      typeof parsed.training_rows === 'number' &&
+      Number.isFinite(parsed.training_rows)
         ? parsed.training_rows
         : null
   };
 }
 
+
+// ==================== MODEL INFO ====================
+
 export function isModelAvailable(): boolean {
   return existsSync(MODEL_FILE);
 }
+
 
 export function getModelInfo(): MlModelInfo {
   if (!isModelAvailable()) {
@@ -335,8 +433,8 @@ export function getModelInfo(): MlModelInfo {
       available: false,
       trainedAt: null,
       trainingRows: null,
-      tpRows: null,
-      slRows: null
+      profitRows: null,
+      lossRows: null
     };
   }
 
@@ -345,56 +443,65 @@ export function getModelInfo(): MlModelInfo {
       available: true,
       trainedAt: null,
       trainingRows: null,
-      tpRows: null,
-      slRows: null
+      profitRows: null,
+      lossRows: null
     };
   }
 
   try {
-    const metadataText =
-      require('node:fs').readFileSync(
-        MODEL_META_FILE,
-        'utf8'
-      );
+    const metadataText = readFileSync(
+      MODEL_META_FILE,
+      'utf8'
+    );
 
     const metadata = JSON.parse(
       metadataText
-    ) as {
-      trained_at?: unknown;
-      training_rows?: unknown;
-      tp_rows?: unknown;
-      sl_rows?: unknown;
-    };
+    ) as ModelMetadataJson;
+
+    const profitRows =
+      typeof metadata.profit_rows === 'number'
+        ? metadata.profit_rows
+        : typeof metadata.tp_rows === 'number'
+          ? metadata.tp_rows
+          : null;
+
+    const lossRows =
+      typeof metadata.loss_rows === 'number'
+        ? metadata.loss_rows
+        : typeof metadata.sl_rows === 'number'
+          ? metadata.sl_rows
+          : null;
 
     return {
       available: true,
+
       trainedAt:
         typeof metadata.trained_at === 'string'
           ? metadata.trained_at
           : null,
+
       trainingRows:
-        typeof metadata.training_rows === 'number'
+        typeof metadata.training_rows === 'number' &&
+        Number.isFinite(metadata.training_rows)
           ? metadata.training_rows
           : null,
-      tpRows:
-        typeof metadata.tp_rows === 'number'
-          ? metadata.tp_rows
-          : null,
-      slRows:
-        typeof metadata.sl_rows === 'number'
-          ? metadata.sl_rows
-          : null
+
+      profitRows,
+      lossRows
     };
   } catch {
     return {
       available: true,
       trainedAt: null,
       trainingRows: null,
-      tpRows: null,
-      slRows: null
+      profitRows: null,
+      lossRows: null
     };
   }
 }
+
+
+// ==================== TRAINING ====================
 
 export async function trainModel(): Promise<void> {
   ensureMlFilesExist();
@@ -404,12 +511,15 @@ export async function trainModel(): Promise<void> {
     [TRAIN_SCRIPT],
     {
       cwd: ML_DIR,
+
       stdio: [
         'ignore',
         'pipe',
         'pipe'
       ],
+
       windowsHide: true,
+
       env: {
         ...process.env,
         ML_DIR
@@ -424,7 +534,7 @@ export async function trainModel(): Promise<void> {
 
   if (result.code !== 0) {
     throw new Error(
-      `ML training failed. ` +
+      'ML training failed. ' +
       `Exit code: ${result.code}. ` +
       `stderr: ${result.stderr || 'empty'}`
     );
@@ -432,8 +542,8 @@ export async function trainModel(): Promise<void> {
 
   if (!isModelAvailable()) {
     throw new Error(
-      `Training finished, but model was not created: ` +
-      `${MODEL_FILE}`
+      'Training finished, but model was not created: ' +
+      MODEL_FILE
     );
   }
 
@@ -449,6 +559,9 @@ export async function trainModel(): Promise<void> {
     );
   }
 }
+
+
+// ==================== PREDICTION ====================
 
 export async function predictTrade(
   input: MlPredictionInput
@@ -467,12 +580,15 @@ export async function predictTrade(
     [PREDICT_SCRIPT],
     {
       cwd: ML_DIR,
+
       stdio: [
         'pipe',
         'pipe',
         'pipe'
       ],
+
       windowsHide: true,
+
       env: {
         ...process.env,
         ML_DIR
@@ -480,8 +596,13 @@ export async function predictTrade(
     }
   );
 
+  const inputJson = JSON.stringify(
+    input
+  );
+
   child.stdin?.write(
-    JSON.stringify(input)
+    inputJson,
+    'utf8'
   );
 
   child.stdin?.end();
@@ -493,7 +614,7 @@ export async function predictTrade(
 
   if (result.code !== 0) {
     throw new Error(
-      `ML prediction failed. ` +
+      'ML prediction failed. ' +
       `Exit code: ${result.code}. ` +
       `stderr: ${result.stderr || result.stdout}`
     );
