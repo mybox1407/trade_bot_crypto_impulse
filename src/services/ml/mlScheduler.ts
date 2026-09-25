@@ -1,3 +1,5 @@
+// src/services/ml/mlScheduler.ts
+
 import {
   existsSync,
   readFileSync
@@ -10,46 +12,93 @@ import {
   isModelAvailable as isModelFileAvailable
 } from './mlModel';
 
+
+// ==================== CONSTANTS ====================
+
 const DAY_MS =
   24 * 60 * 60 * 1000;
+
 
 const ML_DIR = path.resolve(
   process.env.ML_DIR ??
     path.join(process.cwd(), 'ml')
 );
 
+
 const MODEL_FILE = path.join(
   ML_DIR,
   'trade_model.joblib'
 );
+
 
 const MODEL_META_FILE = path.join(
   ML_DIR,
   'trade_model_meta.json'
 );
 
+
+// ==================== STATE ====================
+
 let trainingInProgress = false;
 let schedulerStarted = false;
 let trainingLoopPromise: Promise<void> | null = null;
+
+
+// ==================== TYPES ====================
 
 export type MlModelInfo = {
   available: boolean;
   trainedAt: string | null;
   trainingRows: number | null;
-  tpRows: number | null;
-  slRows: number | null;
+  profitRows: number | null;
+  lossRows: number | null;
 };
+
+
+type ModelMetadataJson = {
+  trained_at?: unknown;
+  training_rows?: unknown;
+
+  // Новые названия из train_model.py.
+  profit_rows?: unknown;
+  loss_rows?: unknown;
+
+  // Старые названия для обратной совместимости.
+  tp_rows?: unknown;
+  sl_rows?: unknown;
+};
+
+
+// ==================== UTILS ====================
 
 function sleep(
   milliseconds: number
 ): Promise<void> {
-  return new Promise(resolve => {
-    setTimeout(
-      resolve,
-      milliseconds
-    );
-  });
+  return new Promise(
+    resolve => {
+      setTimeout(
+        resolve,
+        milliseconds
+      );
+    }
+  );
 }
+
+
+function emptyModelInfo(
+  available: boolean
+): MlModelInfo {
+  return {
+    available,
+    trainedAt: null,
+    trainingRows: null,
+    profitRows: null,
+    lossRows: null
+  };
+}
+
+
+// ==================== MODEL STATUS ====================
 
 export function isModelAvailable(): boolean {
   return (
@@ -58,25 +107,14 @@ export function isModelAvailable(): boolean {
   );
 }
 
+
 export function getModelInfo(): MlModelInfo {
   if (!isModelAvailable()) {
-    return {
-      available: false,
-      trainedAt: null,
-      trainingRows: null,
-      tpRows: null,
-      slRows: null
-    };
+    return emptyModelInfo(false);
   }
 
   if (!existsSync(MODEL_META_FILE)) {
-    return {
-      available: true,
-      trainedAt: null,
-      trainingRows: null,
-      tpRows: null,
-      slRows: null
-    };
+    return emptyModelInfo(true);
   }
 
   try {
@@ -85,31 +123,40 @@ export function getModelInfo(): MlModelInfo {
       'utf8'
     );
 
-    const parsed = JSON.parse(raw) as {
-      trained_at?: unknown;
-      training_rows?: unknown;
-      tp_rows?: unknown;
-      sl_rows?: unknown;
-    };
+    const parsed = JSON.parse(
+      raw
+    ) as ModelMetadataJson;
+
+    const profitRows =
+      typeof parsed.profit_rows === 'number'
+        ? parsed.profit_rows
+        : typeof parsed.tp_rows === 'number'
+          ? parsed.tp_rows
+          : null;
+
+    const lossRows =
+      typeof parsed.loss_rows === 'number'
+        ? parsed.loss_rows
+        : typeof parsed.sl_rows === 'number'
+          ? parsed.sl_rows
+          : null;
 
     return {
       available: true,
+
       trainedAt:
         typeof parsed.trained_at === 'string'
           ? parsed.trained_at
           : null,
+
       trainingRows:
-        typeof parsed.training_rows === 'number'
+        typeof parsed.training_rows === 'number' &&
+        Number.isFinite(parsed.training_rows)
           ? parsed.training_rows
           : null,
-      tpRows:
-        typeof parsed.tp_rows === 'number'
-          ? parsed.tp_rows
-          : null,
-      slRows:
-        typeof parsed.sl_rows === 'number'
-          ? parsed.sl_rows
-          : null
+
+      profitRows,
+      lossRows
     };
   } catch (error) {
     console.warn(
@@ -117,15 +164,12 @@ export function getModelInfo(): MlModelInfo {
       error
     );
 
-    return {
-      available: true,
-      trainedAt: null,
-      trainingRows: null,
-      tpRows: null,
-      slRows: null
-    };
+    return emptyModelInfo(true);
   }
 }
+
+
+// ==================== RETRAINING ====================
 
 export async function retrainModel(
   reason: string
@@ -179,6 +223,9 @@ export async function retrainModel(
   }
 }
 
+
+// ==================== SCHEDULED LOOP ====================
+
 async function trainingLoop(): Promise<void> {
   while (schedulerStarted) {
     await sleep(DAY_MS);
@@ -192,6 +239,9 @@ async function trainingLoop(): Promise<void> {
     );
   }
 }
+
+
+// ==================== SCHEDULER CONTROL ====================
 
 export async function startModelTrainingScheduler(): Promise<void> {
   if (schedulerStarted) {
@@ -217,10 +267,16 @@ export async function startModelTrainingScheduler(): Promise<void> {
   }
 
   trainingLoopPromise = trainingLoop();
+
   void trainingLoopPromise;
 }
+
 
 export async function stopModelTrainingScheduler(): Promise<void> {
   schedulerStarted = false;
   trainingLoopPromise = null;
+
+  console.log(
+    '[ML] Training scheduler stopped.'
+  );
 }
