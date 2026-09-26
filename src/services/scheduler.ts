@@ -31,7 +31,8 @@ import {
 } from './positionState';
 import {
   TRADE_FEE_RATE,
-  isTradingTimeUtcPlus4
+  isTradingTimeUtcPlus4,
+  getCooldownRemainingMs
 } from './strategy';
 import {
   logPositionCheck,
