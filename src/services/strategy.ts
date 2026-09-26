@@ -20,6 +20,9 @@ export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
 export const ENABLE_ML_FILTER = true;
 
+// ⭐ Cooldown после сделки (1 час = 3600000 мс)
+export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
+
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [
   [0, 24]
 ];
@@ -53,6 +56,9 @@ export const LONG_BLACKLIST = [''];
 export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 1.8;
 export const ENABLE_TRAILING_STOP = false;
+
+// ⭐ Хранилище cooldown по символам
+const symbolCooldowns = new Map<string, number>();
 
 function getUtcPlus4(date = new Date()): number {
   return (date.getUTCHours() + 4) % 24;
@@ -105,6 +111,44 @@ export function getTradingWindowCheck(
 
 export function getTradingTimeSkipReason(date = new Date()): string | null {
   return getTradingWindowCheck(date).message;
+}
+
+// ⭐ Проверка cooldown для символа
+export function isSymbolOnCooldown(symbol: string, now = new Date()): boolean {
+  const key = symbol.toUpperCase();
+  const cooldownEnd = symbolCooldowns.get(key);
+  
+  if (cooldownEnd == null) {
+    return false;
+  }
+  
+  return now.getTime() < cooldownEnd;
+}
+
+// ⭐ Установка cooldown для символа
+export function setSymbolCooldown(symbol: string, now = new Date()): void {
+  const key = symbol.toUpperCase();
+  const cooldownEnd = now.getTime() + SYMBOL_COOLDOWN_MS;
+  symbolCooldowns.set(key, cooldownEnd);
+}
+
+// ⭐ Очистка cooldown для символа (если нужно вручную)
+export function clearSymbolCooldown(symbol: string): void {
+  const key = symbol.toUpperCase();
+  symbolCooldowns.delete(key);
+}
+
+// ⭐ Получение оставшегося времени cooldown (мс)
+export function getRemainingCooldownMs(symbol: string, now = new Date()): number {
+  const key = symbol.toUpperCase();
+  const cooldownEnd = symbolCooldowns.get(key);
+  
+  if (cooldownEnd == null) {
+    return 0;
+  }
+  
+  const remaining = cooldownEnd - now.getTime();
+  return remaining > 0 ? remaining : 0;
 }
 
 function last<T>(arr: T[]): T {
@@ -367,6 +411,11 @@ export function canOpenTrade(params: {
   } = params;
 
   if (!isTradingTimeUtcPlus4(now)) return false;
+
+  // ⭐ Проверка cooldown
+  if (isSymbolOnCooldown(symbol, now)) {
+    return false;
+  }
 
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
@@ -773,9 +822,16 @@ export async function analyzeMarket(
       positionSize = resetState.positionSize;
 
       if (skipReason == null) {
-        skipReason =
-          'Entry filters failed ' +
-          '(RSI/ADX/ATR/BB/EMA20/MACD/trading window/blacklist)';
+        // ⭐ Проверка, является ли причина cooldown
+        if (isSymbolOnCooldown(symbol, now)) {
+          const remainingMs = getRemainingCooldownMs(symbol, now);
+          const remainingMin = Math.ceil(remainingMs / 60000);
+          skipReason = `Symbol on cooldown: ${remainingMin} min remaining`;
+        } else {
+          skipReason =
+            'Entry filters failed ' +
+            '(RSI/ADX/ATR/BB/EMA20/MACD/trading window/blacklist/cooldown)';
+        }
       }
     }
   }
