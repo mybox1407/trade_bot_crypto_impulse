@@ -444,14 +444,14 @@ function setSymbolCooldown(symbol: string, timestamp = Date.now()): void {
   symbolCooldowns.set(normalizeSymbol(symbol), timestamp);
 }
 
-function getSymbolCooldownReason(symbol: string, now = Date.now()): string | null {
+function getSymbolCooldownReason(symbol: string, now = new Date()): string | null {
   const lastTradeAt = symbolCooldowns.get(normalizeSymbol(symbol));
 
   if (lastTradeAt == null) {
     return null;
   }
 
-  const remainingMs = getCooldownRemainingMs(lastTradeAt, now);
+  const remainingMs = getCooldownRemainingMs(lastTradeAt, new Date(now));
 
   if (remainingMs <= 0) {
     symbolCooldowns.delete(normalizeSymbol(symbol));
