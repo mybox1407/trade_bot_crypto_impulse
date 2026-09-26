@@ -113,6 +113,27 @@ export function getTradingTimeSkipReason(date = new Date()): string | null {
   return getTradingWindowCheck(date).message;
 }
 
+// ⭐ Получение оставшегося времени cooldown (мс)
+export function getCooldownRemainingMs(
+  lastTradeAt: Date | number | string | null | undefined,
+  now = new Date()
+): number {
+  if (lastTradeAt == null) return 0;
+
+  const lastTradeMs =
+    lastTradeAt instanceof Date
+      ? lastTradeAt.getTime()
+      : typeof lastTradeAt === 'number'
+        ? lastTradeAt
+        : new Date(lastTradeAt).getTime();
+
+  if (!Number.isFinite(lastTradeMs)) return 0;
+
+  const remainingMs = lastTradeMs + SYMBOL_COOLDOWN_MS - now.getTime();
+
+  return Math.max(0, remainingMs);
+}
+
 // ⭐ Проверка cooldown для символа
 export function isSymbolOnCooldown(symbol: string, now = new Date()): boolean {
   const key = symbol.toUpperCase();
