@@ -1,3 +1,16 @@
+/*
+ * scheduler.ts — corrected fill/local-state synchronization + ML metadata.
+ *
+ * Important contract:
+ * - beginPositionOpening/endPositionOpening protect only order submission.
+ * - openPosition must not reject a confirmed fill because an opening request
+ *   is still marked as active.
+ * - A confirmed fill is persisted in pending reconciliation state before any
+ *   local-state failure is reported.
+ * - Remote positions without local state are restored only when enough
+ *   information is available; otherwise the symbol remains blocked.
+ */
+
 import {
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
@@ -85,10 +98,12 @@ let schedulerStopping = false;
 let schedulerStarted = false;
 const symbolLocks = new Map<string, number>();
 
+// Cooldown после сделки (1 час)
+const symbolCooldowns = new Map<string, number>();
+
 // The scheduler starts training once and then keeps the daily training loop.
 // A signal is not allowed before the first training attempt finishes.
 let mlTrainingReady = false;
-
 
 type SignalResult = {
   symbol: string;
@@ -423,6 +438,33 @@ async function hasKnownRemotePosition(remote: any, pending?: PendingFilledOpen):
   return Number(remote.quantity ?? remote.size ?? 0) > 0;
 }
 
+// ============ Cooldown functions ============
+
+function setSymbolCooldown(symbol: string, timestamp = Date.now()): void {
+  symbolCooldowns.set(normalizeSymbol(symbol), timestamp);
+}
+
+function getSymbolCooldownReason(symbol: string, now = Date.now()): string | null {
+  const lastTradeAt = symbolCooldowns.get(normalizeSymbol(symbol));
+
+  if (lastTradeAt == null) {
+    return null;
+  }
+
+  const remainingMs = getCooldownRemainingMs(lastTradeAt, now);
+
+  if (remainingMs <= 0) {
+    symbolCooldowns.delete(normalizeSymbol(symbol));
+    return null;
+  }
+
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+
+  return `Symbol cooldown active: ${remainingMinutes} min remaining`;
+}
+
+// ============ End Cooldown functions ============
+
 async function checkSignals(): Promise<void> {
   if (signalCheckRunning) return;
   signalCheckRunning = true;
@@ -440,6 +482,19 @@ async function checkSignals(): Promise<void> {
             regime: 'ml-not-ready',
             hasSignal: false,
             reason: 'ML model is not available yet'
+          });
+          continue;
+        }
+
+        // Проверка cooldown
+        const cooldownReason = getSymbolCooldownReason(symbol);
+        if (cooldownReason != null) {
+          results.push({
+            symbol,
+            status: 'not-ready',
+            regime: 'cooldown',
+            hasSignal: false,
+            reason: cooldownReason
           });
           continue;
         }
@@ -725,6 +780,9 @@ async function reconcileLocalPositionsWithExchange(
           closeReason
         });
       } else {
+        // ⭐ Установить cooldown после успешного закрытия
+        setSymbolCooldown(symbol);
+
         unlockSymbol(symbol);
         tradeLog('POSITION_CLOSED', {
           symbol,
