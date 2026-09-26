@@ -53,8 +53,8 @@ export const REJECT_ENTRY_TOO_EXTENDED = true;
 // Blacklist только для Long
 export const LONG_BLACKLIST = [''];
 
-export const STOP_LOSS_ATR_MULTIPLIER = 2.5;
-export const TAKE_PROFIT_ATR_MULTIPLIER = 3.8;
+export const STOP_LOSS_ATR_MULTIPLIER = 2.8;
+export const TAKE_PROFIT_ATR_MULTIPLIER = 4;
 export const ENABLE_TRAILING_STOP = false;
 
 // ⭐ Хранилище cooldown по символам
