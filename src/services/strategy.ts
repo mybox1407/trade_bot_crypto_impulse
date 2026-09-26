@@ -21,8 +21,7 @@ export const ENABLE_BREAKOUT_TRADES = false;
 export const ENABLE_ML_FILTER = true;
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [
-  [0, 23]
- 
+  [0, 24]
 ];
 
 export const MIN_ENTRY_RSI_SHORT = 38; 
@@ -349,6 +348,8 @@ export function canOpenTrade(params: {
   entryDistanceFromEma20: number;
   entryDistanceFromEma20Atr: number;
   entryTooExtended: boolean;
+  macdCrossUp?: boolean;
+  macdCrossDown?: boolean;
   now?: Date;
 }): boolean {
   const {
@@ -360,6 +361,8 @@ export function canOpenTrade(params: {
     bbWidth,
     entryDistanceFromEma20Atr,
     entryTooExtended,
+    macdCrossUp = false,
+    macdCrossDown = false,
     now = new Date()
   } = params;
 
@@ -368,6 +371,16 @@ export function canOpenTrade(params: {
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
     if (LONG_BLACKLIST.includes(baseSymbol)) return false;
+  }
+
+  // MACD-фильтр: Лонг + CrossDown = отклонить
+  if (side === 'long' && macdCrossDown === true) {
+    return false;
+  }
+
+  // MACD-фильтр: Шорт + CrossUp = отклонить
+  if (side === 'short' && macdCrossUp === true) {
+    return false;
   }
 
   if (side === 'short') {
@@ -737,6 +750,8 @@ export async function analyzeMarket(
       entryDistanceFromEma20,
       entryDistanceFromEma20Atr,
       entryTooExtended,
+      macdCrossUp,
+      macdCrossDown,
       now
     });
 
@@ -760,7 +775,7 @@ export async function analyzeMarket(
       if (skipReason == null) {
         skipReason =
           'Entry filters failed ' +
-          '(RSI/ADX/ATR/BB/EMA20/trading window/blacklist)';
+          '(RSI/ADX/ATR/BB/EMA20/MACD/trading window/blacklist)';
       }
     }
   }
