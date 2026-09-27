@@ -18,7 +18,7 @@ export const TRADE_FEE_RATE = 0.0;
 
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
-export const ENABLE_ML_FILTER = true;
+export const ENABLE_ML_FILTER = false;
 
 // ⭐ Cooldown после сделки (1 час = 3600000 мс)
 export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
