@@ -76,6 +76,9 @@ export function notifyPositionOpen(data: {
   mlThreshold?: number | null;
   mlPassed?: boolean | null;
   mlTrainedAt?: string | null;
+  tceScore?: number | null;
+  tceRegime?: string | null;
+  tceReason?: string | null;
 }) {
   const emoji =
     data.side === 'long'
@@ -104,6 +107,11 @@ export function notifyPositionOpen(data: {
         ? 'YES'
         : 'NO';
 
+  const tceScore =
+    data.tceScore != null && Number.isFinite(data.tceScore)
+      ? String(data.tceScore)
+      : 'N/A';
+
   const text =
     `${emoji} POSITION OPENED ${emoji}\n\n` +
     `Symbol: ${data.symbol}\n` +
@@ -118,6 +126,9 @@ export function notifyPositionOpen(data: {
     `ML Threshold: ${mlThreshold}\n` +
     `ML Passed: ${mlPassed}\n` +
     `ML Model Trained: ${data.mlTrainedAt ?? 'N/A'}\n` +
+    `TCE Score: ${tceScore}\n` +
+    `TCE Regime: ${data.tceRegime ?? 'N/A'}\n` +
+    `TCE Reason: ${data.tceReason ?? 'N/A'}\n` +
     `Balance: $${data.balance.toFixed(2)}\n` +
     `Position ID: ${data.positionId}\n\n` +
     `${new Date().toISOString()}`;
@@ -300,6 +311,9 @@ export function notifySignalCheck(data: {
   mlThreshold?: number | null;
   mlPassed?: boolean | null;
   mlTrainedAt?: string | null;
+  tceScore?: number | null;
+  tceRegime?: string | null;
+  tceReason?: string | null;
 }) {
   const emoji =
     data.hasSignal
@@ -328,12 +342,20 @@ export function notifySignalCheck(data: {
         : 'NO'}\n` +
     `ML Trained At: ${data.mlTrainedAt ?? 'N/A'}`;
 
+  const tceText =
+    `TCE Score: ${data.tceScore != null && Number.isFinite(data.tceScore)
+      ? data.tceScore
+      : 'N/A'}\n` +
+    `TCE Regime: ${data.tceRegime ?? 'N/A'}\n` +
+    `TCE Reason: ${data.tceReason ?? 'N/A'}`;
+
   const text =
     `${emoji} ${data.symbol}\n\n` +
     `Regime: ${data.regime}\n` +
     `Signal: ${signalText}\n` +
     `Reason: ${data.reason ?? 'Conditions not met'}\n` +
-    `${mlText}\n\n` +
+    `${mlText}\n` +
+    `${tceText}\n\n` +
     `${new Date().toISOString()}`;
 
   return sendMessage({
