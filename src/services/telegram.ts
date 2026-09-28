@@ -341,10 +341,6 @@ export async function sendAggregatedSignalSummary(data: {
     side?: string;
     price?: number;
     reason?: string;
-    mlProbability?: number | null;
-    mlThreshold?: number | null;
-    mlPassed?: boolean | null;
-    mlTrainedAt?: string | null;
   }>;
   errorsBySymbol?: Record<string, string>;
   equity?: number;
@@ -397,23 +393,11 @@ export async function sendAggregatedSignalSummary(data: {
     }
 
     if (result.status === 'signal') {
-      const mlProbability =
-        result.mlProbability != null
-          ? result.mlProbability.toFixed(4)
-          : 'N/A';
-
-      const mlThreshold =
-        result.mlThreshold != null
-          ? result.mlThreshold.toFixed(4)
-          : 'N/A';
-
       return (
         `${result.side === 'long' ? '🟢' : '🔴'} ` +
         `${result.symbol} [${result.regime}]: ` +
         `${result.side?.toUpperCase()} @ ` +
-        `${result.price?.toFixed(4) ?? 'n/a'}\n` +
-        `   ML: ${mlProbability}/${mlThreshold} ` +
-        `(${result.mlPassed ? 'PASS' : 'FAIL'})`
+        `${result.price?.toFixed(4) ?? 'n/a'}\n` 
       );
     }
 
