@@ -72,10 +72,6 @@ export function notifyPositionOpen(data: {
   positionId: string;
   regime: string;
   balance: number;
-  mlProbability?: number | null;
-  mlThreshold?: number | null;
-  mlPassed?: boolean | null;
-  mlTrainedAt?: string | null;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -122,10 +118,6 @@ export function notifyPositionOpen(data: {
     `Take Profit: ${data.takeProfitPrice.toFixed(4)}\n` +
     `Stop Loss: ${data.stopLossPrice.toFixed(4)}\n\n` +
     `Regime: ${data.regime}\n` +
-    `ML Probability: ${mlProbability}\n` +
-    `ML Threshold: ${mlThreshold}\n` +
-    `ML Passed: ${mlPassed}\n` +
-    `ML Model Trained: ${data.mlTrainedAt ?? 'N/A'}\n` +
     `TCE Score: ${tceScore}\n` +
     `TCE Regime: ${data.tceRegime ?? 'N/A'}\n` +
     `TCE Reason: ${data.tceReason ?? 'N/A'}\n` +
