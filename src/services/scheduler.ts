@@ -812,10 +812,7 @@ async function checkSignals(): Promise<void> {
           status: 'error',
           regime: 'error',
           hasSignal: false,
-          reason: message,
-          tceScore: typeof tceScore !== 'undefined' ? tceScore : null,
-          tceRegime: typeof tceRegime !== 'undefined' ? tceRegime : null,
-          tceReason: typeof tceReason !== 'undefined' ? tceReason : null
+          reason: message
         });
       }
     }
