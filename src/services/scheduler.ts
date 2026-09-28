@@ -769,6 +769,62 @@ async function checkSignals(): Promise<void> {
 
           const position = getPositions().find(item => normalizeSymbol(item.symbol) === symbol && item.marketId === marketId);
           if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);
+
+          // >>> ВСТАВИТЬ ВОТ ЭТО:
+          logPositionOpen({
+            timestamp: new Date().toISOString(),
+            positionId: position.id,
+            symbol: position.symbol,
+            side: position.side,
+            entryPrice: position.entryPrice,
+            quantity: position.quantity,
+            notional: position.notional,
+            takeProfitPrice: position.takeProfitPrice,
+            stopLossPrice: position.stopLossPrice,
+            entryFee: 0,
+            balanceBefore: getBalance(),
+            balanceAfter: getBalance(),
+            riskCapital: getRiskCapital(),
+            maxNotionalByPercent: getPositionNotional(),
+            stopDistance: Math.abs(position.entryPrice - position.stopLossPrice),
+            totalRiskPerUnit: stopDistance + stopDistance * TRADE_FEE_RATE,
+            calculatedQuantity: position.quantity,
+            regime: pending.regime,
+            macdCrossUp: pending.indicators?.macdCrossUp ?? false,
+            macdCrossDown: pending.indicators?.macdCrossDown ?? false,
+            lastRsi: pending.indicators?.lastRsi ?? 0,
+            lastAtr: pending.indicators?.lastAtr ?? 0,
+            adx: pending.indicators?.adx ?? 0,
+            bbWidth: pending.indicators?.bbWidth ?? 0,
+            atrPct: pending.indicators?.atrPct ?? 0,
+            ema20: pending.indicators?.ema20 ?? 0,
+            ema50: pending.indicators?.regimeIndicators?.ema50 ?? 0,
+            ema200: pending.indicators?.ema200 ?? 0,
+            entryDistanceFromEma20: pending.indicators?.entryDistanceFromEma20 ?? 0,
+            entryDistanceFromEma20Percent: pending.indicators?.entryDistanceFromEma20Atr ?? 0,
+            entryDistanceFromEma20Atr: pending.indicators?.entryDistanceFromEma20Atr ?? 0,
+            entryTooExtended: pending.indicators?.entryTooExtended ?? false,
+            mlProbability: pending.indicators?.mlProbability ?? null,
+            mlThreshold: pending.indicators?.mlThreshold ?? null,
+            mlPassed: pending.indicators?.mlPassed ?? null,
+            mlTrainedAt: pending.indicators?.mlTrainedAt ?? null,
+            signalTime: pending.signalTime ?? Date.now(),
+            signalTimeIso: pending.signalTimeIso ?? new Date().toISOString(),
+
+            // TCE
+            tceScore: pending.indicators?.tce?.tceScore ?? null,
+            tceRegime: pending.indicators?.tce?.tceRegime ?? null,
+            tceReason: pending.indicators?.tce?.tceReason ?? null,
+            tceTrendAligned: pending.indicators?.tce?.tceTrendAligned ?? null,
+            tceErFast: pending.indicators?.tce?.tceErFast ?? null,
+            tceErSlow: pending.indicators?.tce?.tceErSlow ?? null,
+            tceRoomAtr: pending.indicators?.tce?.tceRoomAtr ?? null,
+            tceEntryExtensionAtr: pending.indicators?.tce?.tceEntryExtensionAtr ?? null,
+            tceCandleRangeAtr: pending.indicators?.tce?.tceCandleRangeAtr ?? null,
+            tceBodyRatio: pending.indicators?.tce?.tceBodyRatio ?? null
+          });
+          // <<< КОНЕЦ ВСТАВКИ
+          
           if (!pending.protectionStopLossOrderId || !pending.protectionTakeProfitOrderId) {
             await ensurePositionProtection(position, activeMarket);
           }
