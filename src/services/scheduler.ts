@@ -94,7 +94,13 @@ let mlTrainingReady = false;
 
 type SignalResult = {
   symbol: string;
-  status: 'signal' | 'no-signal' | 'position-open' | 'max-positions' | 'not-ready' | 'error';
+  status:
+    | 'signal'
+    | 'no-signal'
+    | 'position-open'
+    | 'max-positions'
+    | 'not-ready'
+    | 'error';
   regime: string;
   hasSignal: boolean;
   side?: 'long' | 'short' | 'none';
@@ -104,6 +110,9 @@ type SignalResult = {
   mlThreshold?: number | null;
   mlPassed?: boolean | null;
   mlTrainedAt?: string | null;
+  tceScore?: number | null;
+  tceRegime?: string | null;
+  tceReason?: string | null;
 };
 
 type PendingFilledOpen = {
@@ -305,6 +314,18 @@ function buildPositionMetadata(
     mlThreshold: indicators?.mlThreshold ?? null,
     mlPassed: indicators?.mlPassed ?? null,
     mlTrainedAt: indicators?.mlTrainedAt ?? null,
+
+    tceScore: indicators?.tce?.tceScore ?? null,
+    tceRegime: indicators?.tce?.tceRegime ?? null,
+    tceReason: indicators?.tce?.tceReason ?? null,
+    tceTrendAligned: indicators?.tce?.tceTrendAligned ?? null,
+    tceErFast: indicators?.tce?.tceErFast ?? null,
+    tceErSlow: indicators?.tce?.tceErSlow ?? null,
+    tceRoomAtr: indicators?.tce?.tceRoomAtr ?? null,
+    tceEntryExtensionAtr: indicators?.tce?.tceEntryExtensionAtr ?? null,
+    tceCandleRangeAtr: indicators?.tce?.tceCandleRangeAtr ?? null,
+    tceBodyRatio: indicators?.tce?.tceBodyRatio ?? null,
+    
     signalTime: signalTime ?? Date.now(),
     signalTimeIso: signalTimeIso ?? new Date().toISOString()
   };
@@ -536,6 +557,12 @@ async function checkSignals(): Promise<void> {
         const mlThreshold = (result as any).mlThreshold as number | null | undefined;
         const mlPassed = (result as any).mlPassed as boolean | null | undefined;
         const mlTrainedAt = (result as any).mlTrainedAt as string | null | undefined;
+        const tce = indicators?.tce ?? null;
+
+        const tceScore = tce?.tceScore ?? null;
+        const tceRegime = tce?.tceRegime ?? null;
+        const tceReason = tce?.tceReason ?? null;
+        
         const isTradingWindow = isTradingTimeUtcPlus4(new Date());
 
         logSignalCheck({
@@ -574,7 +601,18 @@ async function checkSignals(): Promise<void> {
           mlProbability: mlProbability ?? null,
           mlThreshold: mlThreshold ?? null,
           mlPassed: mlPassed ?? null,
-          mlTrainedAt: mlTrainedAt ?? null
+          mlTrainedAt: mlTrainedAt ?? null,
+
+          tceScore,
+          tceRegime,
+          tceReason,
+          tceTrendAligned: tce?.tceTrendAligned ?? null,
+          tceErFast: tce?.tceErFast ?? null,
+          tceErSlow: tce?.tceErSlow ?? null,
+          tceRoomAtr: tce?.tceRoomAtr ?? null,
+          tceEntryExtensionAtr: tce?.tceEntryExtensionAtr ?? null,
+          tceCandleRangeAtr: tce?.tceCandleRangeAtr ?? null,
+          tceBodyRatio: tce?.tceBodyRatio ?? null
         });
 
         if (skipReason || (!buy && !sell)) {
@@ -590,13 +628,31 @@ async function checkSignals(): Promise<void> {
             mlProbability,
             mlThreshold,
             mlPassed,
-            mlTrainedAt
+            mlTrainedAt,
+            tceScore,
+            tceRegime,
+            tceReason
           });
           continue;
         }
         if (side !== 'long' && side !== 'short') throw new Error('Signal side is invalid');
         if (!isTradingWindow) {
-          results.push({ symbol, status: 'no-signal', regime, hasSignal: false, side, price, reason: 'Outside trading window', mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+          results.push({
+            symbol,
+            status: 'no-signal',
+            regime,
+            hasSignal: false,
+            side,
+            price,
+            reason: 'Outside trading window',
+            mlProbability,
+            mlThreshold,
+            mlPassed,
+            mlTrainedAt,
+            tceScore,
+            tceRegime,
+            tceReason
+          });
           continue;
         }
 
@@ -611,7 +667,22 @@ async function checkSignals(): Promise<void> {
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
         if (!beginPositionOpening(symbol)) {
-          results.push({ symbol, status: 'not-ready', regime: 'opening', hasSignal: true, side, price: expectedPrice, reason: 'Opening already in progress', mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+          results.push({
+            symbol,
+            status: 'not-ready',
+            regime: 'opening',
+            hasSignal: true,
+            side,
+            price: expectedPrice,
+            reason: 'Opening already in progress',
+            mlProbability,
+            mlThreshold,
+            mlPassed,
+            mlTrainedAt,
+            tceScore,
+            tceRegime,
+            tceReason
+          });
           continue;
         }
 
@@ -626,7 +697,24 @@ async function checkSignals(): Promise<void> {
             const reason = executionResult.message ?? 'Execution failed';
             tradeError('POSITION_OPEN_FAILED', reason, { symbol, marketId, side, quantity, expectedPrice, status: executionResult.status, orderId: executionResult.orderId ?? null });
             if (executionResult.status === 'unknown') markReconciliationPending(symbol);
-            results.push({ symbol, status: executionResult.status === 'unknown' ? 'not-ready' : 'signal', regime, hasSignal: true, side, price: expectedPrice, reason, mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+            results.push({
+              symbol,
+              status: executionResult.status === 'unknown'
+                ? 'not-ready'
+                : 'signal',
+              regime,
+              hasSignal: true,
+              side,
+              price: expectedPrice,
+              reason,
+              mlProbability,
+              mlThreshold,
+              mlPassed,
+              mlTrainedAt,
+              tceScore,
+              tceRegime,
+              tceReason
+            });
             continue;
           }
 
@@ -671,7 +759,7 @@ async function checkSignals(): Promise<void> {
               const reason = `Filled but local state was not created: ${openResult.message}`;
               tradeError('LOCAL_POSITION_CREATE_FAILED', reason, { symbol, marketId, side, quantity: pending.filledQuantity, orderId: pending.orderId ?? null });
               errorsBySymbol.set(symbol, reason);
-              results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason, mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+              results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason, mlProbability, mlThreshold, mlPassed, mlTrainedAt, tceScore, tceRegime, tceReason });
               continue;
             }
           }
@@ -685,7 +773,22 @@ async function checkSignals(): Promise<void> {
           }
           clearPendingFilledOpen(symbol);
           unlockSymbol(symbol);
-          results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened and protected', mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+          results.push({
+            symbol,
+            status: 'signal',
+            regime,
+            hasSignal: true,
+            side,
+            price: expectedPrice,
+            reason: 'Position opened and protected',
+            mlProbability,
+            mlThreshold,
+            mlPassed,
+            mlTrainedAt,
+            tceScore,
+            tceRegime,
+            tceReason
+          });
           if (!PAPER_TRADING && signerClient) {
             await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol }));
           }
@@ -704,7 +807,16 @@ async function checkSignals(): Promise<void> {
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
         tradeError('SIGNAL_CHECK_FAILED', error, { symbol });
         errorsBySymbol.set(symbol, message);
-        results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
+        results.push({
+          symbol,
+          status: 'error',
+          regime: 'error',
+          hasSignal: false,
+          reason: message,
+          tceScore: typeof tceScore !== 'undefined' ? tceScore : null,
+          tceRegime: typeof tceRegime !== 'undefined' ? tceRegime : null,
+          tceReason: typeof tceReason !== 'undefined' ? tceReason : null
+        });
       }
     }
     await sendAggregatedSignalSummary({
