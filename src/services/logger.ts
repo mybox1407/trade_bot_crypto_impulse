@@ -1,3 +1,5 @@
+// src/services/logger.ts
+
 import fs from 'fs';
 import path from 'path';
 
@@ -48,7 +50,18 @@ const FILE_HEADERS: Record<string, string[]> = {
     'mlProbability',
     'mlThreshold',
     'mlPassed',
-    'mlTrainedAt'
+    'mlTrainedAt',
+    // TCE
+    'tceScore',
+    'tceRegime',
+    'tceReason',
+    'tceTrendAligned',
+    'tceErFast',
+    'tceErSlow',
+    'tceRoomAtr',
+    'tceEntryExtensionAtr',
+    'tceCandleRangeAtr',
+    'tceBodyRatio'
   ],
 
   'position_open_log.csv': [
@@ -89,7 +102,18 @@ const FILE_HEADERS: Record<string, string[]> = {
     'mlPassed',
     'mlTrainedAt',
     'signalTime',
-    'signalTimeIso'
+    'signalTimeIso',
+    // TCE
+    'tceScore',
+    'tceRegime',
+    'tceReason',
+    'tceTrendAligned',
+    'tceErFast',
+    'tceErSlow',
+    'tceRoomAtr',
+    'tceEntryExtensionAtr',
+    'tceCandleRangeAtr',
+    'tceBodyRatio'
   ],
 
   'position_check_log.csv': [
@@ -298,6 +322,17 @@ export function logSignalCheck(row: {
   mlThreshold?: number | null;
   mlPassed?: boolean | null;
   mlTrainedAt?: string | null;
+  // TCE
+  tceScore?: number | null;
+  tceRegime?: string | null;
+  tceReason?: string | null;
+  tceTrendAligned?: boolean | null;
+  tceErFast?: number | null;
+  tceErSlow?: number | null;
+  tceRoomAtr?: number | null;
+  tceEntryExtensionAtr?: number | null;
+  tceCandleRangeAtr?: number | null;
+  tceBodyRatio?: number | null;
 }): void {
   writeRow(
     'signal_log.csv',
@@ -344,6 +379,17 @@ export function logPositionOpen(row: {
   mlTrainedAt?: string | null;
   signalTime?: number;
   signalTimeIso?: string;
+  // TCE
+  tceScore?: number | null;
+  tceRegime?: string | null;
+  tceReason?: string | null;
+  tceTrendAligned?: boolean | null;
+  tceErFast?: number | null;
+  tceErSlow?: number | null;
+  tceRoomAtr?: number | null;
+  tceEntryExtensionAtr?: number | null;
+  tceCandleRangeAtr?: number | null;
+  tceBodyRatio?: number | null;
 }): void {
   writeRow(
     'position_open_log.csv',
