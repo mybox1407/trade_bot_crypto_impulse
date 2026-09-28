@@ -43,7 +43,8 @@ import {
 import {
   notifyStartup,
   notifyError,
-  sendAggregatedSignalSummary
+  sendAggregatedSignalSummary,
+  notifyPositionOpen  
 } from './telegram';
 import {
   refreshTopMarkets,
