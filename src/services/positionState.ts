@@ -86,6 +86,16 @@ export interface VirtualPosition {
     entryDistanceFromEma20Atr?: number;
     signalTime?: number;
     signalTimeIso?: string;
+    tceScore?: number | null;
+    tceRegime?: string | null;
+    tceReason?: string | null;
+    tceTrendAligned?: boolean | null;
+    tceErFast?: number | null;
+    tceErSlow?: number | null;
+    tceRoomAtr?: number | null;
+    tceEntryExtensionAtr?: number | null;
+    tceCandleRangeAtr?: number | null;
+    tceBodyRatio?: number | null;
   };
 }
 
@@ -384,8 +394,6 @@ export function openPosition(data: {
     entryTooExtended: data.metadata?.entryTooExtended ?? false,
     signalTime: data.metadata?.signalTime,
     signalTimeIso: data.metadata?.signalTimeIso,
-
-    // TCE
     tceScore: data.metadata?.tceScore ?? null,
     tceRegime: data.metadata?.tceRegime ?? null,
     tceReason: data.metadata?.tceReason ?? null,
