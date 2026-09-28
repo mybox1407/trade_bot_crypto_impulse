@@ -31,7 +31,7 @@ export interface Candle {
   volume: number;
 }
 
-type TceMetrics = {
+export type TceMetrics = {
   tceScore: number;
   tceRegime: 'strong' | 'medium' | 'weak' | 'unknown';
   tceReason: string;
