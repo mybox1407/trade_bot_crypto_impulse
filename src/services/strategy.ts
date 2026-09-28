@@ -12,6 +12,12 @@ import {
   MlPredictionResult
 } from './ml/mlModel';
 
+import {
+  calculateTce,
+  TCE_STRONG_MIN,
+  type TceMetrics
+} from './tce';
+
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
@@ -20,27 +26,33 @@ export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
 export const ENABLE_ML_FILTER = false;
 
-// ⭐ Cooldown после сделки (1 час = 3600000 мс)
+// TCE применяется последним фильтром. Сделка допускается только при TCE strong.
+export const ENABLE_TCE_FILTER = true;
+
+// История должна быть не короче EMA200. Рекомендуется передавать 300+ закрытых 15m свечей.
+export const TCE_REQUIRED_CANDLES = 250;
+
+// Cooldown после сделки (1 час = 3600000 мс)
 export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [
   [0, 24]
 ];
 
-export const MIN_ENTRY_RSI_SHORT = 38; 
-export const MAX_ENTRY_RSI_SHORT = 42; 
+export const MIN_ENTRY_RSI_SHORT = 38;
+export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 64;
 
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 28; 
+export const MIN_ENTRY_ADX_LONG = 28;
 export const MAX_ENTRY_ADX = 40;
 
 export const MIN_LAST_ATR_PCT = 0.005;
 export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
-export const MIN_BB_WIDTH_LONG = 0.05; 
+export const MIN_BB_WIDTH_LONG = 0.05;
 export const MAX_BB_WIDTH_LONG = 0.090;
 export const MIN_BB_WIDTH_SHORT = 0.05;
 
@@ -57,7 +69,6 @@ export const STOP_LOSS_ATR_MULTIPLIER = 2.8;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 3.8;
 export const ENABLE_TRAILING_STOP = false;
 
-// ⭐ Хранилище cooldown по символам
 const symbolCooldowns = new Map<string, number>();
 
 function getUtcPlus4(date = new Date()): number {
@@ -113,7 +124,6 @@ export function getTradingTimeSkipReason(date = new Date()): string | null {
   return getTradingWindowCheck(date).message;
 }
 
-// ⭐ Получение оставшегося времени cooldown (мс)
 export function getCooldownRemainingMs(
   lastTradeAt: Date | number | string | null | undefined,
   now = new Date()
@@ -130,44 +140,30 @@ export function getCooldownRemainingMs(
   if (!Number.isFinite(lastTradeMs)) return 0;
 
   const remainingMs = lastTradeMs + SYMBOL_COOLDOWN_MS - now.getTime();
-
   return Math.max(0, remainingMs);
 }
 
-// ⭐ Проверка cooldown для символа
 export function isSymbolOnCooldown(symbol: string, now = new Date()): boolean {
   const key = symbol.toUpperCase();
   const cooldownEnd = symbolCooldowns.get(key);
-  
-  if (cooldownEnd == null) {
-    return false;
-  }
-  
+
+  if (cooldownEnd == null) return false;
   return now.getTime() < cooldownEnd;
 }
 
-// ⭐ Установка cooldown для символа
 export function setSymbolCooldown(symbol: string, now = new Date()): void {
   const key = symbol.toUpperCase();
-  const cooldownEnd = now.getTime() + SYMBOL_COOLDOWN_MS;
-  symbolCooldowns.set(key, cooldownEnd);
+  symbolCooldowns.set(key, now.getTime() + SYMBOL_COOLDOWN_MS);
 }
 
-// ⭐ Очистка cooldown для символа (если нужно вручную)
 export function clearSymbolCooldown(symbol: string): void {
-  const key = symbol.toUpperCase();
-  symbolCooldowns.delete(key);
+  symbolCooldowns.delete(symbol.toUpperCase());
 }
 
-// ⭐ Получение оставшегося времени cooldown (мс)
 export function getRemainingCooldownMs(symbol: string, now = new Date()): number {
-  const key = symbol.toUpperCase();
-  const cooldownEnd = symbolCooldowns.get(key);
-  
-  if (cooldownEnd == null) {
-    return 0;
-  }
-  
+  const cooldownEnd = symbolCooldowns.get(symbol.toUpperCase());
+  if (cooldownEnd == null) return 0;
+
   const remaining = cooldownEnd - now.getTime();
   return remaining > 0 ? remaining : 0;
 }
@@ -255,6 +251,7 @@ export type StrategyIndicators = {
   entryDistanceFromEma20: number | null;
   entryDistanceFromEma20Atr: number | null;
   isCandleClosed: boolean;
+  tce: TceMetrics | null;
 };
 
 export type StrategyResult = {
@@ -297,9 +294,7 @@ type SignalState = {
   positionSize: number | null;
 };
 
-function resetSignalState(
-  state: SignalState
-): SignalState {
+function resetSignalState(state: SignalState): SignalState {
   return {
     ...state,
     buy: false,
@@ -432,26 +427,15 @@ export function canOpenTrade(params: {
   } = params;
 
   if (!isTradingTimeUtcPlus4(now)) return false;
-
-  // ⭐ Проверка cooldown
-  if (isSymbolOnCooldown(symbol, now)) {
-    return false;
-  }
+  if (isSymbolOnCooldown(symbol, now)) return false;
 
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
     if (LONG_BLACKLIST.includes(baseSymbol)) return false;
   }
 
-  // MACD-фильтр: Лонг + CrossDown = отклонить
-  if (side === 'long' && macdCrossDown === true) {
-    return false;
-  }
-
-  // MACD-фильтр: Шорт + CrossUp = отклонить
-  if (side === 'short' && macdCrossUp === true) {
-    return false;
-  }
+  if (side === 'long' && macdCrossDown) return false;
+  if (side === 'short' && macdCrossUp) return false;
 
   if (side === 'short') {
     if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
@@ -480,7 +464,6 @@ export function canOpenTrade(params: {
   const minBbWidth = side === 'long'
     ? MIN_BB_WIDTH_LONG
     : MIN_BB_WIDTH_SHORT;
-
   const maxBbWidth = side === 'long'
     ? MAX_BB_WIDTH_LONG
     : Infinity;
@@ -575,7 +558,8 @@ export async function analyzeMarket(
         priceVsEma200: null,
         entryDistanceFromEma20: null,
         entryDistanceFromEma20Atr: null,
-        isCandleClosed: false
+        isCandleClosed: false,
+        tce: null
       }
     };
   }
@@ -621,6 +605,7 @@ export async function analyzeMarket(
   let mlThreshold: number | null = null;
   let mlPassed: boolean | null = null;
   let mlTrainedAt: string | null = null;
+  let tce: TceMetrics | null = null;
 
   if (!tradingWindow.allowed) {
     skipReason = tradingWindow.message;
@@ -734,7 +719,6 @@ export async function analyzeMarket(
     takeProfitPrice = resetState.takeProfitPrice;
     stopLossPrice = resetState.stopLossPrice;
     positionSize = resetState.positionSize;
-
     skipReason = `Trading disabled for regime: ${regime}`;
   }
 
@@ -758,7 +742,6 @@ export async function analyzeMarket(
       takeProfitPrice = resetState.takeProfitPrice;
       stopLossPrice = resetState.stopLossPrice;
       positionSize = resetState.positionSize;
-
       skipReason =
         `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
         `(max 1.00 ATR)`;
@@ -794,7 +777,6 @@ export async function analyzeMarket(
       takeProfitPrice = resetState.takeProfitPrice;
       stopLossPrice = resetState.stopLossPrice;
       positionSize = resetState.positionSize;
-
       skipReason =
         `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
         `(max ${maxEntryExtensionAtr.toFixed(2)} ATR)`;
@@ -843,7 +825,6 @@ export async function analyzeMarket(
       positionSize = resetState.positionSize;
 
       if (skipReason == null) {
-        // ⭐ Проверка, является ли причина cooldown
         if (isSymbolOnCooldown(symbol, now)) {
           const remainingMs = getRemainingCooldownMs(symbol, now);
           const remainingMin = Math.ceil(remainingMs / 60000);
@@ -871,21 +852,20 @@ export async function analyzeMarket(
       : 0;
 
     try {
-      const prediction: MlPredictionResult =
-        await predictTrade({
-          entryPrice: price,
-          ema20: regimeIndicators.ema20,
-          ema50: regimeIndicators.ema50,
-          ema200: regimeIndicators.ema200,
-          lastRsi,
-          adx: regimeIndicators.adx,
-          bbWidth: regimeIndicators.bbWidth,
-          atrPct: regimeIndicators.atrPct,
-          lastAtr,
-          entryDistanceFromEma20Atr,
-          side,
-          openedAt: signalTimeIso
-        });
+      const prediction: MlPredictionResult = await predictTrade({
+        entryPrice: price,
+        ema20: regimeIndicators.ema20,
+        ema50: regimeIndicators.ema50,
+        ema200: regimeIndicators.ema200,
+        lastRsi,
+        adx: regimeIndicators.adx,
+        bbWidth: regimeIndicators.bbWidth,
+        atrPct: regimeIndicators.atrPct,
+        lastAtr,
+        entryDistanceFromEma20Atr,
+        side,
+        openedAt: signalTimeIso
+      });
 
       mlProbability = prediction.probability;
       mlThreshold = prediction.threshold;
@@ -908,7 +888,6 @@ export async function analyzeMarket(
         takeProfitPrice = resetState.takeProfitPrice;
         stopLossPrice = resetState.stopLossPrice;
         positionSize = resetState.positionSize;
-
         skipReason =
           `ML filter rejected trade: ` +
           `probability=${prediction.probability.toFixed(4)}, ` +
@@ -930,14 +909,78 @@ export async function analyzeMarket(
       takeProfitPrice = resetState.takeProfitPrice;
       stopLossPrice = resetState.stopLossPrice;
       positionSize = resetState.positionSize;
-
       mlPassed = false;
 
-      const message = error instanceof Error
-        ? error.message
-        : String(error);
-
+      const message = error instanceof Error ? error.message : String(error);
       skipReason = `ML prediction failed: ${message}`;
+    }
+  }
+
+  // Последний шлюз перед расчётом позиции и передачей сделки на исполнение.
+  // strict: medium, weak и unknown не допускают вход.
+  if (
+    ENABLE_TCE_FILTER &&
+    side !== 'none' &&
+    stopLossPrice != null
+  ) {
+    const sideBeforeTce = side;
+
+    try {
+      tce = calculateTce(
+        candles,
+        sideBeforeTce,
+        price,
+        regimeIndicators.ema20,
+        regimeIndicators.ema50,
+        regimeIndicators.ema200
+      );
+
+      const tcePassed =
+        tce.tceRegime === 'strong' &&
+        Number.isFinite(tce.tceScore) &&
+        tce.tceScore >= TCE_STRONG_MIN;
+
+      if (!tcePassed) {
+        const resetState = resetSignalState({
+          buy,
+          sell,
+          side,
+          takeProfitPrice,
+          stopLossPrice,
+          positionSize
+        });
+
+        buy = resetState.buy;
+        sell = resetState.sell;
+        side = resetState.side;
+        takeProfitPrice = resetState.takeProfitPrice;
+        stopLossPrice = resetState.stopLossPrice;
+        positionSize = resetState.positionSize;
+
+        skipReason =
+          `TCE filter rejected ${sideBeforeTce}: ` +
+          `score=${Number.isFinite(tce.tceScore) ? tce.tceScore : '-'}, ` +
+          `regime=${tce.tceRegime}, ` +
+          `reason=${tce.tceReason}`;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      skipReason = `TCE filter failed: ${message}`;
     }
   }
 
@@ -986,7 +1029,7 @@ export async function analyzeMarket(
       bbMiddle: lastBb.middle,
       bbLower: lastBb.lower,
       regimeReady: regimeInfo.ready,
-      regimeIndicators: regimeIndicators,
+      regimeIndicators,
       entryExtensionAtr,
       maxEntryExtensionAtr,
       entryTooExtended,
@@ -1002,7 +1045,8 @@ export async function analyzeMarket(
         : null,
       entryDistanceFromEma20: entryDistanceFromEma20ForLog,
       entryDistanceFromEma20Atr: entryDistanceFromEma20AtrForLog,
-      isCandleClosed: false
+      isCandleClosed: false,
+      tce
     }
   };
 }
@@ -1014,10 +1058,18 @@ export async function notifyStrategyResult(
   symbol: string,
   sendTelegramMessage: TelegramSender
 ): Promise<void> {
+  const tce = result.indicators.tce;
+  const tceText = tce == null
+    ? 'TCE: -'
+    : `TCE score: ${Number.isFinite(tce.tceScore) ? tce.tceScore : '-'}\n` +
+      `TCE regime: ${tce.tceRegime}\n` +
+      `TCE reason: ${tce.tceReason}`;
+
   if (result.skipReason != null) {
     await sendTelegramMessage(
       `⚠️ ${symbol}\n` +
       `${result.skipReason}\n` +
+      `${tceText}\n` +
       `ML probability: ${result.mlProbability != null
         ? result.mlProbability.toFixed(4)
         : '-'}\n` +
@@ -1031,6 +1083,11 @@ export async function notifyStrategyResult(
 
   if (result.buy || result.sell) {
     const direction = result.buy ? 'LONG' : 'SHORT';
+    const tceDetails = tce == null
+      ? ''
+      : `\nTCE room ATR: ${Number.isFinite(tce.tceRoomAtr) ? tce.tceRoomAtr.toFixed(3) : '-'}\n` +
+        `TCE ER fast/slow: ${Number.isFinite(tce.tceErFast) ? tce.tceErFast.toFixed(3) : '-'} / ` +
+        `${Number.isFinite(tce.tceErSlow) ? tce.tceErSlow.toFixed(3) : '-'}`;
 
     await sendTelegramMessage(
       `📊 ${symbol} ${direction}\n` +
@@ -1043,6 +1100,8 @@ export async function notifyStrategyResult(
       `ATR %: ${(result.indicators.atrPct * 100).toFixed(3)}%\n` +
       `BB Width: ${result.indicators.bbWidth.toFixed(5)}\n` +
       `Distance EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\n` +
+      `${tceText}` +
+      `${tceDetails}\n` +
       `ML probability: ${result.mlProbability?.toFixed(4) ?? '-'}\n` +
       `ML threshold: ${result.mlThreshold?.toFixed(4) ?? '-'}\n` +
       `Режим: ${result.regime}`
