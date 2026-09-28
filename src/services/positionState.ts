@@ -383,7 +383,19 @@ export function openPosition(data: {
     entryDistanceFromEma20Atr: data.metadata?.entryDistanceFromEma20Atr ?? 0,
     entryTooExtended: data.metadata?.entryTooExtended ?? false,
     signalTime: data.metadata?.signalTime,
-    signalTimeIso: data.metadata?.signalTimeIso
+    signalTimeIso: data.metadata?.signalTimeIso,
+
+    // TCE
+    tceScore: data.metadata?.tceScore ?? null,
+    tceRegime: data.metadata?.tceRegime ?? null,
+    tceReason: data.metadata?.tceReason ?? null,
+    tceTrendAligned: data.metadata?.tceTrendAligned ?? null,
+    tceErFast: data.metadata?.tceErFast ?? null,
+    tceErSlow: data.metadata?.tceErSlow ?? null,
+    tceRoomAtr: data.metadata?.tceRoomAtr ?? null,
+    tceEntryExtensionAtr: data.metadata?.tceEntryExtensionAtr ?? null,
+    tceCandleRangeAtr: data.metadata?.tceCandleRangeAtr ?? null,
+    tceBodyRatio: data.metadata?.tceBodyRatio ?? null
   });
 
   notifyPositionOpen({
