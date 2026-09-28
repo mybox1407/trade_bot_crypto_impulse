@@ -37,7 +37,8 @@ import {
 import {
   logPositionCheck,
   logError,
-  logSignalCheck
+  logSignalCheck,
+  logPositionOpen
 } from './logger';
 import {
   notifyStartup,
