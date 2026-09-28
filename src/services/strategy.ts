@@ -18,6 +18,8 @@ import {
   type TceMetrics
 } from './tce';
 
+import type { Candle } from './lighterWs'; 
+
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
@@ -195,15 +197,6 @@ function findLocalExtremum(
     : Math.max(...slice.map(candle => candle.high));
 
   return { extremePrice };
-}
-
-export interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
 }
 
 export type MarketRegime =
