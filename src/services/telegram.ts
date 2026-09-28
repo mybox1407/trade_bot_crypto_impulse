@@ -262,9 +262,6 @@ export function notifyStartup(data: {
   signalInterval: number;
   positionInterval: number;
   balance: number;
-  mlModelAvailable?: boolean;
-  mlTrainedAt?: string | null;
-  mlTrainingRows?: number | null;
 }) {
   const mlStatus =
     data.mlModelAvailable == null
@@ -280,9 +277,6 @@ export function notifyStartup(data: {
     `Signal Check: every ${data.signalInterval}s\n` +
     `Position Check: every ${data.positionInterval}s\n\n` +
     `Balance: $${data.balance.toFixed(2)}\n` +
-    `ML Model: ${mlStatus}\n` +
-    `ML Trained At: ${data.mlTrainedAt ?? 'N/A'}\n` +
-    `ML Training Rows: ${data.mlTrainingRows ?? 'N/A'}\n\n` +
     `Bot is running...\n\n` +
     `${new Date().toISOString()}`;
 
@@ -299,10 +293,6 @@ export function notifySignalCheck(data: {
   side?: 'long' | 'short';
   price?: number;
   reason?: string;
-  mlProbability?: number | null;
-  mlThreshold?: number | null;
-  mlPassed?: boolean | null;
-  mlTrainedAt?: string | null;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -319,20 +309,6 @@ export function notifySignalCheck(data: {
       ? `${data.side?.toUpperCase()} @ ` +
         `${data.price?.toFixed(4)}`
       : 'No signal';
-
-  const mlText =
-    `ML Probability: ${data.mlProbability != null
-      ? data.mlProbability.toFixed(4)
-      : 'N/A'}\n` +
-    `ML Threshold: ${data.mlThreshold != null
-      ? data.mlThreshold.toFixed(4)
-      : 'N/A'}\n` +
-    `ML Passed: ${data.mlPassed == null
-      ? 'N/A'
-      : data.mlPassed
-        ? 'YES'
-        : 'NO'}\n` +
-    `ML Trained At: ${data.mlTrainedAt ?? 'N/A'}`;
 
   const tceText =
     `TCE Score: ${data.tceScore != null && Number.isFinite(data.tceScore)
