@@ -1,10 +1,38 @@
-import { getCandles } from './exchange';
+import { getCandles, Candle } from './exchange';
 import {
   analyzeMarket,
   detectMarketRegime,
   StrategyResult
 } from './strategy';
 import { logSignalCheck } from './logger';
+
+// 15m в миллисекундах
+const TIMEFRAME_15M_MS = 15 * 60 * 1000;
+
+/**
+ * Оставляет только закрытые 15m-свечи.
+ * time — время открытия свечи.
+ * Свеча считается закрытой, когда наступило время открытия следующей свечи.
+ */
+function getClosedCandles<T extends { time: number }>(
+  candles: T[],
+  now = Date.now()
+): T[] {
+  if (candles.length === 0) return [];
+
+  const nowMs = now < 1_000_000_000_000
+    ? now * 1000
+    : now;
+
+  return candles.filter(candle => {
+    const candleMs = candle.time < 1_000_000_000_000
+      ? candle.time * 1000
+      : candle.time;
+
+    // time — открытие свечи. Закрыта, если уже наступило время следующей 15m-свечи.
+    return candleMs + TIMEFRAME_15M_MS <= nowMs;
+  });
+}
 
 export type BotRunResult =
   | {
@@ -38,8 +66,20 @@ export async function runBotOnce(
     };
   }
 
+  // Оставляем только закрытые свечи — текущую незакрытую не используем.
+  const closedCandles = getClosedCandles(candles, Date.now());
+
+  if (closedCandles.length < 200) {
+    return {
+      symbol,
+      timeframe,
+      ready: false,
+      reason: 'not_enough_closed_candles'
+    };
+  }
+
   const result = await analyzeMarket(
-    candles,
+    closedCandles,
     symbol,
     undefined,
     new Date()
@@ -47,6 +87,8 @@ export async function runBotOnce(
 
   const indicators = result.indicators;
   const hasSignal = result.buy || result.sell;
+
+  const tce = indicators.tce ?? null;
 
   logSignalCheck({
     timestamp: new Date().toISOString(),
@@ -85,7 +127,18 @@ export async function runBotOnce(
     mlProbability: result.mlProbability,
     mlThreshold: result.mlThreshold,
     mlPassed: result.mlPassed,
-    mlTrainedAt: result.mlTrainedAt
+    mlTrainedAt: result.mlTrainedAt,
+    // TCE
+    tceScore: tce?.tceScore ?? null,
+    tceRegime: tce?.tceRegime ?? null,
+    tceReason: tce?.tceReason ?? null,
+    tceTrendAligned: tce?.tceTrendAligned ?? null,
+    tceErFast: tce?.tceErFast ?? null,
+    tceErSlow: tce?.tceErSlow ?? null,
+    tceRoomAtr: tce?.tceRoomAtr ?? null,
+    tceEntryExtensionAtr: tce?.tceEntryExtensionAtr ?? null,
+    tceCandleRangeAtr: tce?.tceCandleRangeAtr ?? null,
+    tceBodyRatio: tce?.tceBodyRatio ?? null
   });
 
   return {
@@ -115,9 +168,20 @@ export async function getMarketRegimeOnce(
     };
   }
 
+  const closedCandles = getClosedCandles(candles, Date.now());
+
+  if (closedCandles.length < 200) {
+    return {
+      symbol,
+      timeframe,
+      ready: false,
+      reason: 'not_enough_closed_candles'
+    };
+  }
+
   return {
     symbol,
     timeframe,
-    ...detectMarketRegime(candles)
+    ...detectMarketRegime(closedCandles)
   };
 }
