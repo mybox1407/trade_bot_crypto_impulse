@@ -1,4 +1,5 @@
-import { getCandles, Candle } from './exchange';
+import { getCandles } from './exchange';
+import { Candle } from './lighterWs'; 
 import {
   analyzeMarket,
   detectMarketRegime,
