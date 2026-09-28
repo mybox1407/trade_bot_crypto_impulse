@@ -1,16 +1,3 @@
-/*
- * scheduler.ts — corrected fill/local-state synchronization + ML metadata.
- *
- * Important contract:
- * - beginPositionOpening/endPositionOpening protect only order submission.
- * - openPosition must not reject a confirmed fill because an opening request
- *   is still marked as active.
- * - A confirmed fill is persisted in pending reconciliation state before any
- *   local-state failure is reported.
- * - Remote positions without local state are restored only when enough
- *   information is available; otherwise the symbol remains blocked.
- */
-
 import {
   SIGNAL_CHECK_INTERVAL_MS,
   POSITION_CHECK_INTERVAL_MS
