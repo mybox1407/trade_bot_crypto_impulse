@@ -246,13 +246,6 @@ export function notifyStartup(data: {
   positionInterval: number;
   balance: number;
 }) {
-  const mlStatus =
-    data.mlModelAvailable == null
-      ? 'N/A'
-      : data.mlModelAvailable
-        ? 'AVAILABLE'
-        : 'NOT AVAILABLE';
-
   const text =
     `🤖 TRADING BOT STARTED 🤖\n\n` +
     `Port: ${data.port}\n` +
@@ -305,7 +298,6 @@ export function notifySignalCheck(data: {
     `Regime: ${data.regime}\n` +
     `Signal: ${signalText}\n` +
     `Reason: ${data.reason ?? 'Conditions not met'}\n` +
-    `${mlText}\n` +
     `${tceText}\n\n` +
     `${new Date().toISOString()}`;
 
