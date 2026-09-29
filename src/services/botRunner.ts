@@ -125,11 +125,6 @@ export async function runBotOnce(
     entryTooExtended: indicators.entryTooExtended,
     signalTimeIso: result.signalTimeIso,
     isTradingWindow: result.skipReason == null,
-    mlProbability: result.mlProbability,
-    mlThreshold: result.mlThreshold,
-    mlPassed: result.mlPassed,
-    mlTrainedAt: result.mlTrainedAt,
-    // TCE
     tceScore: tce?.tceScore ?? null,
     tceRegime: tce?.tceRegime ?? null,
     tceReason: tce?.tceReason ?? null,
