@@ -51,7 +51,7 @@ export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
 export const MIN_BB_WIDTH_LONG = 0.05;
-export const MAX_BB_WIDTH_LONG = 0.085;
+export const MAX_BB_WIDTH_LONG = 0.075;
 export const MIN_BB_WIDTH_SHORT = 0.05;
 export const MAX_BB_WIDTH_SHORT = 0.07;
 
