@@ -8,11 +8,6 @@ import {
 } from 'technicalindicators';
 
 import {
-  predictTrade,
-  MlPredictionResult
-} from './ml/mlModel';
-
-import {
   calculateTce,
   TCE_STRONG_MIN,
   type TceMetrics
@@ -26,7 +21,6 @@ export const TRADE_FEE_RATE = 0.0;
 
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
-export const ENABLE_ML_FILTER = false;
 
 // TCE применяется последним фильтром. Сделка допускается только при TCE strong.
 export const ENABLE_TCE_FILTER = true;
@@ -225,6 +219,24 @@ type RegimeIndicators = {
   avgVol20: number;
 };
 
+// ← НОВЫЙ тип для результата проверки фильтров
+type FilterCheckResult = {
+  passed: boolean;
+  failedFilter?: string;
+  details?: {
+    rsiOk: boolean;
+    adxOk: boolean;
+    atrPctOk: boolean;
+    bbWidthOk: boolean;
+    entryDistanceAtrOk: boolean;
+    entryTooExtendedOk: boolean;
+    macdOk: boolean;
+    tradingWindowOk: boolean;
+    cooldownOk: boolean;
+    blacklistOk: boolean;
+  };
+};
+
 export type StrategyIndicators = {
   macdCrossUp: boolean;
   macdCrossDown: boolean;
@@ -264,10 +276,6 @@ export type StrategyResult = {
   skipReason: string | null;
   signalTime: number;
   signalTimeIso: string;
-  mlProbability: number | null;
-  mlThreshold: number | null;
-  mlPassed: boolean | null;
-  mlTrainedAt: string | null;
   indicators: StrategyIndicators;
 };
 
@@ -396,6 +404,7 @@ export function detectMarketRegime(candles: Candle[]): {
   };
 }
 
+// ← ИЗМЕНЁННАЯ функция canOpenTrade
 export function canOpenTrade(params: {
   symbol: string;
   side: 'long' | 'short' | 'none';
@@ -409,7 +418,7 @@ export function canOpenTrade(params: {
   macdCrossUp?: boolean;
   macdCrossDown?: boolean;
   now?: Date;
-}): boolean {
+}): FilterCheckResult {
   const {
     symbol,
     side,
@@ -424,41 +433,98 @@ export function canOpenTrade(params: {
     now = new Date()
   } = params;
 
-  if (!isTradingTimeUtcPlus4(now)) return false;
-  if (isSymbolOnCooldown(symbol, now)) return false;
+  const details: FilterCheckResult['details'] = {
+    rsiOk: true,
+    adxOk: true,
+    atrPctOk: true,
+    bbWidthOk: true,
+    entryDistanceAtrOk: true,
+    entryTooExtendedOk: true,
+    macdOk: true,
+    tradingWindowOk: true,
+    cooldownOk: true,
+    blacklistOk: true
+  };
+
+  if (!isTradingTimeUtcPlus4(now)) {
+    details.tradingWindowOk = false;
+    return { passed: false, failedFilter: 'trading_window', details };
+  }
+
+  if (isSymbolOnCooldown(symbol, now)) {
+    details.cooldownOk = false;
+    return { passed: false, failedFilter: 'cooldown', details };
+  }
 
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
-    if (LONG_BLACKLIST.includes(baseSymbol)) return false;
+    if (LONG_BLACKLIST.includes(baseSymbol)) {
+      details.blacklistOk = false;
+      return { passed: false, failedFilter: 'blacklist', details };
+    }
   }
 
-  if (side === 'long' && macdCrossDown) return false;
-  if (side === 'short' && macdCrossUp) return false;
+  if (side === 'long' && macdCrossDown) {
+    details.macdOk = false;
+    return { passed: false, failedFilter: 'macd_cross_down', details };
+  }
+  if (side === 'short' && macdCrossUp) {
+    details.macdOk = false;
+    return { passed: false, failedFilter: 'macd_cross_up', details };
+  }
 
+  // RSI filter
   if (side === 'short') {
     if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
-      return false;
+      details.rsiOk = false;
+      return {
+        passed: false,
+        failedFilter: 'rsi',
+        details,
+      };
     }
   } else if (side === 'long') {
     if (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG) {
-      return false;
+      details.rsiOk = false;
+      return {
+        passed: false,
+        failedFilter: 'rsi',
+        details,
+      };
     }
   } else {
-    return false;
+    return { passed: false, failedFilter: 'invalid_side', details };
   }
 
+  // ATR% filter
   const maxAtrPct = side === 'long'
     ? MAX_LAST_ATR_PCT_LONG
     : MAX_LAST_ATR_PCT_SHORT;
 
-  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return false;
+  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) {
+    details.atrPctOk = false;
+    return {
+      passed: false,
+      failedFilter: 'atr_pct',
+      details,
+    };
+  }
 
+  // ADX filter
   const minAdx = side === 'short'
     ? MIN_ENTRY_ADX_SHORT
     : MIN_ENTRY_ADX_LONG;
 
-  if (adx < minAdx || adx > MAX_ENTRY_ADX) return false;
+  if (adx < minAdx || adx > MAX_ENTRY_ADX) {
+    details.adxOk = false;
+    return {
+      passed: false,
+      failedFilter: 'adx',
+      details,
+    };
+  }
 
+  // BB Width filter
   const minBbWidth = side === 'long'
     ? MIN_BB_WIDTH_LONG
     : MIN_BB_WIDTH_SHORT;
@@ -466,22 +532,48 @@ export function canOpenTrade(params: {
     ? MAX_BB_WIDTH_LONG
     : MAX_BB_WIDTH_SHORT;
 
-  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return false;
+  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) {
+    details.bbWidthOk = false;
+    return {
+      passed: false,
+      failedFilter: 'bb_width',
+      details,
+    };
+  }
 
-  // Асимметричные лимиты для лонга и шорта
+  // entryDistanceFromEma20Atr filter
   const maxEntryDistanceAtr = side === 'long'
     ? MAX_ENTRY_EXTENSION_TREND_ATR_LONG
     : MAX_ENTRY_EXTENSION_TREND_ATR_SHORT;
 
   if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
-    return false;
+    details.entryDistanceAtrOk = false;
+    return {
+      passed: false,
+      failedFilter: 'entry_distance_atr_low',
+      details,
+    };
   }
   if (entryDistanceFromEma20Atr > maxEntryDistanceAtr) {
-    return false;
+    details.entryDistanceAtrOk = false;
+    return {
+      passed: false,
+      failedFilter: 'entry_distance_atr_high',
+      details,
+    };
   }
-  if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return false;
 
-  return true;
+  // entryTooExtended filter
+  if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) {
+    details.entryTooExtendedOk = false;
+    return {
+      passed: false,
+      failedFilter: 'entry_too_extended',
+      details,
+    };
+  }
+
+  return { passed: true, details };
 }
 
 export async function analyzeMarket(
@@ -535,10 +627,6 @@ export async function analyzeMarket(
       skipReason: 'Indicators not ready',
       signalTime,
       signalTimeIso,
-      mlProbability: null,
-      mlThreshold: null,
-      mlPassed: null,
-      mlTrainedAt: null,
       indicators: {
         macdCrossUp: false,
         macdCrossDown: false,
@@ -605,10 +693,6 @@ export async function analyzeMarket(
   let entryExtensionAtr: number | null = null;
   let maxEntryExtensionAtr: number | null = null;
   let entryTooExtended = false;
-  let mlProbability: number | null = null;
-  let mlThreshold: number | null = null;
-  let mlPassed: boolean | null = null;
-  let mlTrainedAt: string | null = null;
   let tce: TceMetrics | null = null;
 
   if (!tradingWindow.allowed) {
@@ -802,7 +886,8 @@ export async function analyzeMarket(
       ? entryDistanceFromEma20 / lastAtr
       : 0;
 
-    const canOpen = canOpenTrade({
+    // ← ИЗМЕНЕНО: используем FilterCheckResult
+    const filterResult = canOpenTrade({
       symbol,
       side,
       lastRsi,
@@ -817,7 +902,7 @@ export async function analyzeMarket(
       now
     });
 
-    if (!canOpen) {
+    if (!filterResult.passed) {
       const resetState = resetSignalState({
         buy,
         sell,
@@ -835,94 +920,45 @@ export async function analyzeMarket(
       positionSize = resetState.positionSize;
 
       if (skipReason == null) {
-        if (isSymbolOnCooldown(symbol, now)) {
+        if (filterResult.failedFilter === 'cooldown') {
           const remainingMs = getRemainingCooldownMs(symbol, now);
           const remainingMin = Math.ceil(remainingMs / 60000);
-          skipReason = `Symbol on cooldown: ${remainingMin} min remaining`;
+          skipReason = `Cooldown: ${remainingMin} min remaining`;
         } else {
-          skipReason =
-            'Entry filters failed ' +
-            '(RSI/ADX/ATR/BB/EMA20/MACD/trading window/blacklist/cooldown)';
+          // ← ДЕТАЛИЗИРОВАННАЯ причина
+          const failedFilter = filterResult.failedFilter ?? 'unknown';
+          const d = filterResult.details;
+
+          const rsiRange = side === 'short'
+            ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
+            : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+
+          const adxRange = side === 'short'
+            ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
+            : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+
+          const bbRange = side === 'short'
+            ? `${MIN_BB_WIDTH_SHORT}–${MAX_BB_WIDTH_SHORT}`
+            : `${MIN_BB_WIDTH_LONG}–${MAX_BB_WIDTH_LONG}`;
+
+          const atrRange = side === 'short'
+            ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}`
+            : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
+
+          const distRange = side === 'short'
+            ? `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_SHORT}`
+            : `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_LONG}`;
+
+          skipReason = `Filter failed: ${failedFilter}\n` +
+            `RSI ${lastRsi.toFixed(2)} [${rsiRange}] ${d?.rsiOk ? '✓' : '✗'}\n` +
+            `ADX ${adx.toFixed(2)} [${adxRange}] ${d?.adxOk ? '✓' : '✗'}\n` +
+            `ATR% ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}] ${d?.atrPctOk ? '✓' : '✗'}\n` +
+            `BB Width ${bbWidth.toFixed(5)} [${bbRange}] ${d?.bbWidthOk ? '✓' : '✗'}\n` +
+            `Dist EMA20 ATR ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}] ${d?.entryDistanceAtrOk ? '✓' : '✗'}\n` +
+            `Too Extended: ${entryTooExtended} ${d?.entryTooExtendedOk ? '✓' : '✗'}\n` +
+            `MACD: Up=${macdCrossUp}, Down=${macdCrossDown} ${d?.macdOk ? '✓' : '✗'}`;
         }
       }
-    }
-  }
-
-  if (
-    ENABLE_ML_FILTER &&
-    side !== 'none' &&
-    stopLossPrice != null
-  ) {
-    const entryDistanceFromEma20 = side === 'long'
-      ? price - regimeIndicators.ema20
-      : regimeIndicators.ema20 - price;
-
-    const entryDistanceFromEma20Atr = lastAtr > 0
-      ? entryDistanceFromEma20 / lastAtr
-      : 0;
-
-    try {
-      const prediction: MlPredictionResult = await predictTrade({
-        entryPrice: price,
-        ema20: regimeIndicators.ema20,
-        ema50: regimeIndicators.ema50,
-        ema200: regimeIndicators.ema200,
-        lastRsi,
-        adx: regimeIndicators.adx,
-        bbWidth: regimeIndicators.bbWidth,
-        atrPct: regimeIndicators.atrPct,
-        lastAtr,
-        entryDistanceFromEma20Atr,
-        side,
-        openedAt: signalTimeIso
-      });
-
-      mlProbability = prediction.probability;
-      mlThreshold = prediction.threshold;
-      mlPassed = prediction.passed;
-      mlTrainedAt = prediction.trainedAt;
-
-      if (!prediction.passed) {
-        const resetState = resetSignalState({
-          buy,
-          sell,
-          side,
-          takeProfitPrice,
-          stopLossPrice,
-          positionSize
-        });
-
-        buy = resetState.buy;
-        sell = resetState.sell;
-        side = resetState.side;
-        takeProfitPrice = resetState.takeProfitPrice;
-        stopLossPrice = resetState.stopLossPrice;
-        positionSize = resetState.positionSize;
-        skipReason =
-          `ML filter rejected trade: ` +
-          `probability=${prediction.probability.toFixed(4)}, ` +
-          `threshold=${prediction.threshold.toFixed(4)}`;
-      }
-    } catch (error) {
-      const resetState = resetSignalState({
-        buy,
-        sell,
-        side,
-        takeProfitPrice,
-        stopLossPrice,
-        positionSize
-      });
-
-      buy = resetState.buy;
-      sell = resetState.sell;
-      side = resetState.side;
-      takeProfitPrice = resetState.takeProfitPrice;
-      stopLossPrice = resetState.stopLossPrice;
-      positionSize = resetState.positionSize;
-      mlPassed = false;
-
-      const message = error instanceof Error ? error.message : String(error);
-      skipReason = `ML prediction failed: ${message}`;
     }
   }
 
@@ -1026,10 +1062,6 @@ export async function analyzeMarket(
     skipReason,
     signalTime,
     signalTimeIso,
-    mlProbability,
-    mlThreshold,
-    mlPassed,
-    mlTrainedAt,
     indicators: {
       macdCrossUp,
       macdCrossDown,
@@ -1063,6 +1095,7 @@ export async function analyzeMarket(
 
 export type TelegramSender = (message: string) => Promise<void>;
 
+// ← ИЗМЕНЁННАЯ функция notifyStrategyResult
 export async function notifyStrategyResult(
   result: StrategyResult,
   symbol: string,
@@ -1077,16 +1110,19 @@ export async function notifyStrategyResult(
 
   if (result.skipReason != null) {
     await sendTelegramMessage(
-      `⚠️ ${symbol}\n` +
+      `⚠️ ${symbol} [${result.regime}]\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `RSI: ${result.indicators.lastRsi.toFixed(2)}\n` +
+      `ADX: ${result.indicators.adx.toFixed(2)}\n` +
+      `ATR%: ${(result.indicators.atrPct * 100).toFixed(3)}%\n` +
+      `BB Width: ${result.indicators.bbWidth.toFixed(5)}\n` +
+      `Dist EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\n` +
+      `Too Extended: ${result.indicators.entryTooExtended}\n` +
+      `MACD: Up=${result.indicators.macdCrossUp}, Down=${result.indicators.macdCrossDown}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `${result.skipReason}\n` +
-      `${tceText}\n` +
-      `ML probability: ${result.mlProbability != null
-        ? result.mlProbability.toFixed(4)
-        : '-'}\n` +
-      `ML threshold: ${result.mlThreshold != null
-        ? result.mlThreshold.toFixed(4)
-        : '-'}\n` +
-      `ML trained at: ${result.mlTrainedAt ?? '-'}`
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `${tceText}`
     );
     return;
   }
@@ -1100,20 +1136,23 @@ export async function notifyStrategyResult(
         `${Number.isFinite(tce.tceErSlow) ? tce.tceErSlow.toFixed(3) : '-'}`;
 
     await sendTelegramMessage(
-      `📊 ${symbol} ${direction}\n` +
+      `📊 ${symbol} ${direction} [${result.regime}]\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `Цена: ${result.price}\n` +
       `TP: ${result.takeProfitPrice ?? '-'}\n` +
       `SL: ${result.stopLossPrice ?? '-'}\n` +
       `Размер: ${result.positionSize ?? '-'}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `RSI: ${result.indicators.lastRsi.toFixed(2)}\n` +
       `ADX: ${result.indicators.adx.toFixed(2)}\n` +
-      `ATR %: ${(result.indicators.atrPct * 100).toFixed(3)}%\n` +
+      `ATR%: ${(result.indicators.atrPct * 100).toFixed(3)}%\n` +
       `BB Width: ${result.indicators.bbWidth.toFixed(5)}\n` +
-      `Distance EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\n` +
+      `Dist EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\n` +
+      `Too Extended: ${result.indicators.entryTooExtended}\n` +
+      `MACD: Up=${result.indicators.macdCrossUp}, Down=${result.indicators.macdCrossDown}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `${tceText}` +
       `${tceDetails}\n` +
-      `ML probability: ${result.mlProbability?.toFixed(4) ?? '-'}\n` +
-      `ML threshold: ${result.mlThreshold?.toFixed(4) ?? '-'}\n` +
       `Режим: ${result.regime}`
     );
   }
