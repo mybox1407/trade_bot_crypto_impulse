@@ -1098,8 +1098,7 @@ export async function startScheduler(): Promise<void> {
       tradingPairs: getActiveTradingPairs(),
       signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
       positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
-      balance: getBalance(),
-      mlModelAvailable: mlTrainingReady
+      balance: getBalance()
     });
   } catch (error) {
     schedulerStarted = false;
