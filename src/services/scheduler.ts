@@ -64,10 +64,6 @@ import {
   syncLiveBalance
 } from './reconciliation';
 import type { EnsureProtectiveOrdersRequest } from './execution/types';
-import {
-  startModelTrainingScheduler,
-  isModelAvailable
-} from './ml/mlScheduler';
 
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
@@ -89,10 +85,6 @@ const symbolLocks = new Map<string, number>();
 
 // Cooldown после сделки (1 час)
 const symbolCooldowns = new Map<string, number>();
-
-// The scheduler starts training once and then keeps the daily training loop.
-// A signal is not allowed before the first training attempt finishes.
-let mlTrainingReady = false;
 
 type SignalResult = {
   symbol: string;
@@ -314,10 +306,6 @@ function buildPositionMetadata(
     entryTooExtended: indicators?.entryTooExtended ?? false,
     entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? 0,
     entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? 0,
-    mlProbability: indicators?.mlProbability ?? null,
-    mlThreshold: indicators?.mlThreshold ?? null,
-    mlPassed: indicators?.mlPassed ?? null,
-    mlTrainedAt: indicators?.mlTrainedAt ?? null,
 
     tceScore: indicators?.tce?.tceScore ?? null,
     tceRegime: indicators?.tce?.tceRegime ?? null,
@@ -487,17 +475,6 @@ async function checkSignals(): Promise<void> {
     for (const rawSymbol of tradingPairs) {
       const symbol = normalizeSymbol(rawSymbol);
       try {
-        if (!mlTrainingReady || !isModelAvailable()) {
-          results.push({
-            symbol,
-            status: 'not-ready',
-            regime: 'ml-not-ready',
-            hasSignal: false,
-            reason: 'ML model is not available yet'
-          });
-          continue;
-        }
-
         // Проверка cooldown
         const cooldownReason = getSymbolCooldownReason(symbol);
         if (cooldownReason != null) {
@@ -557,12 +534,7 @@ async function checkSignals(): Promise<void> {
         const signalTime = (result as any).signalTime as number | undefined;
         const signalTimeIso = (result as any).signalTimeIso as string | undefined;
         const indicators = (result as any).indicators as any;
-        const mlProbability = (result as any).mlProbability as number | null | undefined;
-        const mlThreshold = (result as any).mlThreshold as number | null | undefined;
-        const mlPassed = (result as any).mlPassed as boolean | null | undefined;
-        const mlTrainedAt = (result as any).mlTrainedAt as string | null | undefined;
         const tce = indicators?.tce ?? null;
-
         const tceScore = tce?.tceScore ?? null;
         const tceRegime = tce?.tceRegime ?? null;
         const tceReason = tce?.tceReason ?? null;
@@ -612,11 +584,6 @@ async function checkSignals(): Promise<void> {
           entryTooExtended: indicators?.entryTooExtended ?? false,
           signalTimeIso: signalTimeIso ?? new Date().toISOString(),
           isTradingWindow,
-          mlProbability: mlProbability ?? null,
-          mlThreshold: mlThreshold ?? null,
-          mlPassed: mlPassed ?? null,
-          mlTrainedAt: mlTrainedAt ?? null,
-
           tceScore,
           tceRegime,
           tceReason,
@@ -639,10 +606,6 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason,
-            mlProbability,
-            mlThreshold,
-            mlPassed,
-            mlTrainedAt,
             tceScore,
             tceRegime,
             tceReason
@@ -659,10 +622,6 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason: 'Outside trading window',
-            mlProbability,
-            mlThreshold,
-            mlPassed,
-            mlTrainedAt,
             tceScore,
             tceRegime,
             tceReason
@@ -689,10 +648,6 @@ async function checkSignals(): Promise<void> {
             side,
             price: expectedPrice,
             reason: 'Opening already in progress',
-            mlProbability,
-            mlThreshold,
-            mlPassed,
-            mlTrainedAt,
             tceScore,
             tceRegime,
             tceReason
@@ -701,7 +656,7 @@ async function checkSignals(): Promise<void> {
         }
 
         const clientOrderId = `${symbol}-${Date.now()}-open`;
-        tradeLog('POSITION_OPEN_REQUEST', { symbol, marketId, side, quantity, expectedPrice, stopLossPrice, takeProfitPrice, clientOrderId, mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+        tradeLog('POSITION_OPEN_REQUEST', { symbol, marketId, side, quantity, expectedPrice, stopLossPrice, takeProfitPrice, clientOrderId});
         let openingFinished = false;
         try {
           const executionResult = await executionService.openPosition({ symbol, marketId, side, quantity, expectedPrice, clientOrderId, priceDecimals: activeMarket.priceDecimals, sizeDecimals: activeMarket.sizeDecimals, stopLossPrice, takeProfitPrice });
@@ -721,10 +676,6 @@ async function checkSignals(): Promise<void> {
               side,
               price: expectedPrice,
               reason,
-              mlProbability,
-              mlThreshold,
-              mlPassed,
-              mlTrainedAt,
               tceScore,
               tceRegime,
               tceReason
@@ -749,10 +700,6 @@ async function checkSignals(): Promise<void> {
             regime,
             indicators: {
               ...indicators,
-              mlProbability,
-              mlThreshold,
-              mlPassed,
-              mlTrainedAt
             },
             signalTime,
             signalTimeIso,
@@ -773,12 +720,12 @@ async function checkSignals(): Promise<void> {
               const reason = `Filled but local state was not created: ${openResult.message}`;
               tradeError('LOCAL_POSITION_CREATE_FAILED', reason, { symbol, marketId, side, quantity: pending.filledQuantity, orderId: pending.orderId ?? null });
               errorsBySymbol.set(symbol, reason);
-              results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason, mlProbability, mlThreshold, mlPassed, mlTrainedAt, tceScore, tceRegime, tceReason });
+              results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason });
               continue;
             }
           }
 
-          tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: pending.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: pending.averageFillPrice, stopLossPrice, takeProfitPrice, executionOrderId: pending.orderId ?? null, stopLossOrderId: pending.protectionStopLossOrderId ?? null, takeProfitOrderId: pending.protectionTakeProfitOrderId ?? null, protectionConfirmed: Boolean(pending.protectionStopLossOrderId && pending.protectionTakeProfitOrderId), mlProbability, mlThreshold, mlPassed, mlTrainedAt });
+          tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: pending.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: pending.averageFillPrice, stopLossPrice, takeProfitPrice, executionOrderId: pending.orderId ?? null, stopLossOrderId: pending.protectionStopLossOrderId ?? null, takeProfitOrderId: pending.protectionTakeProfitOrderId ?? null, protectionConfirmed: Boolean(pending.protectionStopLossOrderId && pending.protectionTakeProfitOrderId)});
 
           const position = getPositions().find(item => normalizeSymbol(item.symbol) === symbol && item.marketId === marketId);
           if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);         
@@ -795,10 +742,6 @@ async function checkSignals(): Promise<void> {
             side,
             price: expectedPrice,
             reason: 'Position opened and protected',
-            mlProbability,
-            mlThreshold,
-            mlPassed,
-            mlTrainedAt,
             tceScore,
             tceRegime,
             tceReason
@@ -1089,15 +1032,6 @@ export async function startScheduler(): Promise<void> {
     executionService = createExecutionService();
     initializeSignerClient();
 
-    await startModelTrainingScheduler();
-    mlTrainingReady = isModelAvailable();
-
-    if (!mlTrainingReady) {
-      throw new Error(
-        'ML model is not available after startup training'
-      );
-    }
-
     await refreshTopMarkets();
     await loadReconciliationPendingSymbols();
     if (!PAPER_TRADING && signerClient) {
@@ -1123,7 +1057,6 @@ export async function startScheduler(): Promise<void> {
     });
   } catch (error) {
     schedulerStarted = false;
-    mlTrainingReady = false;
     stopMarketRefresh();
     stopReconciliationLoop();
     stopBalanceSyncLoop();
@@ -1158,5 +1091,4 @@ export async function stopScheduler(): Promise<void> {
   }
   await flushPositionPersistence().catch(error => tradeError('POSITION_PERSISTENCE_FLUSH_FAILED', error));
   schedulerStarted = false;
-  mlTrainingReady = false;
 }
