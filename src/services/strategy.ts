@@ -745,8 +745,14 @@ export async function analyzeMarket(
   if ((buy || sell) && signalPrice != null && lastAtr > 0) {
     const distanceFromSignal = Math.abs(price - signalPrice);
     const signalDistanceAtr = distanceFromSignal / lastAtr;
-
-    if (signalDistanceAtr > 1.0) {
+  
+    // ← НОВОЕ: проверяем направление движения цены
+    const movedInFavor = side === 'long'
+      ? price > signalPrice  // Лонг: цена выросла — хорошо
+      : price < signalPrice; // Шорт: цена упала — хорошо
+  
+    // ← Отменяем только если цена ушла ПРОТИВ сделки больше чем на 1 ATR
+    if (signalDistanceAtr > 1.0 && !movedInFavor) {
       const resetState = resetSignalState({
         buy,
         sell,
@@ -755,7 +761,7 @@ export async function analyzeMarket(
         stopLossPrice,
         positionSize
       });
-
+  
       buy = resetState.buy;
       sell = resetState.sell;
       side = resetState.side;
@@ -763,7 +769,7 @@ export async function analyzeMarket(
       stopLossPrice = resetState.stopLossPrice;
       positionSize = resetState.positionSize;
       skipReason =
-        `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
+        `Price moved ${signalDistanceAtr.toFixed(2)} ATR against signal ` +
         `(max 1.00 ATR)`;
     }
   }
