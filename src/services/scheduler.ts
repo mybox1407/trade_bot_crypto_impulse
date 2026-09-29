@@ -73,6 +73,8 @@ const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
 const PENDING_OPENING_TTL_MS = 30 * 60_000;
 
+const LOG_ONLY_TRADING_REGIMES = true;
+
 let executionService: ExecutionService;
 let signerClient: SignerClient | null = null;
 let reconciliationInterval: NodeJS.Timeout | null = null;
@@ -106,14 +108,16 @@ type SignalResult = {
   side?: 'long' | 'short' | 'none';
   price?: number;
   reason?: string;
-  mlProbability?: number | null;
-  mlThreshold?: number | null;
-  mlPassed?: boolean | null;
-  mlTrainedAt?: string | null;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
 };
+
+type TradingRegime = 'trend_up' | 'trend_down';
+
+function isTradingRegime(regime: unknown): regime is TradingRegime {
+  return regime === 'trend_up' || regime === 'trend_down';
+}
 
 type PendingFilledOpen = {
   symbol: string;
@@ -562,6 +566,16 @@ async function checkSignals(): Promise<void> {
         const tceScore = tce?.tceScore ?? null;
         const tceRegime = tce?.tceRegime ?? null;
         const tceReason = tce?.tceReason ?? null;
+
+        if (LOG_ONLY_TRADING_REGIMES && regime !== 'trend_up' && regime !== 'trend_down') {
+          tradeLog('SIGNAL_SKIPPED_NON_TRADING_REGIME', {
+            symbol,
+            regime,
+            reason: 'Only trend_up and trend_down are logged to signal CSV/Telegram'
+          });
+        
+          continue;
+        }
         
         const isTradingWindow = isTradingTimeUtcPlus4(new Date());
 
@@ -816,9 +830,16 @@ async function checkSignals(): Promise<void> {
         });
       }
     }
+
+    const telegramAndCsvResults = LOG_ONLY_TRADING_REGIMES
+      ? results.filter(result => isTradingRegime(result.regime))
+      : results;
+    
     await sendAggregatedSignalSummary({
-      results,
-      errorsBySymbol: errorsBySymbol.size > 0 ? Object.fromEntries(errorsBySymbol) : undefined,
+      results: telegramAndCsvResults,
+      errorsBySymbol: errorsBySymbol.size > 0
+        ? Object.fromEntries(errorsBySymbol)
+        : undefined,
       equity: getBalance()
     });
   } finally {
