@@ -380,7 +380,7 @@ export async function sendAggregatedSignalSummary(data: {
       `${result.symbol} [${result.regime}]: ` +
       `No signal - ${result.reason}`
     );
-  }).join('\n');
+  }).join('\n\n');
 
   let errorSummary = '';
 
