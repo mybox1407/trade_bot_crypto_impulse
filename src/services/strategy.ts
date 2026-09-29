@@ -818,7 +818,6 @@ export async function analyzeMarket(
       ? entryDistanceFromEma20 / lastAtr
       : 0;
 
-    // ← ИЗМЕНЕНО: используем FilterCheckResult
     const filterResult = canOpenTrade({
       symbol,
       side,
@@ -857,26 +856,27 @@ export async function analyzeMarket(
           const remainingMin = Math.ceil(remainingMs / 60000);
           skipReason = `Cooldown: ${remainingMin} min remaining`;
         } else {
-          // ← ДЕТАЛИЗИРОВАННАЯ причина (без галочек)
+          // ← ИСПРАВЛЕНО: используем regime вместо side
           const failedFilter = filterResult.failedFilter ?? 'unknown';
+          const isShortSide = regime === 'trend_down';
 
-          const rsiRange = side === 'short'
+          const rsiRange = isShortSide
             ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
             : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
 
-          const adxRange = side === 'short'
+          const adxRange = isShortSide
             ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
             : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
 
-          const bbRange = side === 'short'
+          const bbRange = isShortSide
             ? `${MIN_BB_WIDTH_SHORT}–${MAX_BB_WIDTH_SHORT}`
             : `${MIN_BB_WIDTH_LONG}–${MAX_BB_WIDTH_LONG}`;
 
-          const atrRange = side === 'short'
+          const atrRange = isShortSide
             ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}`
             : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
 
-          const distRange = side === 'short'
+          const distRange = isShortSide
             ? `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_SHORT}`
             : `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_LONG}`;
 
