@@ -41,13 +41,13 @@ const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> 
   [0, 24]
 ];
 
-export const MIN_ENTRY_RSI_SHORT = 38;
+export const MIN_ENTRY_RSI_SHORT = 39;
 export const MAX_ENTRY_RSI_SHORT = 42;
 export const MIN_ENTRY_RSI_LONG = 51;
 export const MAX_ENTRY_RSI_LONG = 64;
 
 export const MIN_ENTRY_ADX_SHORT = 25;
-export const MIN_ENTRY_ADX_LONG = 28;
+export const MIN_ENTRY_ADX_LONG = 28.5;
 export const MAX_ENTRY_ADX = 40;
 
 export const MIN_LAST_ATR_PCT = 0.005;
@@ -55,7 +55,7 @@ export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
 export const MIN_BB_WIDTH_LONG = 0.05;
-export const MAX_BB_WIDTH_LONG = 0.090;
+export const MAX_BB_WIDTH_LONG = 0.085;
 export const MIN_BB_WIDTH_SHORT = 0.05;
 
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
