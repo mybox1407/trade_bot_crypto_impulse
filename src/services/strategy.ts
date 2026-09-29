@@ -856,7 +856,7 @@ export async function analyzeMarket(
           const remainingMin = Math.ceil(remainingMs / 60000);
           skipReason = `Cooldown: ${remainingMin} min remaining`;
         } else {
-          // ← ИСПРАВЛЕНО: используем regime вместо side
+          // ← ИСПРАВЛЕНО: используем regime вместо side + выделяем ❌ проблемный параметр
           const failedFilter = filterResult.failedFilter ?? 'unknown';
           const isShortSide = regime === 'trend_down';
 
@@ -881,13 +881,13 @@ export async function analyzeMarket(
             : `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_LONG}`;
 
           skipReason = `Filter failed: ${failedFilter}\n` +
-            `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]\n` +
-            `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]\n` +
-            `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]\n` +
-            `BB Width: ${regimeIndicators.bbWidth.toFixed(5)} [${bbRange}]\n` +
-            `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}]\n` +
-            `Too Extended: ${entryTooExtended}\n` +
-            `MACD: Up=${macdCrossUp}, Down=${macdCrossDown}`;
+            `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]${failedFilter === 'rsi' ? ' ❌' : ''}\n` +
+            `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]${failedFilter === 'adx' ? ' ❌' : ''}\n` +
+            `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]${failedFilter === 'atr_pct' ? ' ❌' : ''}\n` +
+            `BB Width: ${regimeIndicators.bbWidth.toFixed(5)} [${bbRange}]${failedFilter === 'bb_width' ? ' ❌' : ''}\n` +
+            `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}]${failedFilter === 'entry_distance_atr_low' || failedFilter === 'entry_distance_atr_high' ? ' ❌' : ''}\n` +
+            `Too Extended: ${entryTooExtended}${failedFilter === 'entry_too_extended' ? ' ❌' : ''}\n` +
+            `MACD: Up=${macdCrossUp}, Down=${macdCrossDown}${failedFilter === 'macd_cross_up' || failedFilter === 'macd_cross_down' ? ' ❌' : ''}`;
         }
       }
     }
