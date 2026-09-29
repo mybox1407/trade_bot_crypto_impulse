@@ -86,23 +86,6 @@ export function notifyPositionOpen(data: {
       ? 'LONG'
       : 'SHORT';
 
-  const mlProbability =
-    data.mlProbability != null
-      ? data.mlProbability.toFixed(4)
-      : 'N/A';
-
-  const mlThreshold =
-    data.mlThreshold != null
-      ? data.mlThreshold.toFixed(4)
-      : 'N/A';
-
-  const mlPassed =
-    data.mlPassed == null
-      ? 'N/A'
-      : data.mlPassed
-        ? 'YES'
-        : 'NO';
-
   const tceScore =
     data.tceScore != null && Number.isFinite(data.tceScore)
       ? String(data.tceScore)
