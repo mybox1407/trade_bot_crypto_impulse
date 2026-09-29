@@ -57,18 +57,23 @@ export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 export const MIN_BB_WIDTH_LONG = 0.05;
 export const MAX_BB_WIDTH_LONG = 0.085;
 export const MIN_BB_WIDTH_SHORT = 0.05;
+export const MAX_BB_WIDTH_SHORT = 0.07;
 
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
 export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
   MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
-export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.3;
+
+// Асимметричные лимиты для лонга и шорта
+export const MAX_ENTRY_EXTENSION_TREND_ATR_LONG = 1.3;
+export const MAX_ENTRY_EXTENSION_TREND_ATR_SHORT = 1.6;
+
 export const REJECT_ENTRY_TOO_EXTENDED = true;
 
 // Blacklist только для Long
 export const LONG_BLACKLIST = [''];
 
 export const STOP_LOSS_ATR_MULTIPLIER = 2.8;
-export const TAKE_PROFIT_ATR_MULTIPLIER = 3.8;
+export const TAKE_PROFIT_ATR_MULTIPLIER = 3;
 export const ENABLE_TRAILING_STOP = false;
 
 const symbolCooldowns = new Map<string, number>();
@@ -459,13 +464,19 @@ export function canOpenTrade(params: {
     : MIN_BB_WIDTH_SHORT;
   const maxBbWidth = side === 'long'
     ? MAX_BB_WIDTH_LONG
-    : Infinity;
+    : MAX_BB_WIDTH_SHORT;
 
   if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return false;
+
+  // Асимметричные лимиты для лонга и шорта
+  const maxEntryDistanceAtr = side === 'long'
+    ? MAX_ENTRY_EXTENSION_TREND_ATR_LONG
+    : MAX_ENTRY_EXTENSION_TREND_ATR_SHORT;
+
   if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
     return false;
   }
-  if (entryDistanceFromEma20Atr > MAX_ENTRY_EXTENSION_TREND_ATR) {
+  if (entryDistanceFromEma20Atr > maxEntryDistanceAtr) {
     return false;
   }
   if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return false;
@@ -751,8 +762,14 @@ export async function analyzeMarket(
       : referencePrice - price;
 
     entryExtensionAtr = distanceFromRef / lastAtr;
-    maxEntryExtensionAtr = MAX_ENTRY_EXTENSION_TREND_ATR;
-    entryTooExtended = entryExtensionAtr > maxEntryExtensionAtr;
+
+    // Асимметричные лимиты для лонга и шорта
+    const maxEntryExtensionAtrForSide = side === 'long'
+      ? MAX_ENTRY_EXTENSION_TREND_ATR_LONG
+      : MAX_ENTRY_EXTENSION_TREND_ATR_SHORT;
+
+    maxEntryExtensionAtr = maxEntryExtensionAtrForSide;
+    entryTooExtended = entryExtensionAtr > maxEntryExtensionAtrForSide;
 
     if (entryTooExtended) {
       const resetState = resetSignalState({
@@ -772,7 +789,7 @@ export async function analyzeMarket(
       positionSize = resetState.positionSize;
       skipReason =
         `Entry too extended: ${entryExtensionAtr.toFixed(2)} ATR ` +
-        `(max ${maxEntryExtensionAtr.toFixed(2)} ATR)`;
+        `(max ${maxEntryExtensionAtrForSide.toFixed(2)} ATR)`;
     }
   }
 
