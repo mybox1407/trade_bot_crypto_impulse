@@ -1,3 +1,5 @@
+// src/services/strategy.ts
+
 import {
   MACD,
   RSI,
@@ -219,22 +221,10 @@ type RegimeIndicators = {
   avgVol20: number;
 };
 
-// ← НОВЫЙ тип для результата проверки фильтров
+// ← УПРОЩЁННЫЙ тип (без details)
 type FilterCheckResult = {
   passed: boolean;
   failedFilter?: string;
-  details?: {
-    rsiOk: boolean;
-    adxOk: boolean;
-    atrPctOk: boolean;
-    bbWidthOk: boolean;
-    entryDistanceAtrOk: boolean;
-    entryTooExtendedOk: boolean;
-    macdOk: boolean;
-    tradingWindowOk: boolean;
-    cooldownOk: boolean;
-    blacklistOk: boolean;
-  };
 };
 
 export type StrategyIndicators = {
@@ -404,7 +394,7 @@ export function detectMarketRegime(candles: Candle[]): {
   };
 }
 
-// ← ИЗМЕНЁННАЯ функция canOpenTrade
+// ← УПРОЩЁННАЯ функция canOpenTrade (без details)
 export function canOpenTrade(params: {
   symbol: string;
   side: 'long' | 'short' | 'none';
@@ -433,67 +423,39 @@ export function canOpenTrade(params: {
     now = new Date()
   } = params;
 
-  const details: FilterCheckResult['details'] = {
-    rsiOk: true,
-    adxOk: true,
-    atrPctOk: true,
-    bbWidthOk: true,
-    entryDistanceAtrOk: true,
-    entryTooExtendedOk: true,
-    macdOk: true,
-    tradingWindowOk: true,
-    cooldownOk: true,
-    blacklistOk: true
-  };
-
   if (!isTradingTimeUtcPlus4(now)) {
-    details.tradingWindowOk = false;
-    return { passed: false, failedFilter: 'trading_window', details };
+    return { passed: false, failedFilter: 'trading_window' };
   }
 
   if (isSymbolOnCooldown(symbol, now)) {
-    details.cooldownOk = false;
-    return { passed: false, failedFilter: 'cooldown', details };
+    return { passed: false, failedFilter: 'cooldown' };
   }
 
   if (side === 'long') {
     const baseSymbol = symbol.split('/')[0].toUpperCase();
     if (LONG_BLACKLIST.includes(baseSymbol)) {
-      details.blacklistOk = false;
-      return { passed: false, failedFilter: 'blacklist', details };
+      return { passed: false, failedFilter: 'blacklist' };
     }
   }
 
   if (side === 'long' && macdCrossDown) {
-    details.macdOk = false;
-    return { passed: false, failedFilter: 'macd_cross_down', details };
+    return { passed: false, failedFilter: 'macd_cross_down' };
   }
   if (side === 'short' && macdCrossUp) {
-    details.macdOk = false;
-    return { passed: false, failedFilter: 'macd_cross_up', details };
+    return { passed: false, failedFilter: 'macd_cross_up' };
   }
 
   // RSI filter
   if (side === 'short') {
     if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
-      details.rsiOk = false;
-      return {
-        passed: false,
-        failedFilter: 'rsi',
-        details,
-      };
+      return { passed: false, failedFilter: 'rsi' };
     }
   } else if (side === 'long') {
     if (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG) {
-      details.rsiOk = false;
-      return {
-        passed: false,
-        failedFilter: 'rsi',
-        details,
-      };
+      return { passed: false, failedFilter: 'rsi' };
     }
   } else {
-    return { passed: false, failedFilter: 'invalid_side', details };
+    return { passed: false, failedFilter: 'invalid_side' };
   }
 
   // ATR% filter
@@ -502,12 +464,7 @@ export function canOpenTrade(params: {
     : MAX_LAST_ATR_PCT_SHORT;
 
   if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) {
-    details.atrPctOk = false;
-    return {
-      passed: false,
-      failedFilter: 'atr_pct',
-      details,
-    };
+    return { passed: false, failedFilter: 'atr_pct' };
   }
 
   // ADX filter
@@ -516,12 +473,7 @@ export function canOpenTrade(params: {
     : MIN_ENTRY_ADX_LONG;
 
   if (adx < minAdx || adx > MAX_ENTRY_ADX) {
-    details.adxOk = false;
-    return {
-      passed: false,
-      failedFilter: 'adx',
-      details,
-    };
+    return { passed: false, failedFilter: 'adx' };
   }
 
   // BB Width filter
@@ -533,12 +485,7 @@ export function canOpenTrade(params: {
     : MAX_BB_WIDTH_SHORT;
 
   if (bbWidth < minBbWidth || bbWidth > maxBbWidth) {
-    details.bbWidthOk = false;
-    return {
-      passed: false,
-      failedFilter: 'bb_width',
-      details,
-    };
+    return { passed: false, failedFilter: 'bb_width' };
   }
 
   // entryDistanceFromEma20Atr filter
@@ -547,33 +494,18 @@ export function canOpenTrade(params: {
     : MAX_ENTRY_EXTENSION_TREND_ATR_SHORT;
 
   if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
-    details.entryDistanceAtrOk = false;
-    return {
-      passed: false,
-      failedFilter: 'entry_distance_atr_low',
-      details,
-    };
+    return { passed: false, failedFilter: 'entry_distance_atr_low' };
   }
   if (entryDistanceFromEma20Atr > maxEntryDistanceAtr) {
-    details.entryDistanceAtrOk = false;
-    return {
-      passed: false,
-      failedFilter: 'entry_distance_atr_high',
-      details,
-    };
+    return { passed: false, failedFilter: 'entry_distance_atr_high' };
   }
 
   // entryTooExtended filter
   if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) {
-    details.entryTooExtendedOk = false;
-    return {
-      passed: false,
-      failedFilter: 'entry_too_extended',
-      details,
-    };
+    return { passed: false, failedFilter: 'entry_too_extended' };
   }
 
-  return { passed: true, details };
+  return { passed: true };
 }
 
 export async function analyzeMarket(
@@ -925,9 +857,8 @@ export async function analyzeMarket(
           const remainingMin = Math.ceil(remainingMs / 60000);
           skipReason = `Cooldown: ${remainingMin} min remaining`;
         } else {
-          // ← ДЕТАЛИЗИРОВАННАЯ причина
+          // ← ДЕТАЛИЗИРОВАННАЯ причина (без галочек)
           const failedFilter = filterResult.failedFilter ?? 'unknown';
-          const d = filterResult.details;
 
           const rsiRange = side === 'short'
             ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
@@ -950,13 +881,13 @@ export async function analyzeMarket(
             : `${MIN_ENTRY_DISTANCE_FROM_EMA20_ATR}–${MAX_ENTRY_EXTENSION_TREND_ATR_LONG}`;
 
           skipReason = `Filter failed: ${failedFilter}\n` +
-            `RSI ${lastRsi.toFixed(2)} [${rsiRange}] ${d?.rsiOk ? '✓' : '✗'}\n` +
-            `ADX ${regimeIndicators.adx.toFixed(2)} [${adxRange}] ${d?.adxOk ? '✓' : '✗'}\n` +  
-            `ATR% ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}] ${d?.atrPctOk ? '✓' : '✗'}\n` +
-            `BB Width ${regimeIndicators.bbWidth.toFixed(5)} [${bbRange}] ${d?.bbWidthOk ? '✓' : '✗'}\n` +  
-            `Dist EMA20 ATR ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}] ${d?.entryDistanceAtrOk ? '✓' : '✗'}\n` +
-            `Too Extended: ${entryTooExtended} ${d?.entryTooExtendedOk ? '✓' : '✗'}\n` +
-            `MACD: Up=${macdCrossUp}, Down=${macdCrossDown} ${d?.macdOk ? '✓' : '✗'}`;
+            `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]\n` +
+            `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]\n` +
+            `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]\n` +
+            `BB Width: ${regimeIndicators.bbWidth.toFixed(5)} [${bbRange}]\n` +
+            `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}]\n` +
+            `Too Extended: ${entryTooExtended}\n` +
+            `MACD: Up=${macdCrossUp}, Down=${macdCrossDown}`;
         }
       }
     }
