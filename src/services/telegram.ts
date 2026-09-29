@@ -376,10 +376,29 @@ export async function sendAggregatedSignalSummary(data: {
       );
     }
 
-    return (
-      `${result.symbol} [${result.regime}]: ` +
-      `No signal - ${result.reason}`
-    );
+    // ← ИСПРАВЛЕНО: понятные сообщения вместо "No signal - No signal"
+    if (result.status === 'no-signal') {
+      let reasonText = result.reason ?? 'Conditions not met';
+    
+      // Заменяем технические причины на понятные
+      if (reasonText === 'No signal') {
+        reasonText =
+          result.regime === 'trend_up'
+            ? 'Нет сигнала на Long: условия входа не сформированы'
+            : result.regime === 'trend_down'
+              ? 'Нет сигнала на Short: условия входа не сформированы'
+              : 'Нет торгового сигнала';
+      } else if (reasonText === 'Outside trading window') {
+        reasonText = 'Вне торговых часов';
+      } else if (reasonText?.includes('Price moved')) {
+        reasonText = 'Цена ушла далеко от точки входа';
+      }
+    
+      return (
+        `${result.symbol} [${result.regime}]: ` +
+        `No signal - ${reasonText}`
+      );
+    }
   }).join('\n\n');
 
   let errorSummary = '';
