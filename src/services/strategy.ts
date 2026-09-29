@@ -951,9 +951,9 @@ export async function analyzeMarket(
 
           skipReason = `Filter failed: ${failedFilter}\n` +
             `RSI ${lastRsi.toFixed(2)} [${rsiRange}] ${d?.rsiOk ? '✓' : '✗'}\n` +
-            `ADX ${adx.toFixed(2)} [${adxRange}] ${d?.adxOk ? '✓' : '✗'}\n` +
+            `ADX ${regimeIndicators.adx.toFixed(2)} [${adxRange}] ${d?.adxOk ? '✓' : '✗'}\n` +  
             `ATR% ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}] ${d?.atrPctOk ? '✓' : '✗'}\n` +
-            `BB Width ${bbWidth.toFixed(5)} [${bbRange}] ${d?.bbWidthOk ? '✓' : '✗'}\n` +
+            `BB Width ${regimeIndicators.bbWidth.toFixed(5)} [${bbRange}] ${d?.bbWidthOk ? '✓' : '✗'}\n` +  
             `Dist EMA20 ATR ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}] ${d?.entryDistanceAtrOk ? '✓' : '✗'}\n` +
             `Too Extended: ${entryTooExtended} ${d?.entryTooExtendedOk ? '✓' : '✗'}\n` +
             `MACD: Up=${macdCrossUp}, Down=${macdCrossDown} ${d?.macdOk ? '✓' : '✗'}`;
