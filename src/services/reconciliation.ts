@@ -271,16 +271,22 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // Пробуем передать account_index как строку
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_index=${String(accountIndex)}`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_index=${String(accountIndex)}`;
+    // Пробуем БЕЗ account_index — API должен взять из токена
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
-        headers: { Accept: 'application/json', Authorization: authorization }
+        headers: { 
+          Accept: 'application/json',
+          Authorization: authorization
+        }
       }),
       fetch(inactiveUrl, {
-        headers: { Accept: 'application/json', Authorization: authorization }
+        headers: { 
+          Accept: 'application/json',
+          Authorization: authorization
+        }
       })
     ]);
 
@@ -296,11 +302,10 @@ async function fetchAccountOrders(
           errorBody: errorText.slice(0, 500)
         });
         
-        if (res.status === 403 || res.status === 404) {
+        if (res.status === 403 || res.status === 404 || res.status === 400) {
           continue;
         }
-        // 400 теперь логируем, но не бросаем ошибку
-        continue;
+        throw new Error(`Orders request failed: ${res.status}`);
       }
 
       const data = await res.json() as Record<string, unknown>;
@@ -316,6 +321,10 @@ async function fetchAccountOrders(
       }
       
       orders.push(...ordersArray);
+    }
+
+    if (orders.length === 0) {
+      reconciliationLog('FETCH_ACCOUNT_ORDERS_NO_ORDERS', { accountIndex });
     }
 
     const mapped = orders.map(order => {
