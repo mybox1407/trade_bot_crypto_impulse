@@ -271,9 +271,9 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // account_index передаём явно, как требует документация [18]
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_index=${accountIndex}`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_index=${accountIndex}`;
+    // Не передаём account_index — API возьмёт из токена [20]
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
@@ -288,8 +288,7 @@ async function fetchAccountOrders(
 
     for (const res of [activeRes, inactiveRes]) {
       if (!res.ok) {
-        // 403/404 логируем, но не падаем
-        if (res.status === 403 || res.status === 404) {
+        if (res.status === 403 || res.status === 404 || res.status === 400) {
           reconciliationLog('FETCH_ACCOUNT_ORDERS_ENDPOINT_UNAVAILABLE', {
             status: res.status,
             accountIndex,
@@ -302,7 +301,6 @@ async function fetchAccountOrders(
 
       const data = await res.json() as Record<string, unknown>;
       
-      // Lighter возвращает { orders: [...] } или { data: { orders: [...] } }
       let ordersArray: Array<Record<string, unknown>> = [];
       if (Array.isArray(data.orders)) {
         ordersArray = data.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null);
