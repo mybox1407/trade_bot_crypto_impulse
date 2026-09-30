@@ -271,9 +271,9 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // Не передаём account_index — API возьмёт из токена [20]
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders`;
+    // Пробуем передать account_index как строку
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_index=${String(accountIndex)}`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_index=${String(accountIndex)}`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
@@ -288,15 +288,19 @@ async function fetchAccountOrders(
 
     for (const res of [activeRes, inactiveRes]) {
       if (!res.ok) {
-        if (res.status === 403 || res.status === 404 || res.status === 400) {
-          reconciliationLog('FETCH_ACCOUNT_ORDERS_ENDPOINT_UNAVAILABLE', {
-            status: res.status,
-            accountIndex,
-            url: res.url
-          });
+        const errorText = await res.text();
+        reconciliationLog('FETCH_ACCOUNT_ORDERS_ERROR_RESPONSE', {
+          status: res.status,
+          accountIndex,
+          url: res.url,
+          errorBody: errorText.slice(0, 500)
+        });
+        
+        if (res.status === 403 || res.status === 404) {
           continue;
         }
-        throw new Error(`Orders request failed: ${res.status}`);
+        // 400 теперь логируем, но не бросаем ошибку
+        continue;
       }
 
       const data = await res.json() as Record<string, unknown>;
