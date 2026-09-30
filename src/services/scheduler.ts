@@ -922,14 +922,23 @@ async function reconcileLocalPositionsWithExchange(
       }
 
       // ⭐ Восстанавливаем позицию без TP/SL — биржа сама закроет по своим ордерам
+      // Но передаём корректные временные значения для валидации isValidLevels()
+      const tempStopLoss = side === 'long' 
+        ? entryPrice * 0.5  // 50% ниже entry для long
+        : entryPrice * 1.5; // 50% выше entry для short
+
+      const tempTakeProfit = side === 'long'
+        ? entryPrice * 1.5  // 50% выше entry для long
+        : entryPrice * 0.5; // 50% ниже entry для short
+
       const restoreInput = {
         symbol: remote.symbol,
         marketId: remote.marketId,
         side,
         entryPrice,
         quantity,
-        takeProfitPrice: 0,
-        stopLossPrice: 0,
+        takeProfitPrice: tempTakeProfit,
+        stopLossPrice: tempStopLoss,
         exchangeStopLossPrice: 0,
         exchangeTakeProfitPrice: 0,
         exchangeStopLossOrderId: undefined,
