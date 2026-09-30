@@ -271,16 +271,22 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // account_idx (не account_index!) согласно [43]
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_idx=${accountIndex}`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_idx=${accountIndex}`;
+    // БЕЗ параметров — account извлекается из токена [31]
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
-        headers: { Accept: 'application/json', Authorization: authorization }
+        headers: { 
+          Accept: 'application/json',
+          Authorization: authorization
+        }
       }),
       fetch(inactiveUrl, {
-        headers: { Accept: 'application/json', Authorization: authorization }
+        headers: { 
+          Accept: 'application/json',
+          Authorization: authorization
+        }
       })
     ]);
 
@@ -296,6 +302,7 @@ async function fetchAccountOrders(
           errorBody: errorText.slice(0, 500)
         });
         
+        // 400, 403, 404 — логируем, но не падаем
         if (res.status === 403 || res.status === 404 || res.status === 400) {
           continue;
         }
