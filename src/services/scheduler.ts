@@ -995,7 +995,8 @@ async function checkPositions(): Promise<void> {
       if (!position || isReconciliationPending(position.symbol)) continue;
       const symbol = normalizeSymbol(position.symbol);
       try {
-        if (!position.exchangeStopLossOrderId || !position.exchangeTakeProfitOrderId) {
+        // ⭐ Не создаём TP/SL, если оба ордера уже есть (биржа управляет ими)
+        if (!position.exchangeStopLossOrderId && !position.exchangeTakeProfitOrderId) {
           const protectionMarket = getActiveMarket(symbol);
           if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
           await ensurePositionProtection(position, protectionMarket);
