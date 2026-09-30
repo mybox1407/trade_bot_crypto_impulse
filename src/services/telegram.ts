@@ -317,10 +317,11 @@ export async function sendAggregatedSignalSummary(data: {
     price?: number;
     reason?: string;
   }>;
+  openPositionsCount?: number;
   errorsBySymbol?: Record<string, string>;
   equity?: number;
 }): Promise<void> {
-  const { results, errorsBySymbol, equity } = data;
+  const { results, openPositionsCount, errorsBySymbol, equity } = data;
 
   const active = results.filter(result => [
     'signal',
@@ -376,11 +377,9 @@ export async function sendAggregatedSignalSummary(data: {
       );
     }
 
-    // ← ИСПРАВЛЕНО: понятные сообщения вместо "No signal - No signal"
     if (result.status === 'no-signal') {
       let reasonText = result.reason ?? 'Conditions not met';
     
-      // Заменяем технические причины на понятные
       if (reasonText === 'No signal') {
         reasonText =
           result.regime === 'trend_up'
@@ -433,12 +432,14 @@ export async function sendAggregatedSignalSummary(data: {
       ? `$${equity.toFixed(2)}`
       : 'N/A';
 
+  const openPositionsDisplay =
+    openPositionsCount !== undefined
+      ? openPositionsCount
+      : results.filter(result => result.status === 'position-open').length;
+
   const message =
     `📊 Signal Check Summary\n\n` +
-    `📈 Open positions: ` +
-    `${results.filter(
-      result => result.status === 'position-open'
-    ).length}\n\n` +
+    `📈 Open positions: ${openPositionsDisplay}\n\n` +
     `💰 Equity: ${equityText}\n\n` +
     `🔍 Signal scan:\n${text}` +
     `${errorSummary}\n\n` +
