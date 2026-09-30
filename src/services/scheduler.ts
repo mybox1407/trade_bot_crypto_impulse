@@ -1003,7 +1003,10 @@ async function checkPositions(): Promise<void> {
         //   unlockSymbol(symbol);
         // }
         const markPrice = getMarkPrice(symbol);
-        if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) throw new Error(`Mark price unavailable for ${symbol}`);
+        if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) {
+          // ⭐ Пропускаем проверку, если цена ещё не доступна (WebSocket не подключился)
+          continue;
+        }
         const pnl = position.side === 'long' ? (markPrice - position.entryPrice) * position.quantity : (position.entryPrice - markPrice) * position.quantity;
         const pnlPercent = position.notional > 0 ? pnl / position.notional * 100 : 0;
         updatePositionMetadata(position.id, { maxUnrealizedPnL: Math.max(position.metadata?.maxUnrealizedPnL ?? Number.NEGATIVE_INFINITY, pnl), maxUnrealizedPnLPercent: Math.max(position.metadata?.maxUnrealizedPnLPercent ?? Number.NEGATIVE_INFINITY, pnlPercent), worstUnrealizedPnL: Math.min(position.metadata?.worstUnrealizedPnL ?? Infinity, pnl), worstUnrealizedPnLPercent: Math.min(position.metadata?.worstUnrealizedPnLPercent ?? Infinity, pnlPercent) });
