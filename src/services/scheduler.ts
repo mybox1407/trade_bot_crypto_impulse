@@ -899,52 +899,41 @@ async function reconcileLocalPositionsWithExchange(
 
       const entryPrice = Number(remote.entryPrice);
       const quantity = Number(remote.quantity);
-      const takeProfitPrice = Number(remote.takeProfitPrice);
-      const stopLossPrice = Number(remote.stopLossPrice);
-      const exchangeStopLossOrderId = remote.exchangeStopLossOrderId;
-      const exchangeTakeProfitOrderId = remote.exchangeTakeProfitOrderId;
 
-      const validRestore =
-        Number.isFinite(entryPrice) &&
-        entryPrice > 0 &&
-        Number.isFinite(quantity) &&
-        quantity > 0 &&
-        Number.isFinite(takeProfitPrice) &&
-        takeProfitPrice > 0 &&
-        Number.isFinite(stopLossPrice) &&
-        stopLossPrice > 0;
+      // ⭐ Проверяем только entryPrice и quantity — TP/SL не нужны, биржа управляет ими
+      const hasEssentialData =
+        Number.isFinite(entryPrice) && entryPrice > 0 &&
+        Number.isFinite(quantity) && quantity > 0;
 
-      if (!validRestore) {
+      if (!hasEssentialData) {
         markReconciliationPending(symbol);
         tradeError(
           'LOCAL_POSITION_MISSING',
-          'Remote position has no local state and does not contain enough data for a safe restore',
+          'Remote position has no essential data (entryPrice or quantity)',
           {
             symbol: remote.symbol,
             marketId: remote.marketId,
             remoteSide: remote.side,
             entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
-            quantity: Number.isFinite(quantity) ? quantity : null,
-            takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
-            stopLossPrice: Number.isFinite(stopLossPrice) ? stopLossPrice : null,
-            hasPendingFilledOpen: Boolean(pending)
+            quantity: Number.isFinite(quantity) ? quantity : null
           }
         );
         continue;
       }
 
+      // ⭐ Восстанавливаем позицию без TP/SL — биржа сама закроет по своим ордерам
       const restoreInput = {
         symbol: remote.symbol,
         marketId: remote.marketId,
         side,
         entryPrice,
         quantity,
-        takeProfitPrice,
-        stopLossPrice,
-        exchangeStopLossPrice: stopLossPrice,
-        exchangeTakeProfitPrice: takeProfitPrice,
-        exchangeStopLossOrderId,
-        exchangeTakeProfitOrderId,
+        takeProfitPrice: 0,
+        stopLossPrice: 0,
+        exchangeStopLossPrice: 0,
+        exchangeTakeProfitPrice: 0,
+        exchangeStopLossOrderId: undefined,
+        exchangeTakeProfitOrderId: undefined,
         metadata: buildPositionMetadata(
           'reconciled-remote',
           {},
@@ -973,9 +962,7 @@ async function reconcileLocalPositionsWithExchange(
         marketId: remote.marketId,
         positionId: openResult.position?.id ?? null,
         entryPrice,
-        quantity,
-        takeProfitPrice,
-        stopLossPrice
+        quantity
       });
     }
   } catch (error) {
