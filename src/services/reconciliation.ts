@@ -271,22 +271,16 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // Пробуем БЕЗ account_index — API должен взять из токена
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders`;
+    // accountIndex в camelCase, как требует документация [18]
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?accountIndex=${accountIndex}`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?accountIndex=${accountIndex}`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
-        headers: { 
-          Accept: 'application/json',
-          Authorization: authorization
-        }
+        headers: { Accept: 'application/json', Authorization: authorization }
       }),
       fetch(inactiveUrl, {
-        headers: { 
-          Accept: 'application/json',
-          Authorization: authorization
-        }
+        headers: { Accept: 'application/json', Authorization: authorization }
       })
     ]);
 
