@@ -277,26 +277,27 @@ async function fetchAccountOrders(
     orders.push(...root.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null));
   }
 
-  return orders
-    .map(order => {
-      const marketId = toNumber(order.market_index ?? order.marketId ?? order.market_id);
-      const typeRaw = getString(order, 'type', 'order_type')?.toLowerCase();
-      const isStopLoss = typeRaw?.includes('stop') ?? order.is_stop_loss === true;
-      const isTakeProfit = typeRaw?.includes('take') ?? order.is_take_profit === true;
-      const price = toNumber(order.price ?? order.trigger_price ?? order.stop_price);
-      const orderId = getString(order, 'order_id', 'orderId');
+  const mapped = orders.map(order => {
+    const marketId = toNumber(order.market_index ?? order.marketId ?? order.market_id);
+    const typeRaw = getString(order, 'type', 'order_type')?.toLowerCase();
+    const isStopLoss = typeRaw?.includes('stop') ?? order.is_stop_loss === true;
+    const isTakeProfit = typeRaw?.includes('take') ?? order.is_take_profit === true;
+    const price = toNumber(order.price ?? order.trigger_price ?? order.stop_price);
+    const orderId = getString(order, 'order_id', 'orderId');
 
-      if (marketId == null) return null;
-      if (!isStopLoss && !isTakeProfit) return null;
+    if (marketId == null) return null;
+    if (!isStopLoss && !isTakeProfit) return null;
 
-      return {
-        marketId,
-        type: isTakeProfit ? 'take_profit' as const : 'stop_loss' as const,
-        price: price ?? undefined,
-        orderId: orderId ?? undefined
-      };
-    })
-    .filter((x): x is ProtectiveOrder => x !== null);
+    const result: ProtectiveOrder = {
+      marketId,
+      type: isTakeProfit ? 'take_profit' : 'stop_loss',
+      price: price ?? undefined,
+      orderId: orderId ?? undefined
+    };
+    return result;
+  });
+
+  return mapped.filter((x): x is ProtectiveOrder => x !== null);
 }
 
 export async function fetchAccountPositions(
