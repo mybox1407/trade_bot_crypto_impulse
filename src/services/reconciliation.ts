@@ -422,24 +422,66 @@ export async function reconcileAccount(
       }
 
       if (mismatch.reason === 'missing_local' && mismatch.remote) {
-        const persisted = await loadOpenPositions();
-        const persistedPosition = persisted.positions.find((position: VirtualPosition) => getPositionKey(position) === getPositionKey(mismatch.remote!));
-        if (persistedPosition) {
-          const restored = buildRestoredPosition({
-            ...persistedPosition,
-            marketId: mismatch.remote.marketId,
-            quantity: mismatch.remote.quantity,
-            entryPrice: mismatch.remote.entryPrice,
-            side: mismatch.remote.side
+        // ⭐ Восстанавливаем позицию напрямую, без persisted state
+        const side: 'long' | 'short' = mismatch.remote.side;
+        const entryPrice = mismatch.remote.entryPrice;
+        const quantity = mismatch.remote.quantity;
+
+        const tempStopLoss = side === 'long' 
+          ? entryPrice * 0.5
+          : entryPrice * 1.5;
+
+        const tempTakeProfit = side === 'long'
+          ? entryPrice * 1.5
+          : entryPrice * 0.5;
+
+        const restoreInput = {
+          symbol: mismatch.remote.symbol,
+          marketId: mismatch.remote.marketId,
+          side,
+          entryPrice,
+          quantity,
+          takeProfitPrice: tempTakeProfit,
+          stopLossPrice: tempStopLoss,
+          exchangeStopLossPrice: 0,
+          exchangeTakeProfitPrice: 0,
+          exchangeStopLossOrderId: undefined,
+          exchangeTakeProfitOrderId: undefined,
+          metadata: {
+            regime: 'reconciled-remote',
+            macdCrossUp: false,
+            macdCrossDown: false,
+            lastRsi: 0,
+            lastAtr: 0,
+            adx: 0,
+            bbWidth: 0,
+            atrPct: 0,
+            ema20: 0,
+            ema50: 0,
+            ema200: 0,
+            signalTime: Date.now(),
+            signalTimeIso: new Date().toISOString()
+          },
+          executionOrderId: mismatch.remote.orderId,
+          clientOrderId: `${mismatch.remote.symbol}-${Date.now()}-remote-restore`
+        };
+
+        const openResult = openPosition(restoreInput);
+
+        if (!openResult.ok) {
+          reconciliationError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
+            symbol: mismatch.symbol,
+            marketId: mismatch.remote.marketId
           });
-          if (!restored.ok) {
-            reconciliationError('LOCAL_POSITION_RESTORE_FAILED', restored.message, { symbol: mismatch.symbol, marketId: mismatch.remote.marketId });
-            throw new Error(`Failed to restore ${mismatch.remote.symbol}: ${restored.message}`);
-          }
-          reconciliationLog('LOCAL_POSITION_RESTORED', { symbol: mismatch.symbol, marketId: mismatch.remote.marketId, quantity: mismatch.remote.quantity });
-        } else {
-          reconciliationLog('LOCAL_POSITION_RESTORE_SKIPPED', { symbol: mismatch.symbol, reason: 'no persisted state' });
+          throw new Error(`Failed to restore ${mismatch.remote.symbol}: ${openResult.message}`);
         }
+
+        reconciliationLog('LOCAL_POSITION_RESTORED', {
+          symbol: mismatch.symbol,
+          marketId: mismatch.remote.marketId,
+          quantity: mismatch.remote.quantity,
+          entryPrice
+        });
       }
     }
     reconciliationLog('RECONCILIATION_AUTOFIX_FINISHED', { mismatchesCount: mismatches.length });
