@@ -426,15 +426,15 @@ export async function reconcileAccount(
         const side: 'long' | 'short' = mismatch.remote.side;
         const entryPrice = mismatch.remote.entryPrice;
         const quantity = mismatch.remote.quantity;
-
+      
         const tempStopLoss = side === 'long' 
           ? entryPrice * 0.5
           : entryPrice * 1.5;
-
+      
         const tempTakeProfit = side === 'long'
           ? entryPrice * 1.5
           : entryPrice * 0.5;
-
+      
         const restoreInput = {
           symbol: mismatch.remote.symbol,
           marketId: mismatch.remote.marketId,
@@ -443,8 +443,8 @@ export async function reconcileAccount(
           quantity,
           takeProfitPrice: tempTakeProfit,
           stopLossPrice: tempStopLoss,
-          exchangeStopLossPrice: 0,
-          exchangeTakeProfitPrice: 0,
+          exchangeStopLossPrice: tempStopLoss,      // ⭐ Передаём корректное значение
+          exchangeTakeProfitPrice: tempTakeProfit,  // ⭐ Передаём корректное значение
           exchangeStopLossOrderId: undefined,
           exchangeTakeProfitOrderId: undefined,
           metadata: {
@@ -465,9 +465,9 @@ export async function reconcileAccount(
           executionOrderId: mismatch.remote.orderId,
           clientOrderId: `${mismatch.remote.symbol}-${Date.now()}-remote-restore`
         };
-
+      
         const openResult = openPosition(restoreInput);
-
+      
         if (!openResult.ok) {
           reconciliationError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
             symbol: mismatch.symbol,
@@ -475,7 +475,7 @@ export async function reconcileAccount(
           });
           throw new Error(`Failed to restore ${mismatch.remote.symbol}: ${openResult.message}`);
         }
-
+      
         reconciliationLog('LOCAL_POSITION_RESTORED', {
           symbol: mismatch.symbol,
           marketId: mismatch.remote.marketId,
