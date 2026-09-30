@@ -271,9 +271,9 @@ async function fetchAccountOrders(
   const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
   try {
-    // accountIndex в camelCase, как требует документация [18]
-    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?accountIndex=${accountIndex}`;
-    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?accountIndex=${accountIndex}`;
+    // account_idx (не account_index!) согласно [43]
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_idx=${accountIndex}`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_idx=${accountIndex}`;
 
     const [activeRes, inactiveRes] = await Promise.all([
       fetch(activeUrl, {
