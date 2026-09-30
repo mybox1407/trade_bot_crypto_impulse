@@ -152,7 +152,6 @@ function parsePosition(rawInput: Record<string, unknown>): LighterPosition | nul
 
   const symbol = getString(raw, 'symbol', 'market_symbol', 'marketSymbol') ?? `MARKET_${marketId}`;
 
-  // TP/SL и orderId (если биржа их возвращает)
   const takeProfitPrice =
     toNumber(raw.take_profit_price ?? raw.takeProfitPrice ?? raw.tp_price ?? raw.tpPrice ?? raw.take_profit) ?? undefined;
 
@@ -251,6 +250,55 @@ function createAuthToken(signerClient: SignerClient, apiKeyIndex: number): strin
   }
 }
 
+type ProtectiveOrder = {
+  marketId: number;
+  type: 'stop_loss' | 'take_profit';
+  price?: number;
+  orderId?: string;
+};
+
+async function fetchAccountOrders(
+  signerClient: SignerClient,
+  accountIndex: number
+): Promise<ProtectiveOrder[]> {
+  const url = new URL(`${LIGHTER_API_URL}/api/v1/account/activeOrders`);
+  url.searchParams.set('account_index', String(accountIndex));
+  url.searchParams.set('limit', '500');
+
+  const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
+  const authToken = createAuthToken(signerClient, apiKeyIndex);
+
+  const data = await fetchJson(url, `fetchAccountOrders accountIndex=${accountIndex}`, authToken);
+  const root = getRecord(data);
+  if (!root) return [];
+
+  const orders: Array<Record<string, unknown>> = [];
+  if (Array.isArray(root.orders)) {
+    orders.push(...root.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null));
+  }
+
+  return orders
+    .map(order => {
+      const marketId = toNumber(order.market_index ?? order.marketId ?? order.market_id);
+      const typeRaw = getString(order, 'type', 'order_type')?.toLowerCase();
+      const isStopLoss = typeRaw?.includes('stop') ?? order.is_stop_loss === true;
+      const isTakeProfit = typeRaw?.includes('take') ?? order.is_take_profit === true;
+      const price = toNumber(order.price ?? order.trigger_price ?? order.stop_price);
+      const orderId = getString(order, 'order_id', 'orderId');
+
+      if (marketId == null) return null;
+      if (!isStopLoss && !isTakeProfit) return null;
+
+      return {
+        marketId,
+        type: isTakeProfit ? 'take_profit' as const : 'stop_loss' as const,
+        price: price ?? undefined,
+        orderId: orderId ?? undefined
+      };
+    })
+    .filter((x): x is ProtectiveOrder => x !== null);
+}
+
 export async function fetchAccountPositions(
   signerClient: SignerClient,
   accountIndex: number
@@ -271,19 +319,29 @@ export async function fetchAccountPositions(
     .map(parsePosition)
     .filter((position): position is LighterPosition => position !== null);
 
-  //reconciliationLog('EXCHANGE_POSITIONS_SYNCED', {
-  //  accountIndex,
-  //  positionsCount: positions.length,
-  //  positions: positions.map(position => ({
-  //    symbol: position.symbol,
-  //    marketId: position.marketId,
-  //    side: position.side,
-  //    quantity: position.quantity,
-  //    entryPrice: position.entryPrice
-  //  }))
-  //});
+  const orders = await fetchAccountOrders(signerClient, accountIndex);
+  const ordersByMarketId = new Map<number, ProtectiveOrder[]>();
+  for (const order of orders) {
+    const list = ordersByMarketId.get(order.marketId) ?? [];
+    list.push(order);
+    ordersByMarketId.set(order.marketId, list);
+  }
 
-  return positions;
+  const enriched = positions.map(position => {
+    const marketOrders = ordersByMarketId.get(position.marketId) ?? [];
+    const tpOrder = marketOrders.find(o => o.type === 'take_profit');
+    const slOrder = marketOrders.find(o => o.type === 'stop_loss');
+
+    return {
+      ...position,
+      takeProfitPrice: position.takeProfitPrice ?? tpOrder?.price,
+      stopLossPrice: position.stopLossPrice ?? slOrder?.price,
+      exchangeTakeProfitOrderId: position.exchangeTakeProfitOrderId ?? tpOrder?.orderId,
+      exchangeStopLossOrderId: position.exchangeStopLossOrderId ?? slOrder?.orderId
+    };
+  });
+
+  return enriched;
 }
 
 function getPositionKey(position: { marketId?: number; symbol: string }): string {
@@ -526,8 +584,6 @@ export async function syncLiveBalance(
   signerClient: SignerClient,
   accountIndex: number
 ): Promise<void> {
-  //reconciliationLog('BALANCE_SYNC_STARTED', { accountIndex });
-
   const url = new URL(`${LIGHTER_API_URL}/api/v1/account`);
   url.searchParams.set('by', 'index');
   url.searchParams.set('value', String(accountIndex));
@@ -557,5 +613,4 @@ export async function syncLiveBalance(
   }
 
   updateLiveAccountState({ balance });
-  //reconciliationLog('BALANCE_SYNC_FINISHED', { accountIndex, balance });
 }
