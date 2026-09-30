@@ -995,13 +995,13 @@ async function checkPositions(): Promise<void> {
       if (!position || isReconciliationPending(position.symbol)) continue;
       const symbol = normalizeSymbol(position.symbol);
       try {
-        // ⭐ Не создаём TP/SL, если оба ордера уже есть (биржа управляет ими)
-        if (!position.exchangeStopLossOrderId && !position.exchangeTakeProfitOrderId) {
-          const protectionMarket = getActiveMarket(symbol);
-          if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
-          await ensurePositionProtection(position, protectionMarket);
-          unlockSymbol(symbol);
-        }
+        // ⭐ Биржа уже управляет TP/SL — не создаём дубликаты
+        // if (!position.exchangeStopLossOrderId && !position.exchangeTakeProfitOrderId) {
+        //   const protectionMarket = getActiveMarket(symbol);
+        //   if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
+        //   await ensurePositionProtection(position, protectionMarket);
+        //   unlockSymbol(symbol);
+        // }
         const markPrice = getMarkPrice(symbol);
         if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) throw new Error(`Mark price unavailable for ${symbol}`);
         const pnl = position.side === 'long' ? (markPrice - position.entryPrice) * position.quantity : (position.entryPrice - markPrice) * position.quantity;
