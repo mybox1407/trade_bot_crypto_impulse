@@ -780,6 +780,7 @@ async function checkSignals(): Promise<void> {
     
     await sendAggregatedSignalSummary({
       results: telegramAndCsvResults,
+      openPositionsCount: getOpenPositionsCount(), // ← ДОБАВИТЬ ЭТУ СТРОКУ
       errorsBySymbol: errorsBySymbol.size > 0
         ? Object.fromEntries(errorsBySymbol)
         : undefined,
