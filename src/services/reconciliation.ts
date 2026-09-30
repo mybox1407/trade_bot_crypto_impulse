@@ -263,10 +263,10 @@ async function fetchAccountOrders(
 ): Promise<ProtectiveOrder[]> {
   // REST API ордеров требует HMAC-подписи, которая недоступна через простой токен
   // TP/SL управляются биржей напрямую, локальное хранение не требуется
-  reconciliationLog('FETCH_ACCOUNT_ORDERS_SKIPPED', {
-    accountIndex,
-    reason: 'TP/SL managed by exchange, local storage not required'
-  });
+  //reconciliationLog('FETCH_ACCOUNT_ORDERS_SKIPPED', {
+  //  accountIndex,
+  //  reason: 'TP/SL managed by exchange, local storage not required'
+  //});
   return [];
 }
 
