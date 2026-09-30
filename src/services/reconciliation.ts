@@ -261,43 +261,86 @@ async function fetchAccountOrders(
   signerClient: SignerClient,
   accountIndex: number
 ): Promise<ProtectiveOrder[]> {
-  const url = new URL(`${LIGHTER_API_URL}/api/v1/account/activeOrders`);
-  url.searchParams.set('account_index', String(accountIndex));
-  url.searchParams.set('limit', '500');
-
   const apiKeyIndex = Number(process.env.LIGHTER_API_KEY_INDEX ?? 0);
-  const authToken = createAuthToken(signerClient, apiKeyIndex);
-
-  const data = await fetchJson(url, `fetchAccountOrders accountIndex=${accountIndex}`, authToken);
-  const root = getRecord(data);
-  if (!root) return [];
-
-  const orders: Array<Record<string, unknown>> = [];
-  if (Array.isArray(root.orders)) {
-    orders.push(...root.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null));
+  const authorization = signerClient.create_auth_token_with_expiry(60 * 60, undefined, apiKeyIndex)[0] ?? '';
+  if (!authorization) {
+    reconciliationLog('FETCH_ACCOUNT_ORDERS_SKIPPED', { reason: 'no auth token', accountIndex });
+    return [];
   }
 
-  const mapped = orders.map(order => {
-    const marketId = toNumber(order.market_index ?? order.marketId ?? order.market_id);
-    const typeRaw = getString(order, 'type', 'order_type')?.toLowerCase();
-    const isStopLoss = typeRaw?.includes('stop') ?? order.is_stop_loss === true;
-    const isTakeProfit = typeRaw?.includes('take') ?? order.is_take_profit === true;
-    const price = toNumber(order.price ?? order.trigger_price ?? order.stop_price);
-    const orderId = getString(order, 'order_id', 'orderId');
+  const baseUrl = process.env.LIGHTER_API_URL ?? 'https://mainnet.zklighter.elliot.ai';
 
-    if (marketId == null) return null;
-    if (!isStopLoss && !isTakeProfit) return null;
+  try {
+    // account_index передаём явно, как требует документация [18]
+    const activeUrl = `${baseUrl}/api/v1/accountActiveOrders?account_index=${accountIndex}`;
+    const inactiveUrl = `${baseUrl}/api/v1/accountInactiveOrders?account_index=${accountIndex}`;
 
-    const result: ProtectiveOrder = {
-      marketId,
-      type: isTakeProfit ? 'take_profit' : 'stop_loss',
-      price: price ?? undefined,
-      orderId: orderId ?? undefined
-    };
-    return result;
-  });
+    const [activeRes, inactiveRes] = await Promise.all([
+      fetch(activeUrl, {
+        headers: { Accept: 'application/json', Authorization: authorization }
+      }),
+      fetch(inactiveUrl, {
+        headers: { Accept: 'application/json', Authorization: authorization }
+      })
+    ]);
 
-  return mapped.filter((x): x is ProtectiveOrder => x !== null);
+    const orders: Array<Record<string, unknown>> = [];
+
+    for (const res of [activeRes, inactiveRes]) {
+      if (!res.ok) {
+        // 403/404 логируем, но не падаем
+        if (res.status === 403 || res.status === 404) {
+          reconciliationLog('FETCH_ACCOUNT_ORDERS_ENDPOINT_UNAVAILABLE', {
+            status: res.status,
+            accountIndex,
+            url: res.url
+          });
+          continue;
+        }
+        throw new Error(`Orders request failed: ${res.status}`);
+      }
+
+      const data = await res.json() as Record<string, unknown>;
+      
+      // Lighter возвращает { orders: [...] } или { data: { orders: [...] } }
+      let ordersArray: Array<Record<string, unknown>> = [];
+      if (Array.isArray(data.orders)) {
+        ordersArray = data.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null);
+      } else {
+        const dataRecord = getRecord(data.data);
+        if (dataRecord && Array.isArray(dataRecord.orders)) {
+          ordersArray = dataRecord.orders.map(getRecord).filter((x): x is Record<string, unknown> => x !== null);
+        }
+      }
+      
+      orders.push(...ordersArray);
+    }
+
+    const mapped = orders.map(order => {
+      const marketId = toNumber(order.market_index ?? order.marketId ?? order.market_id);
+      const typeRaw = getString(order, 'type', 'order_type')?.toLowerCase();
+      const isStopLoss = typeRaw?.includes('stop') ?? order.is_stop_loss === true;
+      const isTakeProfit = typeRaw?.includes('take') ?? order.is_take_profit === true;
+      const price = toNumber(order.price ?? order.trigger_price ?? order.stop_price);
+      const orderId = getString(order, 'order_id', 'orderId');
+
+      if (marketId == null) return null;
+      if (!isStopLoss && !isTakeProfit) return null;
+
+      const result: ProtectiveOrder = {
+        marketId,
+        type: isTakeProfit ? 'take_profit' : 'stop_loss',
+        price: price ?? undefined,
+        orderId: orderId ?? undefined
+      };
+      return result;
+    });
+
+    return mapped.filter((x): x is ProtectiveOrder => x !== null);
+  } catch (error) {
+    reconciliationError('FETCH_ACCOUNT_ORDERS_FAILED', error, { accountIndex });
+    return [];
+  }
 }
 
 export async function fetchAccountPositions(
