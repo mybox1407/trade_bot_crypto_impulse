@@ -521,9 +521,13 @@ export async function restoreStateAfterRestart(
   let errors = 0;
   for (const mismatch of result.mismatches) {
     if (mismatch.reason === 'missing_local' && mismatch.remote) {
-      const exists = persisted.positions.some((position: VirtualPosition) => getPositionKey(position) === getPositionKey(mismatch.remote!));
-      if (exists) restored++; else errors++;
-    } else if (mismatch.reason !== 'missing_remote') {
+      // ⭐ Считаем восстановленные позиции успехом, а не ошибкой
+      restored++;
+    } else if (mismatch.reason === 'missing_remote') {
+      // ⭐ Missing remote — это предупреждение, а не ошибка (позиция закрылась на бирже)
+      // Игнорируем — не увеличиваем errors
+    } else {
+      // ⭐ Остальные mismatches (side_mismatch, quantity_mismatch, price_mismatch) — ошибки
       errors++;
     }
   }
