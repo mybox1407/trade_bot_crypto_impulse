@@ -301,6 +301,9 @@ export function notifySignalCheck(data: {
     `Regime: ${data.regime}\n` +
     `Signal: ${signalText}\n` +
     `Reason: ${data.reason ?? 'Conditions not met'}\n` +
+    `Pullback: ${data.pullbackDetected ?? false}\n` +
+    `Reclaim: ${data.reclaimDetected ?? false}\n` +
+    `Signal reason: ${data.signalReason ?? 'N/A'}\n` +
     `${tceText}\n\n` +
     `${new Date().toISOString()}`;
 
