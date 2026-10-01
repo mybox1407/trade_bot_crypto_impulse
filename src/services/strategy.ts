@@ -25,7 +25,7 @@ export const ENABLE_BREAKOUT_TRADES = false;
 
 export const ENABLE_TCE_FILTER = false;
 
-export const TCE_REQUIRED_CANDLES = 250;
+export const TCE_REQUIRED_CANDLES = 200;
 
 export const SYMBOL_COOLDOWN_MS =
   60 * 60 * 1000;
