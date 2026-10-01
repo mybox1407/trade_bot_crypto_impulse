@@ -44,7 +44,7 @@ export const MIN_ENTRY_ADX_SHORT = 23;
 export const MIN_ENTRY_ADX_LONG = 23;
 export const MAX_ENTRY_ADX = 45;
 
-export const MIN_LAST_ATR_PCT = 0.001;
+export const MIN_LAST_ATR_PCT = 0.001; //Было 0.005
 export const MAX_LAST_ATR_PCT_LONG = 0.04; //Было 0.0195
 export const MAX_LAST_ATR_PCT_SHORT = 0.05; //Было 0.025
 
