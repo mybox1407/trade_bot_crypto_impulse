@@ -314,16 +314,194 @@ function getOrderId(
     : String(value);
 }
 
+function getOrderIndex(
+  order: unknown
+): number | undefined {
+  if (!order || typeof order !== 'object') {
+    return undefined;
+  }
+
+  const record =
+    order as Record<string, unknown>;
+
+  const value =
+    record.order_index ??
+    record.orderIndex ??
+    record.order_id;
+
+  const index = Number(value);
+
+  return Number.isSafeInteger(index)
+    ? index
+    : undefined;
+}
+
+function createAuthToken(
+  signer: SignerClient
+): string {
+  const result =
+    signer.create_auth_token_with_expiry(
+      60 * 60,
+      undefined,
+      API_KEY_INDEX
+    );
+
+  const token = result[0];
+
+  if (!token) {
+    throw new Error(
+      'Failed to create Lighter auth token'
+    );
+  }
+
+  return token;
+}
+
+type RemoteOrder = {
+  market_index?: number | string;
+  client_order_index?: number | string;
+  order_index?: number | string;
+  order_id?: number | string;
+  status?: string;
+  filled_base_amount?: number | string;
+  remaining_base_amount?: number | string;
+  is_ask?: boolean | number;
+};
+
+async function getOrders(
+  signer: SignerClient,
+  endpoint:
+    | 'accountActiveOrders'
+    | 'accountInactiveOrders'
+): Promise<RemoteOrder[]> {
+  const url = new URL(
+    `${API_URL}/api/v1/${endpoint}`
+  );
+
+  url.searchParams.set(
+    'account_index',
+    String(ACCOUNT_INDEX)
+  );
+  url.searchParams.set(
+    'market_id',
+    String(XRP_MARKET_ID)
+  );
+  url.searchParams.set(
+    'market_type',
+    'perp'
+  );
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: createAuthToken(signer)
+    }
+  });
+
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `${endpoint} failed: ` +
+      `${response.status}: ${body}`
+    );
+  }
+
+  const data = JSON.parse(body) as any;
+
+  return Array.isArray(data.orders)
+    ? data.orders
+    : [];
+}
+
+async function waitForEntryFill(
+  signer: SignerClient,
+  clientOrderIndex: number,
+  timeoutMs = 45_000
+): Promise<{
+  filledBaseAmount: number;
+  averagePrice?: number;
+  order: RemoteOrder;
+}> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const [active, inactive] =
+      await Promise.all([
+        getOrders(
+          signer,
+          'accountActiveOrders'
+        ),
+        getOrders(
+          signer,
+          'accountInactiveOrders'
+        )
+      ]);
+
+    const order = [
+      ...active,
+      ...inactive
+    ].find(item =>
+      Number(item.client_order_index) ===
+      clientOrderIndex
+    );
+
+    if (order) {
+      const filledBaseAmount =
+        Number(
+          order.filled_base_amount ?? 0
+        );
+
+      const status =
+        String(order.status ?? '')
+          .toLowerCase();
+
+      console.log('ENTRY STATUS', {
+        clientOrderIndex,
+        status,
+        filledBaseAmount,
+        remainingBaseAmount:
+          order.remaining_base_amount,
+        isAsk: order.is_ask
+      });
+
+      if (
+        Number.isFinite(filledBaseAmount) &&
+        filledBaseAmount > 0
+      ) {
+        return {
+          filledBaseAmount,
+          order
+        };
+      }
+
+      if (
+        status.includes('cancel') ||
+        status === 'rejected' ||
+        status === 'failed' ||
+        status === 'expired'
+      ) {
+        throw new Error(
+          `Entry was not filled: ${status}`
+        );
+      }
+    }
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 1_500)
+    );
+  }
+
+  throw new Error(
+    `Entry fill timeout for client_order_index=` +
+    clientOrderIndex
+  );
+}
+
 async function main(): Promise<void> {
   if (!API_SECRET) {
     throw new Error(
       'LIGHTER_API_SECRET is missing in .env'
-    );
-  }
-
-  if (!Number.isInteger(XRP_MARKET_ID)) {
-    throw new Error(
-      `Invalid XRP_MARKET_ID: ${XRP_MARKET_ID}`
     );
   }
 
@@ -363,9 +541,6 @@ async function main(): Promise<void> {
     );
   }
 
-  // Short:
-  // SL выше цены входа
-  // TP ниже цены входа
   const stopLossPrice =
     entryPrice +
     atr * STOP_LOSS_ATR_MULTIPLIER;
@@ -390,11 +565,6 @@ async function main(): Promise<void> {
     entryIsAsk: true
   });
 
-  /*
-   * Открытие Short:
-   * isAsk = true
-   * reduceOnly = false
-   */
   const [
     entryOrder,
     entryTx,
@@ -421,17 +591,37 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log('SHORT ENTRY CREATED', {
+  console.log('SHORT ENTRY SUBMITTED', {
     orderId: getOrderId(entryOrder),
+    orderIndex: getOrderIndex(entryOrder),
+    clientOrderIndex: entryClientOrderIndex,
     order: entryOrder,
     tx: entryTx
   });
 
-  /*
-   * Для Short выход выполняется Buy:
-   * isAsk = false
-   * reduceOnly = true
-   */
+  const filled =
+    await waitForEntryFill(
+      signer,
+      entryClientOrderIndex
+    );
+
+  const filledBaseAmount =
+    filled.filledBaseAmount;
+
+  const filledQuantity =
+    filledBaseAmount /
+    10 ** SIZE_DECIMALS;
+
+  const actualEntryPrice =
+    entryPrice;
+
+  console.log('SHORT ENTRY FILLED', {
+    filledBaseAmount,
+    filledQuantity,
+    actualEntryPrice,
+    isAsk: true
+  });
+
   const slClientOrderIndex =
     entryClientOrderIndex + 1;
 
@@ -472,7 +662,7 @@ async function main(): Promise<void> {
     await signer.create_sl_order(
       XRP_MARKET_ID,
       slClientOrderIndex,
-      baseAmount,
+      filledBaseAmount,
       slTrigger,
       slExecution,
       false,
@@ -505,7 +695,7 @@ async function main(): Promise<void> {
     await signer.create_tp_order(
       XRP_MARKET_ID,
       tpClientOrderIndex,
-      baseAmount,
+      filledBaseAmount,
       tpTrigger,
       tpExecution,
       false,
@@ -530,7 +720,7 @@ async function main(): Promise<void> {
     tx: tpTx
   });
 
-  console.log('DONE');
+  console.log('DONE: POSITION FILLED AND PROTECTED');
 }
 
 main().catch(error => {
