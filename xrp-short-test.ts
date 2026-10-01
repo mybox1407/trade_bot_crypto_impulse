@@ -1,4 +1,4 @@
-// xrp-short-test.ts
+import 'dotenv/config';
 import { SignerClient } from 'zklighter-sdk';
 
 const API_URL =
@@ -14,171 +14,307 @@ const API_KEY_INDEX =
 const ACCOUNT_INDEX =
   Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
 
-// Укажи фактический market index XRP из конфигурации Lighter
-const XRP_MARKET_ID =
-  Number(process.env.XRP_MARKET_ID ?? 0);
+// Укажи здесь marketId XRP из Lighter
+const XRP_MARKET_ID = 7;
 
 const PRICE_DECIMALS = 4;
 const SIZE_DECIMALS = 6;
 
 const BALANCE_PERCENT = 0.10;
-const SL_ATR_MULTIPLIER = 2.8;
-const TP_ATR_MULTIPLIER = 3.0;
-const SLIPPAGE_BPS = 50;
+const STOP_LOSS_ATR_MULTIPLIER = 2.8;
+const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
+const MARKET_SLIPPAGE_BPS = 50;
+const PROTECTION_SLIPPAGE_PCT = 0.5;
 
-const signer = new SignerClient(
-  API_URL,
-  API_SECRET.replace(/^0x/, ''),
-  API_KEY_INDEX,
-  ACCOUNT_INDEX
-);
+type Candle = {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
 
-function units(value: number, decimals: number): number {
+function toUnits(
+  value: number,
+  decimals: number
+): number {
   return Math.round(value * 10 ** decimals);
 }
 
-function clientOrderIndex(): number {
+function createClientOrderIndex(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-async function getBalance(): Promise<number> {
+function assertPositive(
+  name: string,
+  value: number
+): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} is invalid: ${value}`);
+  }
+}
+
+async function getAccountBalance(): Promise<number> {
   const response = await fetch(
-    `${API_URL}/api/v1/account`,
+    `${API_URL}/api/v1/account?account_index=${ACCOUNT_INDEX}`
   );
 
   if (!response.ok) {
     throw new Error(
-      `Balance request failed: ${response.status}`,
+      `Account request failed: ${response.status}`
     );
   }
 
   const data = await response.json() as any;
 
+  const account =
+    Array.isArray(data.accounts)
+      ? data.accounts[0]
+      : data;
+
   const balance = Number(
-    data.accounts?.[0]?.available_balance ??
-    data.available_balance ??
-    data.balance
+    account?.available_balance ??
+    account?.availableBalance ??
+    account?.balance
   );
 
-  if (!Number.isFinite(balance) || balance <= 0) {
-    throw new Error(`Invalid balance: ${balance}`);
-  }
+  assertPositive('Available balance', balance);
 
   return balance;
 }
 
-async function getCandles(): Promise<number[][]> {
-  const response = await fetch(
-    `${API_URL}/api/v1/candles?market_id=${XRP_MARKET_ID}&resolution=15m&count=100`,
+async function getMarkPrice(): Promise<number> {
+  const url = new URL(
+    `${API_URL}/api/v1/orderBookDetails`
   );
+
+  url.searchParams.set(
+    'market_id',
+    String(XRP_MARKET_ID)
+  );
+
+  const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(
-      `Candles request failed: ${response.status}`,
+      `Order book request failed: ${response.status}`
     );
   }
 
   const data = await response.json() as any;
 
-  return data.candles ?? data;
+  const book =
+    Array.isArray(data.order_books)
+      ? data.order_books[0]
+      : Array.isArray(data.orderBooks)
+        ? data.orderBooks[0]
+        : data;
+
+  const markPrice = Number(
+    book?.mark_price ??
+    book?.markPrice ??
+    data?.mark_price ??
+    data?.markPrice
+  );
+
+  assertPositive('Mark price', markPrice);
+
+  return markPrice;
 }
 
-function calculateAtr(candles: number[][], period = 14): number {
+async function getCandles(): Promise<Candle[]> {
+  const url = new URL(
+    `${API_URL}/api/v1/candles`
+  );
+
+  url.searchParams.set(
+    'market_id',
+    String(XRP_MARKET_ID)
+  );
+  url.searchParams.set(
+    'resolution',
+    '15m'
+  );
+  url.searchParams.set(
+    'count_back',
+    '100'
+  );
+  url.searchParams.set(
+    'start_timestamp',
+    '0'
+  );
+  url.searchParams.set(
+    'end_timestamp',
+    String(Date.now())
+  );
+  url.searchParams.set(
+    'set_timestamp_to_end',
+    'false'
+  );
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Candles request failed: ${response.status}`
+    );
+  }
+
+  const data = await response.json() as any;
+
+  const rawCandles =
+    data.candles ??
+    data.data ??
+    data;
+
+  if (!Array.isArray(rawCandles)) {
+    throw new Error(
+      'Invalid candles response'
+    );
+  }
+
+  return rawCandles.map((candle: any) => ({
+    open: Number(
+      candle.open ?? candle.o ?? candle[1]
+    ),
+    high: Number(
+      candle.high ?? candle.h ?? candle[2]
+    ),
+    low: Number(
+      candle.low ?? candle.l ?? candle[3]
+    ),
+    close: Number(
+      candle.close ?? candle.c ?? candle[4]
+    )
+  })).filter((candle: Candle) =>
+    Number.isFinite(candle.open) &&
+    Number.isFinite(candle.high) &&
+    Number.isFinite(candle.low) &&
+    Number.isFinite(candle.close) &&
+    candle.high > 0 &&
+    candle.low > 0
+  );
+}
+
+function calculateAtr(
+  candles: Candle[],
+  period = 14
+): number {
   if (candles.length < period + 1) {
-    throw new Error('Not enough candles for ATR');
+    throw new Error(
+      `Not enough candles for ATR: ${candles.length}`
+    );
   }
 
   const trueRanges: number[] = [];
 
-  for (let i = 1; i < candles.length; i++) {
-    const previousClose = Number(candles[i - 1][4]);
-    const high = Number(candles[i][2]);
-    const low = Number(candles[i][3]);
+  for (let i = 1; i < candles.length; i += 1) {
+    const current = candles[i];
+    const previous = candles[i - 1];
 
     trueRanges.push(
       Math.max(
-        high - low,
-        Math.abs(high - previousClose),
-        Math.abs(low - previousClose),
-      ),
+        current.high - current.low,
+        Math.abs(
+          current.high - previous.close
+        ),
+        Math.abs(
+          current.low - previous.close
+        )
+      )
     );
   }
 
-  const recent = trueRanges.slice(-period);
+  const values =
+    trueRanges.slice(-period);
 
-  return recent.reduce(
+  return values.reduce(
     (sum, value) => sum + value,
-    0,
-  ) / recent.length;
+    0
+  ) / values.length;
 }
 
-async function getMarkPrice(): Promise<number> {
-  const response = await fetch(
-    `${API_URL}/api/v1/orderBookDetails?market_id=${XRP_MARKET_ID}`,
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `Market price request failed: ${response.status}`,
-    );
+function getOrderId(
+  order: unknown
+): string | undefined {
+  if (!order || typeof order !== 'object') {
+    return undefined;
   }
 
-  const data = await response.json() as any;
+  const record =
+    order as Record<string, unknown>;
 
-  const price = Number(
-    data.mark_price ??
-    data.markPrice ??
-    data.mid_price ??
-    data.midPrice
-  );
+  const value =
+    record.order_id ??
+    record.orderIndex ??
+    record.order_index;
 
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error(`Invalid XRP price: ${price}`);
-  }
-
-  return price;
+  return value == null
+    ? undefined
+    : String(value);
 }
 
 async function main(): Promise<void> {
   if (!API_SECRET) {
     throw new Error(
-      'LIGHTER_API_SECRET is required',
+      'LIGHTER_API_SECRET is missing in .env'
     );
   }
 
   if (!Number.isInteger(XRP_MARKET_ID)) {
     throw new Error(
-      `Invalid XRP_MARKET_ID: ${XRP_MARKET_ID}`,
+      `Invalid XRP_MARKET_ID: ${XRP_MARKET_ID}`
     );
   }
 
-  const balance = await getBalance();
-  const price = await getMarkPrice();
-  const candles = await getCandles();
-  const atr = calculateAtr(candles);
-
-  const margin = balance * BALANCE_PERCENT;
-  const quantity = margin / price;
-
-  const entryPrice = price;
-
-  // Short: SL выше входа, TP ниже входа
-  const stopLossPrice =
-    entryPrice + atr * SL_ATR_MULTIPLIER;
-
-  const takeProfitPrice =
-    entryPrice - atr * TP_ATR_MULTIPLIER;
-
-  const baseAmount = units(
-    quantity,
-    SIZE_DECIMALS,
+  const signer = new SignerClient(
+    API_URL,
+    API_SECRET.replace(/^0x/, ''),
+    API_KEY_INDEX,
+    ACCOUNT_INDEX
   );
 
+  const balance =
+    await getAccountBalance();
+
+  const entryPrice =
+    await getMarkPrice();
+
+  const candles =
+    await getCandles();
+
+  const atr =
+    calculateAtr(candles);
+
+  const margin =
+    balance * BALANCE_PERCENT;
+
+  const quantity =
+    margin / entryPrice;
+
+  const baseAmount =
+    Math.floor(
+      quantity * 10 ** SIZE_DECIMALS
+    );
+
   if (baseAmount <= 0) {
-    throw new Error('Calculated order size is zero');
+    throw new Error(
+      `Invalid base amount: ${baseAmount}`
+    );
   }
 
-  const entryClientIndex = clientOrderIndex();
+  // Short:
+  // SL выше цены входа
+  // TP ниже цены входа
+  const stopLossPrice =
+    entryPrice +
+    atr * STOP_LOSS_ATR_MULTIPLIER;
+
+  const takeProfitPrice =
+    entryPrice -
+    atr * TAKE_PROFIT_ATR_MULTIPLIER;
+
+  const entryClientOrderIndex =
+    createClientOrderIndex();
 
   console.log({
     marketId: XRP_MARKET_ID,
@@ -187,114 +323,162 @@ async function main(): Promise<void> {
     entryPrice,
     atr,
     quantity,
+    baseAmount,
     stopLossPrice,
     takeProfitPrice,
-    entryIsAsk: true,
+    entryIsAsk: true
   });
 
-  // SHORT = SELL = isAsk=true
-  const [entryOrder, entryTx, entryError] =
+  /*
+   * Открытие Short:
+   * isAsk = true
+   * reduceOnly = false
+   */
+  const [
+    entryOrder,
+    entryTx,
+    entryError
+  ] =
     await signer.create_market_order_if_slippage(
       XRP_MARKET_ID,
-      entryClientIndex,
+      entryClientOrderIndex,
       baseAmount,
-      SLIPPAGE_BPS / 10_000,
+      MARKET_SLIPPAGE_BPS / 10_000,
       true,
       false,
       -1,
       API_KEY_INDEX,
-      units(entryPrice, PRICE_DECIMALS),
+      toUnits(
+        entryPrice,
+        PRICE_DECIMALS
+      )
     );
 
   if (entryError) {
     throw new Error(
-      `Short entry failed: ${entryError}`,
+      `Short entry failed: ${entryError}`
     );
   }
 
-  console.log('SHORT ENTRY SUBMITTED', {
+  console.log('SHORT ENTRY CREATED', {
+    orderId: getOrderId(entryOrder),
     order: entryOrder,
-    tx: entryTx,
+    tx: entryTx
   });
 
-  // Для Short защитные заявки закрывают через BUY = isAsk=false
-  const slClientIndex = clientOrderIndex() + 1;
-  const tpClientIndex = clientOrderIndex() + 2;
+  /*
+   * Для Short выход выполняется Buy:
+   * isAsk = false
+   * reduceOnly = true
+   */
+  const slClientOrderIndex =
+    entryClientOrderIndex + 1;
 
-  const slTrigger = units(
-    stopLossPrice,
-    PRICE_DECIMALS,
-  );
+  const tpClientOrderIndex =
+    entryClientOrderIndex + 2;
 
-  const tpTrigger = units(
-    takeProfitPrice,
-    PRICE_DECIMALS,
-  );
+  const slTrigger =
+    toUnits(
+      stopLossPrice,
+      PRICE_DECIMALS
+    );
 
-  const slExecution = units(
-    stopLossPrice * 1.005,
-    PRICE_DECIMALS,
-  );
+  const tpTrigger =
+    toUnits(
+      takeProfitPrice,
+      PRICE_DECIMALS
+    );
 
-  const tpExecution = units(
-    takeProfitPrice * 1.005,
-    PRICE_DECIMALS,
-  );
+  const slExecution =
+    toUnits(
+      stopLossPrice *
+      (1 + PROTECTION_SLIPPAGE_PCT / 100),
+      PRICE_DECIMALS
+    );
 
-  const [slOrder, slTx, slError] =
+  const tpExecution =
+    toUnits(
+      takeProfitPrice *
+      (1 + PROTECTION_SLIPPAGE_PCT / 100),
+      PRICE_DECIMALS
+    );
+
+  const [
+    slOrder,
+    slTx,
+    slError
+  ] =
     await signer.create_sl_order(
       XRP_MARKET_ID,
-      slClientIndex,
+      slClientOrderIndex,
       baseAmount,
       slTrigger,
       slExecution,
       false,
       true,
       -1,
-      API_KEY_INDEX,
+      API_KEY_INDEX
     );
 
   if (slError) {
     throw new Error(
-      `SL creation failed: ${slError}`,
+      `Stop-loss creation failed: ${slError}`
     );
   }
 
-  console.log('SHORT SL SUBMITTED', {
-    order: slOrder,
-    tx: slTx,
+  console.log('SHORT STOP-LOSS CREATED', {
+    orderId: getOrderId(slOrder),
     triggerPrice: stopLossPrice,
-    executionPrice: stopLossPrice * 1.005,
+    executionPrice:
+      stopLossPrice *
+      (1 + PROTECTION_SLIPPAGE_PCT / 100),
+    order: slOrder,
+    tx: slTx
   });
 
-  const [tpOrder, tpTx, tpError] =
+  const [
+    tpOrder,
+    tpTx,
+    tpError
+  ] =
     await signer.create_tp_order(
       XRP_MARKET_ID,
-      tpClientIndex,
+      tpClientOrderIndex,
       baseAmount,
       tpTrigger,
       tpExecution,
       false,
       true,
       -1,
-      API_KEY_INDEX,
+      API_KEY_INDEX
     );
 
   if (tpError) {
     throw new Error(
-      `TP creation failed: ${tpError}`,
+      `Take-profit creation failed: ${tpError}`
     );
   }
 
-  console.log('SHORT TP SUBMITTED', {
-    order: tpOrder,
-    tx: tpTx,
+  console.log('SHORT TAKE-PROFIT CREATED', {
+    orderId: getOrderId(tpOrder),
     triggerPrice: takeProfitPrice,
-    executionPrice: takeProfitPrice * 1.005,
+    executionPrice:
+      takeProfitPrice *
+      (1 + PROTECTION_SLIPPAGE_PCT / 100),
+    order: tpOrder,
+    tx: tpTx
   });
+
+  console.log('DONE');
 }
 
 main().catch(error => {
-  console.error(error);
-  process.exit(1);
+  console.error(
+    `[${new Date().toISOString()}]`,
+    error instanceof Error
+      ? error.message
+      : error
+  );
+
+  process.exitCode = 1;
 });
