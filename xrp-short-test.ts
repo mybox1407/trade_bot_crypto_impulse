@@ -232,41 +232,19 @@ async function getCandles(): Promise<Candle[]> {
 
   const data = JSON.parse(body) as any;
 
-  const rawCandles =
-    data.candles ??
-    data.data?.candles ??
-    data.data ??
-    data.items;
-
-  if (!Array.isArray(rawCandles)) {
+  if (!Array.isArray(data.c)) {
     throw new Error(
       'Invalid candles response: ' +
       JSON.stringify(data).slice(0, 1000)
     );
   }
 
-  return rawCandles
+  return data.c
     .map((candle: any) => ({
-      open: Number(
-        candle.open ??
-        candle.o ??
-        candle[1]
-      ),
-      high: Number(
-        candle.high ??
-        candle.h ??
-        candle[2]
-      ),
-      low: Number(
-        candle.low ??
-        candle.l ??
-        candle[3]
-      ),
-      close: Number(
-        candle.close ??
-        candle.c ??
-        candle[4]
-      )
+      open: Number(candle.o),
+      high: Number(candle.h),
+      low: Number(candle.l),
+      close: Number(candle.c)
     }))
     .filter((candle: Candle) =>
       Number.isFinite(candle.open) &&
