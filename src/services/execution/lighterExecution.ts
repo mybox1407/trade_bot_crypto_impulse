@@ -234,30 +234,47 @@ export class LighterExecutionService implements ExecutionService {
     if (req.side === 'short' && (req.stopLossPrice <= req.expectedPrice || req.takeProfitPrice >= req.expectedPrice)) throw new Error('Invalid SHORT SL/TP levels');
   }
 
-  private async createProtectiveOrders(req: { marketId: number; side: 'long' | 'short'; priceDecimals?: number; stopLossPrice: number; takeProfitPrice: number }, baseAmount: number): Promise<ProtectiveOrders> {
+  private async createProtectiveOrders(
+    req: { marketId: number; side: 'long' | 'short'; priceDecimals?: number; stopLossPrice: number; takeProfitPrice: number },
+    baseAmount: number
+  ): Promise<ProtectiveOrders> {
     const priceDecimals = req.priceDecimals ?? 2;
     const slippage = Number(process.env.LIGHTER_PROTECTIVE_SLIPPAGE_PCT ?? 0.5) / 100;
-    if (!Number.isFinite(slippage) || slippage < 0) throw new Error('Invalid LIGHTER_PROTECTIVE_SLIPPAGE_PCT');
-
+  
     const slClientOrderIndex = this.createClientOrderIndex();
     const tpClientOrderIndex = this.createClientOrderIndex();
     const isAsk = req.side === 'long';
-
-    const sl = await this.createStopLoss(req, baseAmount, priceDecimals, slippage, isAsk, slClientOrderIndex);
-    try {
-      const tp = await this.createTakeProfit(req, baseAmount, priceDecimals, slippage, isAsk, tpClientOrderIndex);
+  
+    // Инвертируем порядок создания для LONG
+    const firstOrder = req.side === 'long' 
+      ? await this.createTakeProfit(req, baseAmount, priceDecimals, slippage, isAsk, tpClientOrderIndex)
+      : await this.createStopLoss(req, baseAmount, priceDecimals, slippage, isAsk, slClientOrderIndex);
+  
+    const secondOrder = req.side === 'long'
+      ? await this.createStopLoss(req, baseAmount, priceDecimals, slippage, isAsk, slClientOrderIndex)
+      : await this.createTakeProfit(req, baseAmount, priceDecimals, slippage, isAsk, tpClientOrderIndex);
+  
+    if (req.side === 'long') {
       return {
         marketId: req.marketId,
-        stopLossOrderId: sl.orderId,
-        takeProfitOrderId: tp.orderId,
-        stopLossOrderIndex: sl.orderIndex,
-        takeProfitOrderIndex: tp.orderIndex,
+        stopLossOrderId: secondOrder.orderId,
+        takeProfitOrderId: firstOrder.orderId,
+        stopLossOrderIndex: secondOrder.orderIndex,
+        takeProfitOrderIndex: firstOrder.orderIndex,
         stopLossClientOrderIndex: slClientOrderIndex,
         takeProfitClientOrderIndex: tpClientOrderIndex
       };
-    } catch (error) {
-      throw new Error(`SL created but TP creation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
+  
+    return {
+      marketId: req.marketId,
+      stopLossOrderId: firstOrder.orderId,
+      takeProfitOrderId: secondOrder.orderId,
+      stopLossOrderIndex: firstOrder.orderIndex,
+      takeProfitOrderIndex: secondOrder.orderIndex,
+      stopLossClientOrderIndex: slClientOrderIndex,
+      takeProfitClientOrderIndex: tpClientOrderIndex
+    };
   }
 
   private async createStopLoss(req: { marketId: number; side: 'long' | 'short'; stopLossPrice: number }, baseAmount: number, priceDecimals: number, slippage: number, isAsk: boolean, clientOrderIndex: number): Promise<ProtectiveOrderPart> {
