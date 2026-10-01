@@ -147,30 +147,39 @@ async function getMarkPrice(): Promise<number> {
   );
 
   const response = await fetch(url);
+  const body = await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `Order book request failed: ${response.status}`
+      `Order book request failed: ` +
+      `${response.status}: ${body}`
     );
   }
 
-  const data = await response.json() as any;
+  const data = JSON.parse(body) as any;
 
   const book =
-    Array.isArray(data.order_books)
-      ? data.order_books[0]
-      : Array.isArray(data.orderBooks)
-        ? data.orderBooks[0]
-        : data;
+    data.perp_order_books?.[0] ??
+    data.perps_order_books?.[0] ??
+    data.order_book_details?.[0] ??
+    data.orderBookDetails?.[0] ??
+    data;
 
   const markPrice = Number(
-    book?.mark_price ??
-    book?.markPrice ??
-    data?.mark_price ??
-    data?.markPrice
+    book.mark_price ??
+    book.markPrice ??
+    book.last_trade_price ??
+    book.lastPrice ??
+    book.mid_price ??
+    book.midPrice
   );
 
-  assertPositive('Mark price', markPrice);
+  if (!Number.isFinite(markPrice) || markPrice <= 0) {
+    throw new Error(
+      `Mark price is invalid: ${markPrice}; ` +
+      `response: ${JSON.stringify(data).slice(0, 1000)}`
+    );
+  }
 
   return markPrice;
 }
