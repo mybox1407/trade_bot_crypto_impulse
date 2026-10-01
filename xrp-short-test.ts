@@ -14,11 +14,11 @@ const API_KEY_INDEX =
 const ACCOUNT_INDEX =
   Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
 
-// Укажи здесь marketId XRP из Lighter
 const XRP_MARKET_ID = 7;
 
 const PRICE_DECIMALS = 6;
 const SIZE_DECIMALS = 0;
+const MIN_BASE_AMOUNT = 4;
 
 const BALANCE_PERCENT = 0.10;
 const STOP_LOSS_ATR_MULTIPLIER = 2.8;
@@ -31,6 +31,18 @@ type Candle = {
   high: number;
   low: number;
   close: number;
+};
+
+type RemoteOrder = {
+  market_index?: number | string;
+  client_order_index?: number | string;
+  order_index?: number | string;
+  order_id?: number | string;
+  status?: string;
+  filled_base_amount?: number | string;
+  filled_quote_amount?: number | string;
+  remaining_base_amount?: number | string;
+  is_ask?: boolean | number;
 };
 
 function toUnits(
@@ -53,6 +65,33 @@ function assertPositive(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve =>
+    setTimeout(resolve, ms)
+  );
+}
+
+function createAuthToken(
+  signer: SignerClient
+): string {
+  const result =
+    signer.create_auth_token_with_expiry(
+      60 * 60,
+      undefined,
+      API_KEY_INDEX
+    );
+
+  const token = result[0];
+
+  if (!token) {
+    throw new Error(
+      'Failed to create Lighter auth token'
+    );
+  }
+
+  return token;
+}
+
 async function getAccountBalance(
   signer: SignerClient
 ): Promise<number> {
@@ -66,25 +105,10 @@ async function getAccountBalance(
     String(ACCOUNT_INDEX)
   );
 
-  const result =
-    signer.create_auth_token_with_expiry(
-      60 * 60,
-      undefined,
-      API_KEY_INDEX
-    );
-
-  const authToken = result[0];
-
-  if (!authToken) {
-    throw new Error(
-      'Failed to create Lighter auth token'
-    );
-  }
-
   const response = await fetch(url, {
     headers: {
       Accept: 'application/json',
-      Authorization: authToken
+      Authorization: createAuthToken(signer)
     }
   });
 
@@ -174,12 +198,7 @@ async function getMarkPrice(): Promise<number> {
     book.midPrice
   );
 
-  if (!Number.isFinite(markPrice) || markPrice <= 0) {
-    throw new Error(
-      `Mark price is invalid: ${markPrice}; ` +
-      `response: ${JSON.stringify(data).slice(0, 1000)}`
-    );
-  }
+  assertPositive('Mark price', markPrice);
 
   return markPrice;
 }
@@ -199,22 +218,27 @@ async function getCandles(): Promise<Candle[]> {
     'market_id',
     String(XRP_MARKET_ID)
   );
+
   url.searchParams.set(
     'resolution',
     '15m'
   );
+
   url.searchParams.set(
     'start_timestamp',
     String(startTimestamp)
   );
+
   url.searchParams.set(
     'end_timestamp',
     String(endTimestamp)
   );
+
   url.searchParams.set(
     'count_back',
     '100'
   );
+
   url.searchParams.set(
     'set_timestamp_to_end',
     'false'
@@ -336,38 +360,6 @@ function getOrderIndex(
     : undefined;
 }
 
-function createAuthToken(
-  signer: SignerClient
-): string {
-  const result =
-    signer.create_auth_token_with_expiry(
-      60 * 60,
-      undefined,
-      API_KEY_INDEX
-    );
-
-  const token = result[0];
-
-  if (!token) {
-    throw new Error(
-      'Failed to create Lighter auth token'
-    );
-  }
-
-  return token;
-}
-
-type RemoteOrder = {
-  market_index?: number | string;
-  client_order_index?: number | string;
-  order_index?: number | string;
-  order_id?: number | string;
-  status?: string;
-  filled_base_amount?: number | string;
-  remaining_base_amount?: number | string;
-  is_ask?: boolean | number;
-};
-
 async function getOrders(
   signer: SignerClient,
   endpoint:
@@ -422,12 +414,15 @@ async function waitForEntryFill(
   timeoutMs = 45_000
 ): Promise<{
   filledBaseAmount: number;
-  averagePrice?: number;
+  averagePrice: number;
   order: RemoteOrder;
 }> {
   const startedAt = Date.now();
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (
+    Date.now() - startedAt <
+    timeoutMs
+  ) {
     const [active, inactive] =
       await Promise.all([
         getOrders(
@@ -454,6 +449,11 @@ async function waitForEntryFill(
           order.filled_base_amount ?? 0
         );
 
+      const filledQuoteAmount =
+        Number(
+          order.filled_quote_amount ?? 0
+        );
+
       const status =
         String(order.status ?? '')
           .toLowerCase();
@@ -462,6 +462,7 @@ async function waitForEntryFill(
         clientOrderIndex,
         status,
         filledBaseAmount,
+        filledQuoteAmount,
         remainingBaseAmount:
           order.remaining_base_amount,
         isAsk: order.is_ask
@@ -471,8 +472,22 @@ async function waitForEntryFill(
         Number.isFinite(filledBaseAmount) &&
         filledBaseAmount > 0
       ) {
+        if (
+          !Number.isFinite(filledQuoteAmount) ||
+          filledQuoteAmount <= 0
+        ) {
+          throw new Error(
+            'Entry filled, but filled_quote_amount is invalid'
+          );
+        }
+
+        const averagePrice =
+          filledQuoteAmount /
+          filledBaseAmount;
+
         return {
           filledBaseAmount,
+          averagePrice,
           order
         };
       }
@@ -489,9 +504,7 @@ async function waitForEntryFill(
       }
     }
 
-    await new Promise(resolve =>
-      setTimeout(resolve, 1_500)
-    );
+    await sleep(1_500);
   }
 
   throw new Error(
@@ -517,7 +530,7 @@ async function main(): Promise<void> {
   const balance =
     await getAccountBalance(signer);
 
-  const entryPrice =
+  const requestedEntryPrice =
     await getMarkPrice();
 
   const candles =
@@ -529,27 +542,22 @@ async function main(): Promise<void> {
   const margin =
     balance * BALANCE_PERCENT;
 
+  const rawQuantity =
+    margin / requestedEntryPrice;
+
   const quantity =
-    margin / entryPrice;
+    Math.floor(rawQuantity);
 
-  const baseAmount =
-    Math.floor(
-      quantity * 10 ** SIZE_DECIMALS
-    );
-
-  if (baseAmount <= 0) {
+  if (quantity < MIN_BASE_AMOUNT) {
     throw new Error(
-      `Invalid base amount: ${baseAmount}`
+      `10% balance is insufficient: ` +
+      `margin=${margin.toFixed(6)}, ` +
+      `quantity=${quantity}, ` +
+      `minimum=${MIN_BASE_AMOUNT} XRP`
     );
   }
 
-  const stopLossPrice =
-    entryPrice +
-    atr * STOP_LOSS_ATR_MULTIPLIER;
-
-  const takeProfitPrice =
-    entryPrice -
-    atr * TAKE_PROFIT_ATR_MULTIPLIER;
+  const baseAmount = quantity;
 
   const entryClientOrderIndex =
     createClientOrderIndex();
@@ -558,12 +566,10 @@ async function main(): Promise<void> {
     marketId: XRP_MARKET_ID,
     balance,
     margin,
-    entryPrice,
+    requestedEntryPrice,
     atr,
-    quantity,
+    rawQuantity,
     baseAmount,
-    stopLossPrice,
-    takeProfitPrice,
     entryIsAsk: true
   });
 
@@ -582,7 +588,7 @@ async function main(): Promise<void> {
       -1,
       API_KEY_INDEX,
       toUnits(
-        entryPrice,
+        requestedEntryPrice,
         PRICE_DECIMALS
       )
     );
@@ -615,12 +621,33 @@ async function main(): Promise<void> {
     10 ** SIZE_DECIMALS;
 
   const actualEntryPrice =
-    entryPrice;
+    filled.averagePrice;
+
+  if (
+    !Number.isFinite(actualEntryPrice) ||
+    actualEntryPrice <= 0
+  ) {
+    throw new Error(
+      `Invalid actual entry price: ${actualEntryPrice}`
+    );
+  }
+
+  const stopLossPrice =
+    actualEntryPrice +
+    atr * STOP_LOSS_ATR_MULTIPLIER;
+
+  const takeProfitPrice =
+    actualEntryPrice -
+    atr * TAKE_PROFIT_ATR_MULTIPLIER;
 
   console.log('SHORT ENTRY FILLED', {
     filledBaseAmount,
     filledQuantity,
+    requestedEntryPrice,
     actualEntryPrice,
+    atr,
+    stopLossPrice,
+    takeProfitPrice,
     isAsk: true
   });
 
@@ -722,7 +749,9 @@ async function main(): Promise<void> {
     tx: tpTx
   });
 
-  console.log('DONE: POSITION FILLED AND PROTECTED');
+  console.log(
+    'DONE: POSITION FILLED AND PROTECTED'
+  );
 }
 
 main().catch(error => {
