@@ -316,6 +316,9 @@ export function logSignalCheck(row: {
   entryDistanceFromEma20?: number;
   entryDistanceFromEma20Atr?: number;
   entryTooExtended?: boolean;
+  pullbackDetected?: boolean;
+  reclaimDetected?: boolean;
+  signalReason?: string;
   signalTimeIso?: string;
   isTradingWindow?: boolean;
   mlProbability?: number | null;
