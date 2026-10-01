@@ -48,10 +48,10 @@ export const MIN_LAST_ATR_PCT = 0.005;
 export const MAX_LAST_ATR_PCT_LONG = 0.0195;
 export const MAX_LAST_ATR_PCT_SHORT = 0.025;
 
-export const MIN_BB_WIDTH_LONG = 0.04;
+export const MIN_BB_WIDTH_LONG = 0.03;
 export const MAX_BB_WIDTH_LONG = 0.09;
 
-export const MIN_BB_WIDTH_SHORT = 0.04;
+export const MIN_BB_WIDTH_SHORT = 0.03;
 export const MAX_BB_WIDTH_SHORT = 0.09;
 
 // Единый фильтр расстояния от EMA20.
