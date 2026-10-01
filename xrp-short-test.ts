@@ -202,60 +202,71 @@ async function getCandles(): Promise<Candle[]> {
     '100'
   );
   url.searchParams.set(
-    'start_timestamp',
-    '0'
-  );
-  url.searchParams.set(
-    'end_timestamp',
-    String(Date.now())
-  );
-  url.searchParams.set(
     'set_timestamp_to_end',
     'false'
   );
 
   const response = await fetch(url);
+  const body = await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `Candles request failed: ${response.status}`
+      `Candles request failed: ` +
+      `${response.status}: ${body}`
     );
   }
 
-  const data = await response.json() as any;
+  const data = JSON.parse(body) as any;
+
+  console.log(
+    'LIGHTER CANDLES RESPONSE:',
+    JSON.stringify(data).slice(0, 2000)
+  );
 
   const rawCandles =
     data.candles ??
+    data.data?.candles ??
     data.data ??
-    data;
+    data.items;
 
   if (!Array.isArray(rawCandles)) {
     throw new Error(
-      'Invalid candles response'
+      'Invalid candles response: ' +
+      JSON.stringify(data).slice(0, 1000)
     );
   }
 
-  return rawCandles.map((candle: any) => ({
-    open: Number(
-      candle.open ?? candle.o ?? candle[1]
-    ),
-    high: Number(
-      candle.high ?? candle.h ?? candle[2]
-    ),
-    low: Number(
-      candle.low ?? candle.l ?? candle[3]
-    ),
-    close: Number(
-      candle.close ?? candle.c ?? candle[4]
-    )
-  })).filter((candle: Candle) =>
-    Number.isFinite(candle.open) &&
-    Number.isFinite(candle.high) &&
-    Number.isFinite(candle.low) &&
-    Number.isFinite(candle.close) &&
-    candle.high > 0 &&
-    candle.low > 0
-  );
+  return rawCandles
+    .map((candle: any) => ({
+      open: Number(
+        candle.open ??
+        candle.o ??
+        candle[1]
+      ),
+      high: Number(
+        candle.high ??
+        candle.h ??
+        candle[2]
+      ),
+      low: Number(
+        candle.low ??
+        candle.l ??
+        candle[3]
+      ),
+      close: Number(
+        candle.close ??
+        candle.c ??
+        candle[4]
+      )
+    }))
+    .filter((candle: Candle) =>
+      Number.isFinite(candle.open) &&
+      Number.isFinite(candle.high) &&
+      Number.isFinite(candle.low) &&
+      Number.isFinite(candle.close) &&
+      candle.high > 0 &&
+      candle.low > 0
+    );
 }
 
 function calculateAtr(
