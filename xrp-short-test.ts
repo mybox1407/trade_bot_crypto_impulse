@@ -53,7 +53,9 @@ function assertPositive(
   }
 }
 
-async function getAccountBalance(): Promise<number> {
+async function getAccountBalance(
+  signer: SignerClient
+): Promise<number> {
   const url = new URL(
     `${API_URL}/api/v1/account`
   );
@@ -64,12 +66,14 @@ async function getAccountBalance(): Promise<number> {
     String(ACCOUNT_INDEX)
   );
 
-  const authToken =
+  const result =
     signer.create_auth_token_with_expiry(
       60 * 60,
       undefined,
       API_KEY_INDEX
-    )[0];
+    );
+
+  const authToken = result[0];
 
   if (!authToken) {
     throw new Error(
@@ -324,7 +328,7 @@ async function main(): Promise<void> {
   );
 
   const balance =
-    await getAccountBalance();
+    await getAccountBalance(signer);
 
   const entryPrice =
     await getMarkPrice();
