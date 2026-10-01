@@ -54,30 +54,80 @@ function assertPositive(
 }
 
 async function getAccountBalance(): Promise<number> {
-  const response = await fetch(
-    `${API_URL}/api/v1/account?account_index=${ACCOUNT_INDEX}`
+  const url = new URL(
+    `${API_URL}/api/v1/account`
   );
 
-  if (!response.ok) {
+  url.searchParams.set('by', 'index');
+  url.searchParams.set(
+    'value',
+    String(ACCOUNT_INDEX)
+  );
+
+  const authToken =
+    signer.create_auth_token_with_expiry(
+      60 * 60,
+      undefined,
+      API_KEY_INDEX
+    )[0];
+
+  if (!authToken) {
     throw new Error(
-      `Account request failed: ${response.status}`
+      'Failed to create Lighter auth token'
     );
   }
 
-  const data = await response.json() as any;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: authToken
+    }
+  });
+
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Account request failed: ` +
+      `${response.status}: ${body}`
+    );
+  }
+
+  const data = JSON.parse(body) as any;
+
+  const accounts =
+    Array.isArray(data.accounts)
+      ? data.accounts
+      : [];
 
   const account =
-    Array.isArray(data.accounts)
-      ? data.accounts[0]
-      : data;
+    accounts.find((item: any) =>
+      Number(
+        item?.index ??
+        item?.account_index
+      ) === ACCOUNT_INDEX
+    ) ??
+    data.account;
+
+  if (!account) {
+    throw new Error(
+      `Account ${ACCOUNT_INDEX} not found`
+    );
+  }
 
   const balance = Number(
-    account?.available_balance ??
-    account?.availableBalance ??
-    account?.balance
+    account.collateral ??
+    account.available_balance ??
+    account.availableBalance ??
+    account.balance ??
+    account.total_asset_value
   );
 
-  assertPositive('Available balance', balance);
+  if (!Number.isFinite(balance) || balance < 0) {
+    throw new Error(
+      `Invalid balance: ${balance}`
+    );
+  }
 
   return balance;
 }
