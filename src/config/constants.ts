@@ -1,5 +1,5 @@
 export const SIGNAL_CHECK_INTERVAL_MS =
-  5 * 60 * 1000;
+  15 * 60 * 1000;
 
 export const POSITION_CHECK_INTERVAL_MS =
   3 * 1000;
