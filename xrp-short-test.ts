@@ -386,10 +386,6 @@ async function getOrders(
     'market_id',
     String(XRP_MARKET_ID)
   );
-  url.searchParams.set(
-    'market_type',
-    'perp'
-  );
 
   const response = await fetch(url, {
     headers: {
