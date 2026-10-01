@@ -269,6 +269,9 @@ export function notifySignalCheck(data: {
   side?: 'long' | 'short';
   price?: number;
   reason?: string;
+  pullbackDetected?: boolean;
+  reclaimDetected?: boolean;
+  signalReason?: string | null;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
