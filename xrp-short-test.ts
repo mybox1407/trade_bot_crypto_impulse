@@ -17,8 +17,8 @@ const ACCOUNT_INDEX =
 // Укажи здесь marketId XRP из Lighter
 const XRP_MARKET_ID = 7;
 
-const PRICE_DECIMALS = 4;
-const SIZE_DECIMALS = 6;
+const PRICE_DECIMALS = 6;
+const SIZE_DECIMALS = 0;
 
 const BALANCE_PERCENT = 0.10;
 const STOP_LOSS_ATR_MULTIPLIER = 2.8;
