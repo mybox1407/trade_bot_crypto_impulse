@@ -34,11 +34,11 @@ const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<
   [0, 24]
 ];
 
-export const MIN_ENTRY_RSI_SHORT = 34;
-export const MAX_ENTRY_RSI_SHORT = 48;
+export const MIN_ENTRY_RSI_SHORT = 25; //34
+export const MAX_ENTRY_RSI_SHORT = 55; //48
 
-export const MIN_ENTRY_RSI_LONG = 52;
-export const MAX_ENTRY_RSI_LONG = 68;
+export const MIN_ENTRY_RSI_LONG = 45; //52
+export const MAX_ENTRY_RSI_LONG = 75; //68
 
 export const MIN_ENTRY_ADX_SHORT = 23;
 export const MIN_ENTRY_ADX_LONG = 23;
