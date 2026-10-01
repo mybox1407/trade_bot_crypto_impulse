@@ -56,7 +56,7 @@ export const MAX_BB_WIDTH_SHORT = 0.09;
 
 // Единый фильтр расстояния от EMA20.
 // Старая минимальная дистанция 0.90 ATR удалена.
-export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.70;
+export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 1.0;
 
 export const MAX_SIGNAL_CANDLE_ATR = 1.8;
 
