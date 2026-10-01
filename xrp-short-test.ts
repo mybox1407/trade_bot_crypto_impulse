@@ -189,6 +189,12 @@ async function getCandles(): Promise<Candle[]> {
     `${API_URL}/api/v1/candles`
   );
 
+  const endTimestamp =
+    Math.floor(Date.now() / 1000);
+
+  const startTimestamp =
+    endTimestamp - 100 * 15 * 60;
+
   url.searchParams.set(
     'market_id',
     String(XRP_MARKET_ID)
@@ -196,6 +202,14 @@ async function getCandles(): Promise<Candle[]> {
   url.searchParams.set(
     'resolution',
     '15m'
+  );
+  url.searchParams.set(
+    'start_timestamp',
+    String(startTimestamp)
+  );
+  url.searchParams.set(
+    'end_timestamp',
+    String(endTimestamp)
   );
   url.searchParams.set(
     'count_back',
@@ -217,11 +231,6 @@ async function getCandles(): Promise<Candle[]> {
   }
 
   const data = JSON.parse(body) as any;
-
-  console.log(
-    'LIGHTER CANDLES RESPONSE:',
-    JSON.stringify(data).slice(0, 2000)
-  );
 
   const rawCandles =
     data.candles ??
