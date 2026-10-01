@@ -55,10 +55,10 @@ export const MIN_LAST_ATR_PCT = 0.001;
 export const MAX_LAST_ATR_PCT_LONG = 0.04;
 export const MAX_LAST_ATR_PCT_SHORT = 0.05;
 
-export const MIN_BB_WIDTH_LONG = 0.02;
+export const MIN_BB_WIDTH_LONG = 0.0;
 export const MAX_BB_WIDTH_LONG = 0.12;
 
-export const MIN_BB_WIDTH_SHORT = 0.02;
+export const MIN_BB_WIDTH_SHORT = 0.0;
 export const MAX_BB_WIDTH_SHORT = 0.12;
 
 export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
