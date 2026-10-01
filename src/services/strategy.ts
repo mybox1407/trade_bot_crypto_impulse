@@ -1198,18 +1198,16 @@ export async function analyzeMarket(
   signalPrice?: number,
   now = new Date()
 ): Promise<StrategyResult> {
-  const closedCandles =
-    getClosedCandles(candles);
-
-  const closes = closedCandles.map(
+  
+  const closes = candles.map(
     candle => candle.close
   );
-
-  const highs = closedCandles.map(
+  
+  const highs = candles.map(
     candle => candle.high
   );
-
-  const lows = closedCandles.map(
+  
+  const lows = candles.map(
     candle => candle.low
   );
 
