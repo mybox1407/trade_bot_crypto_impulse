@@ -382,9 +382,15 @@ async function getOrders(
     'account_index',
     String(ACCOUNT_INDEX)
   );
+
   url.searchParams.set(
     'market_id',
     String(XRP_MARKET_ID)
+  );
+
+  url.searchParams.set(
+    'limit',
+    '100'
   );
 
   const response = await fetch(url, {
