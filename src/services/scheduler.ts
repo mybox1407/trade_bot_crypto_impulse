@@ -4,7 +4,7 @@ import { stopMarketData, getMarkPrice, resolveMarket, normalizeSymbol } from './
 import { getPositions, openPosition, closePosition, hasOpenPosition, getOpenPositionsCount, MAX_PARALLEL_POSITIONS, getBalance, getRiskCapital, getPositionNotional,
   updatePositionMetadata, flushPositionPersistence, beginPositionOpening, endPositionOpening, isPositionOpening, loadReconciliationPendingSymbols, addReconciliationPendingSymbol,
   removeReconciliationPendingSymbol, isReconciliationPendingSymbol } from './positionState';
-import { RADE_FEE_RATE, isTradingTimeUtcPlus4, getCooldownRemainingMs } from './strategy';
+import { TRADE_FEE_RATE, isTradingTimeUtcPlus4, getCooldownRemainingMs } from './strategy';
 import { logPositionCheck, logError, logSignalCheck } from './logger';
 import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
 import { refreshTopMarkets, startMarketRefresh, stopMarketRefresh, getActiveTradingPairs, getActiveMarket } from './scheduler.dynamic.parts';
