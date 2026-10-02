@@ -102,6 +102,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'AMZN',
   'AMD',
   'NATGAS',
+  'SKY',
   
   //блеклист
   'AI',
