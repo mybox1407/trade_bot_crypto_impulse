@@ -99,6 +99,9 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'SOXL',
   'SPCX',
   'HOOD',
+  'AMZN',
+  'AMD',
+  'NATGAS',
   
   //блеклист
   'AI',
