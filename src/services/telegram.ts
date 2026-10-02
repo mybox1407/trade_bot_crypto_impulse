@@ -1,6 +1,12 @@
 import axios from 'axios';
 import { env } from '../config/env';
 
+type EntryPattern =
+  | 'pullback_reclaim'
+  | 'impulse_continuation'
+  | 'breakout'
+  | null;
+
 interface TelegramMessage {
   chat_id: string;
   text: string;
@@ -61,6 +67,46 @@ async function sendMessage(
   }
 }
 
+function formatEntryPattern(
+  entryPattern?: EntryPattern
+): string {
+  switch (entryPattern) {
+    case 'pullback_reclaim':
+      return 'Pullback + reclaim';
+
+    case 'impulse_continuation':
+      return 'Impulse continuation';
+
+    case 'breakout':
+      return 'Bollinger breakout';
+
+    default:
+      return 'N/A';
+  }
+}
+
+function formatImpulseDiagnostics(data: {
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
+}): string {
+  return (
+    `Entry branch: ${
+      formatEntryPattern(data.entryPattern)
+    }\n` +
+    `Impulse detected: ${
+      data.impulseDetected ?? false
+    }\n` +
+    `Consolidation detected: ${
+      data.consolidationDetected ?? false
+    }\n` +
+    `Impulse breakout: ${
+      data.impulseBreakoutDetected ?? false
+    }`
+  );
+}
+
 export function notifyPositionOpen(data: {
   symbol: string;
   side: 'long' | 'short';
@@ -71,6 +117,10 @@ export function notifyPositionOpen(data: {
   stopLossPrice: number;
   positionId: string;
   regime: string;
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
   balance: number;
   tceScore?: number | null;
   tceRegime?: string | null;
@@ -87,25 +137,48 @@ export function notifyPositionOpen(data: {
       : 'SHORT';
 
   const tceScore =
-    data.tceScore != null && Number.isFinite(data.tceScore)
+    data.tceScore != null &&
+    Number.isFinite(data.tceScore)
       ? String(data.tceScore)
       : 'N/A';
+
+  const entryDiagnostics =
+    formatImpulseDiagnostics(data);
 
   const text =
     `${emoji} POSITION OPENED ${emoji}\n\n` +
     `Symbol: ${data.symbol}\n` +
     `Side: ${sideText}\n` +
-    `Entry Price: ${data.entryPrice.toFixed(4)}\n` +
-    `Quantity: ${data.quantity.toFixed(4)}\n` +
-    `Notional: $${data.notional.toFixed(2)}\n\n` +
-    `Take Profit: ${data.takeProfitPrice.toFixed(4)}\n` +
-    `Stop Loss: ${data.stopLossPrice.toFixed(4)}\n\n` +
+    `Entry Price: ${
+      data.entryPrice.toFixed(4)
+    }\n` +
+    `Quantity: ${
+      data.quantity.toFixed(4)
+    }\n` +
+    `Notional: $${
+      data.notional.toFixed(2)
+    }\n\n` +
+    `Take Profit: ${
+      data.takeProfitPrice.toFixed(4)
+    }\n` +
+    `Stop Loss: ${
+      data.stopLossPrice.toFixed(4)
+    }\n\n` +
     `Regime: ${data.regime}\n` +
+    `${entryDiagnostics}\n` +
     `TCE Score: ${tceScore}\n` +
-    `TCE Regime: ${data.tceRegime ?? 'N/A'}\n` +
-    `TCE Reason: ${data.tceReason ?? 'N/A'}\n` +
-    `Balance: $${data.balance.toFixed(2)}\n` +
-    `Position ID: ${data.positionId}\n\n` +
+    `TCE Regime: ${
+      data.tceRegime ?? 'N/A'
+    }\n` +
+    `TCE Reason: ${
+      data.tceReason ?? 'N/A'
+    }\n` +
+    `Balance: $${
+      data.balance.toFixed(2)
+    }\n` +
+    `Position ID: ${
+      data.positionId
+    }\n\n` +
     `${new Date().toISOString()}`;
 
   return sendMessage({
@@ -201,18 +274,35 @@ export function notifyPositionClose(data: {
     `${emoji} POSITION CLOSED ${emoji}\n\n` +
     `Symbol: ${data.symbol}\n` +
     `Side: ${sideText}\n` +
-    `Entry: ${data.entryPrice.toFixed(4)}\n` +
-    `Exit: ${data.exitPrice.toFixed(4)}\n` +
-    `Quantity: ${data.quantity.toFixed(4)}\n` +
-    `Notional: $${data.notional.toFixed(2)}\n\n` +
-    `${pnlEmoji} PnL: ${pnlSign}$${data.netPnL.toFixed(2)} ` +
-    `(${pnlSign}${data.netPnLPercent.toFixed(2)}%)\n` +
-    `Realized PnL: ${pnlSign}$${data.realizedPnL.toFixed(2)}\n\n` +
+    `Entry: ${
+      data.entryPrice.toFixed(4)
+    }\n` +
+    `Exit: ${
+      data.exitPrice.toFixed(4)
+    }\n` +
+    `Quantity: ${
+      data.quantity.toFixed(4)
+    }\n` +
+    `Notional: $${
+      data.notional.toFixed(2)
+    }\n\n` +
+    `${pnlEmoji} PnL: ${pnlSign}$` +
+    `${data.netPnL.toFixed(2)} ` +
+    `(${pnlSign}` +
+    `${data.netPnLPercent.toFixed(2)}%)\n` +
+    `Realized PnL: ${pnlSign}$` +
+    `${data.realizedPnL.toFixed(2)}\n\n` +
     `Reason: ${reasonEmoji} ` +
-    `${data.reason.replace('_', ' ').toUpperCase()}\n` +
+    `${data.reason
+      .replace(/_/g, ' ')
+      .toUpperCase()}\n` +
     `Duration: ${duration}\n` +
-    `Balance: $${data.balance.toFixed(2)}\n` +
-    `Position ID: ${data.positionId}\n\n` +
+    `Balance: $${
+      data.balance.toFixed(2)
+    }\n` +
+    `Position ID: ${
+      data.positionId
+    }\n\n` +
     `${new Date().toISOString()}`;
 
   return sendMessage({
@@ -229,7 +319,9 @@ export function notifyError(data: {
   const text =
     `🚨 ERROR 🚨\n\n` +
     `Context: ${data.context}\n` +
-    `Symbol: ${data.symbol ?? 'N/A'}\n` +
+    `Symbol: ${
+      data.symbol ?? 'N/A'
+    }\n` +
     `Error: ${data.error}\n\n` +
     `${new Date().toISOString()}`;
 
@@ -249,10 +341,18 @@ export function notifyStartup(data: {
   const text =
     `🤖 TRADING BOT STARTED 🤖\n\n` +
     `Port: ${data.port}\n` +
-    `Trading Pairs: ${data.tradingPairs.join(', ')}\n` +
-    `Signal Check: every ${data.signalInterval}s\n` +
-    `Position Check: every ${data.positionInterval}s\n\n` +
-    `Balance: $${data.balance.toFixed(2)}\n` +
+    `Trading Pairs: ${
+      data.tradingPairs.join(', ')
+    }\n` +
+    `Signal Check: every ${
+      data.signalInterval
+    }s\n` +
+    `Position Check: every ${
+      data.positionInterval
+    }s\n\n` +
+    `Balance: $${
+      data.balance.toFixed(2)
+    }\n` +
     `Bot is running...\n\n` +
     `${new Date().toISOString()}`;
 
@@ -272,6 +372,10 @@ export function notifySignalCheck(data: {
   pullbackDetected?: boolean;
   reclaimDetected?: boolean;
   signalReason?: string | null;
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -289,21 +393,40 @@ export function notifySignalCheck(data: {
         `${data.price?.toFixed(4)}`
       : 'No signal';
 
+  const entryDiagnostics =
+    formatImpulseDiagnostics(data);
+
   const tceText =
-    `TCE Score: ${data.tceScore != null && Number.isFinite(data.tceScore)
-      ? data.tceScore
-      : 'N/A'}\n` +
-    `TCE Regime: ${data.tceRegime ?? 'N/A'}\n` +
-    `TCE Reason: ${data.tceReason ?? 'N/A'}`;
+    `TCE Score: ${
+      data.tceScore != null &&
+      Number.isFinite(data.tceScore)
+        ? data.tceScore
+        : 'N/A'
+    }\n` +
+    `TCE Regime: ${
+      data.tceRegime ?? 'N/A'
+    }\n` +
+    `TCE Reason: ${
+      data.tceReason ?? 'N/A'
+    }`;
 
   const text =
     `${emoji} ${data.symbol}\n\n` +
     `Regime: ${data.regime}\n` +
     `Signal: ${signalText}\n` +
-    `Reason: ${data.reason ?? 'Conditions not met'}\n` +
-    `Pullback: ${data.pullbackDetected ?? false}\n` +
-    `Reclaim: ${data.reclaimDetected ?? false}\n` +
-    `Signal reason: ${data.signalReason ?? 'N/A'}\n` +
+    `Reason: ${
+      data.reason ?? 'Conditions not met'
+    }\n` +
+    `${entryDiagnostics}\n` +
+    `Pullback: ${
+      data.pullbackDetected ?? false
+    }\n` +
+    `Reclaim: ${
+      data.reclaimDetected ?? false
+    }\n` +
+    `Signal reason: ${
+      data.signalReason ?? 'N/A'
+    }\n` +
     `${tceText}\n\n` +
     `${new Date().toISOString()}`;
 
@@ -322,33 +445,45 @@ export async function sendAggregatedSignalSummary(data: {
     side?: string;
     price?: number;
     reason?: string;
+    entryPattern?: EntryPattern;
   }>;
   openPositionsCount?: number;
   errorsBySymbol?: Record<string, string>;
   equity?: number;
 }): Promise<void> {
-  const { results, openPositionsCount, errorsBySymbol, equity } = data;
+  const {
+    results,
+    openPositionsCount,
+    errorsBySymbol,
+    equity
+  } = data;
 
-  const active = results.filter(result => [
-    'signal',
-    'no-signal',
-    'not-ready',
-    'error'
-  ].includes(result.status));
+  const active =
+    results.filter(result =>
+      [
+        'signal',
+        'no-signal',
+        'not-ready',
+        'error'
+      ].includes(result.status)
+    );
 
-  const signals = results.filter(
-    result => result.status === 'signal'
-  ).length;
+  const signals =
+    results.filter(
+      result => result.status === 'signal'
+    ).length;
 
-  const noSignals = results.filter(
-    result =>
-      result.status === 'no-signal' ||
-      result.status === 'not-ready'
-  ).length;
+  const noSignals =
+    results.filter(
+      result =>
+        result.status === 'no-signal' ||
+        result.status === 'not-ready'
+    ).length;
 
-  const errors = results.filter(
-    result => result.status === 'error'
-  ).length;
+  const errors =
+    results.filter(
+      result => result.status === 'error'
+    ).length;
 
   if (
     !active.length &&
@@ -359,52 +494,74 @@ export async function sendAggregatedSignalSummary(data: {
     return;
   }
 
-  const text = active.map(result => {
-    if (result.status === 'error') {
-      return (
-        `❌ ${result.symbol}: ERROR - ` +
-        `${result.reason}`
-      );
-    }
-
-    if (result.status === 'not-ready') {
-      return (
-        `⏳ ${result.symbol}: NOT READY - ` +
-        `${result.reason}`
-      );
-    }
-
-    if (result.status === 'signal') {
-      return (
-        `${result.side === 'long' ? '🟢' : '🔴'} ` +
-        `${result.symbol} [${result.regime}]: ` +
-        `${result.side?.toUpperCase()} @ ` +
-        `${result.price?.toFixed(4) ?? 'n/a'}\n` 
-      );
-    }
-
-    if (result.status === 'no-signal') {
-      let reasonText = result.reason ?? 'Conditions not met';
-    
-      if (reasonText === 'No signal') {
-        reasonText =
-          result.regime === 'trend_up'
-            ? 'Нет сигнала на Long: условия входа не сформированы'
-            : result.regime === 'trend_down'
-              ? 'Нет сигнала на Short: условия входа не сформированы'
-              : 'Нет торгового сигнала';
-      } else if (reasonText === 'Outside trading window') {
-        reasonText = 'Вне торговых часов';
-      } else if (reasonText?.includes('Price moved')) {
-        reasonText = 'Цена ушла далеко от точки входа';
+  const text = active
+    .map(result => {
+      if (result.status === 'error') {
+        return (
+          `❌ ${result.symbol}: ERROR - ` +
+          `${result.reason}`
+        );
       }
-    
-      return (
-        `${result.symbol} [${result.regime}]: ` +
-        `No signal - ${reasonText}`
-      );
-    }
-  }).join('\n\n');
+
+      if (result.status === 'not-ready') {
+        return (
+          `⏳ ${result.symbol}: NOT READY - ` +
+          `${result.reason}`
+        );
+      }
+
+      if (result.status === 'signal') {
+        return (
+          `${result.side === 'long' ? '🟢' : '🔴'} ` +
+          `${result.symbol} [${result.regime}]: ` +
+          `${result.side?.toUpperCase()} @ ` +
+          `${result.price?.toFixed(4) ?? 'n/a'}\n` +
+          `Branch: ${
+            formatEntryPattern(
+              result.entryPattern
+            )
+          }`
+        );
+      }
+
+      if (result.status === 'no-signal') {
+        let reasonText =
+          result.reason ??
+          'Conditions not met';
+
+        if (reasonText === 'No signal') {
+          reasonText =
+            result.regime === 'trend_up'
+              ? 'Нет сигнала на Long: условия входа не сформированы'
+              : result.regime === 'trend_down'
+                ? 'Нет сигнала на Short: условия входа не сформированы'
+                : 'Нет торгового сигнала';
+        } else if (
+          reasonText ===
+          'Outside trading window'
+        ) {
+          reasonText =
+            'Вне торговых часов';
+        } else if (
+          reasonText.includes('Price moved')
+        ) {
+          reasonText =
+            'Цена ушла далеко от точки входа';
+        }
+
+        return (
+          `${result.symbol} [${result.regime}]: ` +
+          `No signal - ${reasonText}`
+        );
+      }
+
+      return null;
+    })
+    .filter(
+      (value): value is string =>
+        value !== null
+    )
+    .join('\n\n');
 
   let errorSummary = '';
 
@@ -412,15 +569,14 @@ export async function sendAggregatedSignalSummary(data: {
     errorsBySymbol &&
     Object.keys(errorsBySymbol).length > 0
   ) {
-    const errorLines = Object.entries(
-      errorsBySymbol
-    )
-      .slice(0, 5)
-      .map(
-        ([symbol, error]) =>
-          `• ${symbol}: ${error}`
-      )
-      .join('\n');
+    const errorLines =
+      Object.entries(errorsBySymbol)
+        .slice(0, 5)
+        .map(
+          ([symbol, error]) =>
+            `• ${symbol}: ${error}`
+        )
+        .join('\n');
 
     const moreCount =
       Object.keys(errorsBySymbol).length - 5;
@@ -428,24 +584,32 @@ export async function sendAggregatedSignalSummary(data: {
     errorSummary =
       `\n\n⚠️ Errors summary:\n` +
       `${errorLines}` +
-      `${moreCount > 0
-        ? `\n• ...and ${moreCount} more`
-        : ''}`;
+      `${
+        moreCount > 0
+          ? `\n• ...and ${moreCount} more`
+          : ''
+      }`;
   }
 
   const equityText =
-    equity != null && Number.isFinite(equity)
+    equity != null &&
+    Number.isFinite(equity)
       ? `$${equity.toFixed(2)}`
       : 'N/A';
 
   const openPositionsDisplay =
     openPositionsCount !== undefined
       ? openPositionsCount
-      : results.filter(result => result.status === 'position-open').length;
+      : results.filter(
+          result =>
+            result.status ===
+            'position-open'
+        ).length;
 
   const message =
     `📊 Signal Check Summary\n\n` +
-    `📈 Open positions: ${openPositionsDisplay}\n\n` +
+    `📈 Open positions: ` +
+    `${openPositionsDisplay}\n\n` +
     `💰 Equity: ${equityText}\n\n` +
     `🔍 Signal scan:\n${text}` +
     `${errorSummary}\n\n` +
