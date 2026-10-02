@@ -1,236 +1,87 @@
-// src/services/logger.ts
-
 import fs from 'fs';
 import path from 'path';
 
 const LOG_DIR = process.env.LOG_DIR ?? '/app/logs';
 
-type CsvValue =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined;
+type CsvValue = string | number | boolean | null | undefined;
+type EntryPattern = 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
 
 const FILE_HEADERS: Record<string, string[]> = {
   'signal_log.csv': [
-    'timestamp',
-    'symbol',
-    'timeframe',
-    'side',
-    'price',
-    'regime',
-    'takeProfitPrice',
-    'stopLossPrice',
-    'positionSize',
-    'macdCrossUp',
-    'macdCrossDown',
-    'lastRsi',
-    'lastAtr',
-    'rsiBull',
-    'rsiBear',
-    'bbUpper',
-    'bbMiddle',
-    'bbLower',
-    'adx',
-    'adxRising',
-    'ema20',
-    'ema50',
-    'ema200',
-    'bbWidth',
-    'atrPct',
-    'signalTriggered',
-    'positionOpened',
-    'openPositionError',
-    'entryDistanceFromEma20',
-    'entryDistanceFromEma20Atr',
-    'entryTooExtended',
-    'signalTimeIso',
-    'isTradingWindow',
-    'mlProbability',
-    'mlThreshold',
-    'mlPassed',
-    'mlTrainedAt',
-    // TCE
-    'tceScore',
-    'tceRegime',
-    'tceReason',
-    'tceTrendAligned',
-    'tceErFast',
-    'tceErSlow',
-    'tceRoomAtr',
-    'tceEntryExtensionAtr',
-    'tceCandleRangeAtr',
+    'timestamp', 'symbol', 'timeframe', 'side', 'price', 'regime',
+    'takeProfitPrice', 'stopLossPrice', 'positionSize', 'macdCrossUp',
+    'macdCrossDown', 'lastRsi', 'lastAtr', 'rsiBull', 'rsiBear', 'bbUpper',
+    'bbMiddle', 'bbLower', 'adx', 'adxRising', 'ema20', 'ema50', 'ema200',
+    'bbWidth', 'atrPct', 'signalTriggered', 'positionOpened',
+    'openPositionError', 'pullbackDetected', 'reclaimDetected', 'signalReason',
+    'entryPattern', 'impulseDetected', 'consolidationDetected',
+    'impulseBreakoutDetected', 'entryDistanceFromEma20',
+    'entryDistanceFromEma20Atr', 'entryTooExtended', 'signalTimeIso',
+    'isTradingWindow', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
+    'tceScore', 'tceRegime', 'tceReason', 'tceTrendAligned', 'tceErFast',
+    'tceErSlow', 'tceRoomAtr', 'tceEntryExtensionAtr', 'tceCandleRangeAtr',
     'tceBodyRatio'
   ],
 
   'position_open_log.csv': [
-    'timestamp',
-    'positionId',
-    'symbol',
-    'side',
-    'entryPrice',
-    'quantity',
-    'notional',
-    'takeProfitPrice',
-    'stopLossPrice',
-    'entryFee',
-    'balanceBefore',
-    'balanceAfter',
-    'riskCapital',
-    'maxNotionalByPercent',
-    'stopDistance',
-    'totalRiskPerUnit',
-    'calculatedQuantity',
-    'regime',
-    'macdCrossUp',
-    'macdCrossDown',
-    'lastRsi',
-    'lastAtr',
-    'adx',
-    'bbWidth',
-    'atrPct',
-    'ema20',
-    'ema50',
-    'ema200',
-    'entryDistanceFromEma20',
-    'entryDistanceFromEma20Percent',
-    'entryDistanceFromEma20Atr',
-    'entryTooExtended',
-    'mlProbability',
-    'mlThreshold',
-    'mlPassed',
-    'mlTrainedAt',
-    'signalTime',
-    'signalTimeIso',
-    // TCE
-    'tceScore',
-    'tceRegime',
-    'tceReason',
-    'tceTrendAligned',
-    'tceErFast',
-    'tceErSlow',
-    'tceRoomAtr',
-    'tceEntryExtensionAtr',
-    'tceCandleRangeAtr',
-    'tceBodyRatio'
+    'timestamp', 'positionId', 'symbol', 'side', 'entryPrice', 'quantity',
+    'notional', 'takeProfitPrice', 'stopLossPrice', 'entryFee', 'balanceBefore',
+    'balanceAfter', 'riskCapital', 'maxNotionalByPercent', 'stopDistance',
+    'totalRiskPerUnit', 'calculatedQuantity', 'regime', 'entryPattern',
+    'impulseDetected', 'consolidationDetected', 'impulseBreakoutDetected',
+    'macdCrossUp', 'macdCrossDown', 'lastRsi', 'lastAtr', 'adx', 'bbWidth',
+    'atrPct', 'ema20', 'ema50', 'ema200', 'entryDistanceFromEma20',
+    'entryDistanceFromEma20Percent', 'entryDistanceFromEma20Atr',
+    'entryTooExtended', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
+    'signalTime', 'signalTimeIso', 'tceScore', 'tceRegime', 'tceReason',
+    'tceTrendAligned', 'tceErFast', 'tceErSlow', 'tceRoomAtr',
+    'tceEntryExtensionAtr', 'tceCandleRangeAtr', 'tceBodyRatio'
   ],
 
   'position_check_log.csv': [
-    'timestamp',
-    'positionId',
-    'symbol',
-    'side',
-    'entryPrice',
-    'currentPrice',
-    'takeProfitPrice',
-    'stopLossPrice',
-    'unrealizedPnL',
-    'unrealizedPnLPercent',
-    'distanceToTP',
-    'distanceToTPPercent',
-    'distanceToSL',
-    'distanceToSLPercent',
-    'hitTakeProfit',
-    'hitStopLoss',
-    'action',
-    'positionAgeSeconds'
+    'timestamp', 'positionId', 'symbol', 'side', 'entryPrice', 'currentPrice',
+    'takeProfitPrice', 'stopLossPrice', 'unrealizedPnL', 'unrealizedPnLPercent',
+    'distanceToTP', 'distanceToTPPercent', 'distanceToSL', 'distanceToSLPercent',
+    'hitTakeProfit', 'hitStopLoss', 'action', 'positionAgeSeconds'
   ],
 
   'trade_log.csv': [
-    'timestamp',
-    'positionId',
-    'symbol',
-    'side',
-    'entryPrice',
-    'exitPrice',
-    'quantity',
-    'notional',
-    'realizedPnL',
-    'realizedPnLPercent',
-    'entryFee',
-    'exitFee',
-    'totalFee',
-    'netPnL',
-    'netPnLPercent',
-    'balanceBefore',
-    'balanceAfter',
-    'reason',
-    'positionAgeSeconds',
-    'openedAt',
-    'closedAt',
-    'maxUnrealizedPnL',
-    'maxUnrealizedPnLPercent',
-    'worstUnrealizedPnL',
-    'worstUnrealizedPnLPercent',
-    'beTriggered',
-    'partialClosed',
-    'trailingActive',
+    'timestamp', 'positionId', 'symbol', 'side', 'entryPrice', 'exitPrice',
+    'quantity', 'notional', 'realizedPnL', 'realizedPnLPercent', 'entryFee',
+    'exitFee', 'totalFee', 'netPnL', 'netPnLPercent', 'balanceBefore',
+    'balanceAfter', 'reason', 'positionAgeSeconds', 'openedAt', 'closedAt',
+    'maxUnrealizedPnL', 'maxUnrealizedPnLPercent', 'worstUnrealizedPnL',
+    'worstUnrealizedPnLPercent', 'beTriggered', 'partialClosed', 'trailingActive',
     'trailingStopPrice'
   ],
 
   'partial_close_log.csv': [
-    'timestamp',
-    'positionId',
-    'symbol',
-    'side',
-    'entryPrice',
-    'exitPrice',
-    'quantity',
-    'remainingQuantity',
-    'originalNotional',
-    'remainingNotional',
-    'realizedPnL',
-    'realizedPnLPercent',
-    'entryFee',
-    'exitFee',
-    'totalFee',
-    'netPnL',
-    'netPnLPercent',
-    'balanceBefore',
-    'balanceAfter',
-    'executionOrderId',
-    'clientOrderId'
+    'timestamp', 'positionId', 'symbol', 'side', 'entryPrice', 'exitPrice',
+    'quantity', 'remainingQuantity', 'originalNotional', 'remainingNotional',
+    'realizedPnL', 'realizedPnLPercent', 'entryFee', 'exitFee', 'totalFee',
+    'netPnL', 'netPnLPercent', 'balanceBefore', 'balanceAfter',
+    'executionOrderId', 'clientOrderId'
   ],
 
   'error_log.csv': [
-    'timestamp',
-    'context',
-    'symbol',
-    'positionId',
-    'error',
-    'stack'
+    'timestamp', 'context', 'symbol', 'positionId', 'error', 'stack'
   ]
 };
 
 function ensureDirExists(): void {
   if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, {
-      recursive: true
-    });
+    fs.mkdirSync(LOG_DIR, { recursive: true });
   }
 }
 
-function ensureFileExists(
-  filePath: string,
-  headers: string[]
-): void {
+function ensureFileExists(filePath: string, headers: string[]): void {
   if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(
-      filePath,
-      `${headers.join(',')}\n`,
-      'utf8'
-    );
+    fs.writeFileSync(filePath, `${headers.join(',')}\n`, 'utf8');
   }
 }
 
-function escapeCsvValue(
-  value: CsvValue
-): string {
-  if (
-    value === null ||
-    value === undefined
-  ) {
+function escapeCsvValue(value: CsvValue): string {
+  if (value === null || value === undefined) {
     return '';
   }
 
@@ -242,46 +93,22 @@ function escapeCsvValue(
     stringValue.includes('\n') ||
     stringValue.includes('\r')
   ) {
-    return (
-      `"${stringValue.replace(
-        /"/g,
-        '""'
-      )}"`
-    );
+    return `"${stringValue.replace(/"/g, '""')}"`;
   }
 
   return stringValue;
 }
 
-function writeRow(
-  fileName: string,
-  row: Record<string, CsvValue>
-): void {
+function writeRow(fileName: string, row: Record<string, CsvValue>): void {
   ensureDirExists();
 
-  const filePath = path.join(
-    LOG_DIR,
-    fileName
-  );
+  const filePath = path.join(LOG_DIR, fileName);
+  const headers = FILE_HEADERS[fileName] ?? Object.keys(row);
 
-  const headers =
-    FILE_HEADERS[fileName] ??
-    Object.keys(row);
+  ensureFileExists(filePath, headers);
 
-  ensureFileExists(
-    filePath,
-    headers
-  );
-
-  const values = headers.map(
-    header => escapeCsvValue(row[header])
-  );
-
-  fs.appendFileSync(
-    filePath,
-    `${values.join(',')}\n`,
-    'utf8'
-  );
+  const values = headers.map(header => escapeCsvValue(row[header]));
+  fs.appendFileSync(filePath, `${values.join(',')}\n`, 'utf8');
 }
 
 export function logSignalCheck(row: {
@@ -313,19 +140,22 @@ export function logSignalCheck(row: {
   signalTriggered: boolean;
   positionOpened: boolean;
   openPositionError?: string;
-  entryDistanceFromEma20?: number;
-  entryDistanceFromEma20Atr?: number;
-  entryTooExtended?: boolean;
   pullbackDetected?: boolean;
   reclaimDetected?: boolean;
   signalReason?: string;
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
+  entryDistanceFromEma20?: number;
+  entryDistanceFromEma20Atr?: number;
+  entryTooExtended?: boolean;
   signalTimeIso?: string;
   isTradingWindow?: boolean;
   mlProbability?: number | null;
   mlThreshold?: number | null;
   mlPassed?: boolean | null;
   mlTrainedAt?: string | null;
-  // TCE
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -337,10 +167,7 @@ export function logSignalCheck(row: {
   tceCandleRangeAtr?: number | null;
   tceBodyRatio?: number | null;
 }): void {
-  writeRow(
-    'signal_log.csv',
-    row
-  );
+  writeRow('signal_log.csv', row);
 }
 
 export function logPositionOpen(row: {
@@ -362,6 +189,10 @@ export function logPositionOpen(row: {
   totalRiskPerUnit: number;
   calculatedQuantity: number;
   regime: string;
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
   macdCrossUp: boolean;
   macdCrossDown: boolean;
   lastRsi: number;
@@ -382,7 +213,6 @@ export function logPositionOpen(row: {
   mlTrainedAt?: string | null;
   signalTime?: number;
   signalTimeIso?: string;
-  // TCE
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -394,10 +224,7 @@ export function logPositionOpen(row: {
   tceCandleRangeAtr?: number | null;
   tceBodyRatio?: number | null;
 }): void {
-  writeRow(
-    'position_open_log.csv',
-    row
-  );
+  writeRow('position_open_log.csv', row);
 }
 
 export function logPositionCheck(row: {
@@ -420,10 +247,7 @@ export function logPositionCheck(row: {
   action: string;
   positionAgeSeconds: number;
 }): void {
-  writeRow(
-    'position_check_log.csv',
-    row
-  );
+  writeRow('position_check_log.csv', row);
 }
 
 export function logPositionClose(row: {
@@ -457,10 +281,7 @@ export function logPositionClose(row: {
   trailingActive?: boolean;
   trailingStopPrice?: number;
 }): void {
-  writeRow(
-    'trade_log.csv',
-    row
-  );
+  writeRow('trade_log.csv', row);
 }
 
 export function logPartialClose(row: {
@@ -486,10 +307,7 @@ export function logPartialClose(row: {
   executionOrderId?: string;
   clientOrderId?: string;
 }): void {
-  writeRow(
-    'partial_close_log.csv',
-    row
-  );
+  writeRow('partial_close_log.csv', row);
 }
 
 export function logError(row: {
@@ -500,8 +318,5 @@ export function logError(row: {
   error: string;
   stack?: string;
 }): void {
-  writeRow(
-    'error_log.csv',
-    row
-  );
+  writeRow('error_log.csv', row);
 }
