@@ -22,6 +22,8 @@ export const TRADE_FEE_RATE = 0.0;
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_TREND_DOWN_TRADES = true;
 export const ENABLE_BREAKOUT_TRADES = false;
+export const ENABLE_IMPULSE_CONTINUATION_TRADES = true;
+export const IMPULSE_MAX_RISK_PER_TRADE = 0.005;
 
 export const ENABLE_TCE_FILTER = false;
 
@@ -47,9 +49,11 @@ export const MAX_ENTRY_RSI_SHORT = 52;
 export const MIN_ENTRY_RSI_LONG = 48;
 export const MAX_ENTRY_RSI_LONG = 68;
 
-export const MIN_ENTRY_ADX_SHORT = 23;
-export const MIN_ENTRY_ADX_LONG = 23;
-export const MAX_ENTRY_ADX = 40;
+export const MIN_ENTRY_ADX_SHORT = 21;
+export const MIN_ENTRY_ADX_LONG = 21;
+export const MAX_ENTRY_ADX = 55;
+export const HIGH_ADX_THRESHOLD = 45;
+export const HIGH_ADX_MAX_ENTRY_DISTANCE_ATR = 0.65;
 
 export const MIN_LAST_ATR_PCT = 0.001;
 export const MAX_LAST_ATR_PCT_LONG = 0.04;
@@ -77,6 +81,14 @@ export const STOP_LOSS_ATR_MULTIPLIER = 2.8;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 
 export const ENABLE_TRAILING_STOP = false;
+
+const IMPULSE_MIN_BODY_ATR = 0.7;
+const IMPULSE_MAX_BODY_ATR = 1.5;
+const IMPULSE_MIN_CLOSE_POSITION = 0.7;
+const IMPULSE_MAX_CONSOLIDATION_RANGE_ATR = 1.2;
+const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.8;
+const IMPULSE_MIN_ADX = 21;
+const IMPULSE_MAX_ADX = 55;
 
 const symbolCooldowns =
   new Map<string, number>();
@@ -526,6 +538,10 @@ export type StrategyIndicators = {
   pullbackDetected: boolean;
   reclaimDetected: boolean;
   signalReason: string | null;
+  entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
+  impulseDetected: boolean;
+  consolidationDetected: boolean;
+  impulseBreakoutDetected: boolean;
   tce: TceMetrics | null;
 };
 
@@ -766,6 +782,199 @@ function detectPullbackReclaimSignal(params: {
       bullishReclaim ||
       bearishReclaim,
     reason: null
+  };
+}
+
+
+type ImpulseContinuationSignal = {
+  long: boolean;
+  short: boolean;
+  reason: string | null;
+  impulseDetected: boolean;
+  consolidationDetected: boolean;
+  breakoutDetected: boolean;
+  breakoutLevel: number | null;
+  consolidationLow: number | null;
+  consolidationHigh: number | null;
+};
+
+function noImpulseSignal(
+  reason: string | null = null
+): ImpulseContinuationSignal {
+  return {
+    long: false,
+    short: false,
+    reason,
+    impulseDetected: false,
+    consolidationDetected: false,
+    breakoutDetected: false,
+    breakoutLevel: null,
+    consolidationLow: null,
+    consolidationHigh: null
+  };
+}
+
+function detectImpulseContinuationSignal(params: {
+  candles: Candle[];
+  ema20: number[];
+  ema50: number[];
+  ema200: number[];
+  atr: number[];
+  regimeIndicators: RegimeIndicators;
+}): ImpulseContinuationSignal {
+  const {
+    candles,
+    ema20,
+    ema50,
+    ema200,
+    atr,
+    regimeIndicators
+  } = params;
+
+  if (
+    candles.length < 5 ||
+    ema20.length < 2 ||
+    ema50.length < 1 ||
+    ema200.length < 1 ||
+    atr.length < 4
+  ) {
+    return noImpulseSignal('not_enough_impulse_data');
+  }
+
+  const impulse = candles[candles.length - 4];
+  const pauseOne = candles[candles.length - 3];
+  const pauseTwo = candles[candles.length - 2];
+  const current = candles[candles.length - 1];
+
+  const currentAtr = atr[atr.length - 1];
+  const currentEma20 = ema20[ema20.length - 1];
+  const currentEma50 = ema50[ema50.length - 1];
+  const currentEma200 = ema200[ema200.length - 1];
+
+  if (
+    !Number.isFinite(currentAtr) ||
+    currentAtr <= 0
+  ) {
+    return noImpulseSignal('invalid_impulse_atr');
+  }
+
+  const impulseRange = impulse.high - impulse.low;
+  const impulseBody = getBodySize(impulse);
+  const impulseClosePosition =
+    impulseRange > 0
+      ? (impulse.close - impulse.low) / impulseRange
+      : 0.5;
+  const impulseBodyAtr = impulseBody / currentAtr;
+
+  const bullishImpulse =
+    impulse.close > impulse.open &&
+    impulseBodyAtr >= IMPULSE_MIN_BODY_ATR &&
+    impulseBodyAtr <= IMPULSE_MAX_BODY_ATR &&
+    impulseClosePosition >= IMPULSE_MIN_CLOSE_POSITION;
+
+  const bearishImpulse =
+    impulse.close < impulse.open &&
+    impulseBodyAtr >= IMPULSE_MIN_BODY_ATR &&
+    impulseBodyAtr <= IMPULSE_MAX_BODY_ATR &&
+    impulseClosePosition <= 1 - IMPULSE_MIN_CLOSE_POSITION;
+
+  const consolidationHigh = Math.max(
+    pauseOne.high,
+    pauseTwo.high
+  );
+  const consolidationLow = Math.min(
+    pauseOne.low,
+    pauseTwo.low
+  );
+  const consolidationRange =
+    consolidationHigh - consolidationLow;
+
+  const consolidationDetected =
+    consolidationRange <=
+    currentAtr * IMPULSE_MAX_CONSOLIDATION_RANGE_ATR;
+
+  const longContext =
+    current.close > currentEma200 &&
+    currentEma20 > currentEma50 &&
+    currentEma50 > currentEma200 &&
+    regimeIndicators.plusDi > regimeIndicators.minusDi &&
+    regimeIndicators.adx >= IMPULSE_MIN_ADX &&
+    regimeIndicators.adx <= IMPULSE_MAX_ADX &&
+    pauseOne.close >= currentEma20 &&
+    pauseTwo.close >= currentEma20;
+
+  const shortContext =
+    current.close < currentEma200 &&
+    currentEma20 < currentEma50 &&
+    currentEma50 < currentEma200 &&
+    regimeIndicators.minusDi > regimeIndicators.plusDi &&
+    regimeIndicators.adx >= IMPULSE_MIN_ADX &&
+    regimeIndicators.adx <= IMPULSE_MAX_ADX &&
+    pauseOne.close <= currentEma20 &&
+    pauseTwo.close <= currentEma20;
+
+  const breakoutUp =
+    current.close > consolidationHigh &&
+    current.close > current.open &&
+    current.close - consolidationHigh <=
+      currentAtr * IMPULSE_MAX_BREAKOUT_DRIFT_ATR;
+
+  const breakoutDown =
+    current.close < consolidationLow &&
+    current.close < current.open &&
+    consolidationLow - current.close <=
+      currentAtr * IMPULSE_MAX_BREAKOUT_DRIFT_ATR;
+
+  const long =
+    bullishImpulse &&
+    consolidationDetected &&
+    longContext &&
+    breakoutUp;
+
+  const short =
+    bearishImpulse &&
+    consolidationDetected &&
+    shortContext &&
+    breakoutDown;
+
+  if (long) {
+    return {
+      long: true,
+      short: false,
+      reason: 'long_impulse_continuation',
+      impulseDetected: true,
+      consolidationDetected: true,
+      breakoutDetected: true,
+      breakoutLevel: consolidationHigh,
+      consolidationLow,
+      consolidationHigh
+    };
+  }
+
+  if (short) {
+    return {
+      long: false,
+      short: true,
+      reason: 'short_impulse_continuation',
+      impulseDetected: true,
+      consolidationDetected: true,
+      breakoutDetected: true,
+      breakoutLevel: consolidationLow,
+      consolidationLow,
+      consolidationHigh
+    };
+  }
+
+  return {
+    long: false,
+    short: false,
+    reason: null,
+    impulseDetected: bullishImpulse || bearishImpulse,
+    consolidationDetected,
+    breakoutDetected: breakoutUp || breakoutDown,
+    breakoutLevel: null,
+    consolidationLow,
+    consolidationHigh
   };
 }
 
@@ -1011,6 +1220,7 @@ export function canOpenTrade(params: {
   entryTooExtended: boolean;
   pullbackDetected: boolean;
   reclaimDetected: boolean;
+  entryPattern?: 'pullback_reclaim' | 'impulse_continuation' | 'breakout';
   now?: Date;
 }): FilterCheckResult {
   const {
@@ -1031,6 +1241,7 @@ export function canOpenTrade(params: {
     entryTooExtended,
     pullbackDetected,
     reclaimDetected,
+    entryPattern = 'pullback_reclaim',
     now = new Date()
   } = params;
 
@@ -1070,14 +1281,20 @@ export function canOpenTrade(params: {
     };
   }
 
-  if (!pullbackDetected) {
+  if (
+    entryPattern === 'pullback_reclaim' &&
+    !pullbackDetected
+  ) {
     return {
       passed: false,
       failedFilter: 'pullback_not_detected'
     };
   }
 
-  if (!reclaimDetected) {
+  if (
+    entryPattern === 'pullback_reclaim' &&
+    !reclaimDetected
+  ) {
     return {
       passed: false,
       failedFilter: 'reclaim_not_detected'
@@ -1142,13 +1359,30 @@ export function canOpenTrade(params: {
       ? MIN_ENTRY_ADX_SHORT
       : MIN_ENTRY_ADX_LONG;
 
+  if (adx < minAdx) {
+    return {
+      passed: false,
+      failedFilter: 'adx'
+    };
+  }
+
   if (
-    adx < minAdx ||
+    entryPattern === 'pullback_reclaim' &&
     adx > MAX_ENTRY_ADX
   ) {
     return {
       passed: false,
       failedFilter: 'adx'
+    };
+  }
+
+  if (
+    adx > HIGH_ADX_THRESHOLD &&
+    entryDistanceFromEma20Atr > HIGH_ADX_MAX_ENTRY_DISTANCE_ATR
+  ) {
+    return {
+      passed: false,
+      failedFilter: 'high_adx_entry_extended'
     };
   }
 
@@ -1234,6 +1468,7 @@ export function canOpenTrade(params: {
   }
 
   if (
+    entryPattern === 'pullback_reclaim' &&
     entryDistanceFromEma20Atr >
     MAX_ENTRY_DISTANCE_FROM_EMA20_ATR
   ) {
@@ -1244,6 +1479,7 @@ export function canOpenTrade(params: {
   }
 
   if (
+    entryPattern === 'pullback_reclaim' &&
     REJECT_ENTRY_TOO_EXTENDED &&
     entryTooExtended
   ) {
@@ -1375,6 +1611,10 @@ export async function analyzeMarket(
       pullbackDetected: false,
       reclaimDetected: false,
       signalReason: null,
+      entryPattern: null,
+      impulseDetected: false,
+      consolidationDetected: false,
+      impulseBreakoutDetected: false,
       tce: null
     });
 
@@ -1462,9 +1702,23 @@ export async function analyzeMarket(
       regimeIndicators
     });
 
+  const impulseTrigger =
+    detectImpulseContinuationSignal({
+      candles: closedCandles,
+      ema20,
+      ema50,
+      ema200,
+      atr,
+      regimeIndicators
+    });
+
   const riskCapital =
     STARTING_BALANCE *
     MAX_RISK_PER_TRADE;
+
+  const impulseRiskCapital =
+    STARTING_BALANCE *
+    IMPULSE_MAX_RISK_PER_TRADE;
 
   let side:
     'long' | 'short' | 'none' =
@@ -1496,6 +1750,21 @@ export async function analyzeMarket(
   let tce:
     TceMetrics | null = null;
 
+  let entryPattern:
+    'pullback_reclaim' |
+    'impulse_continuation' |
+    'breakout' |
+    null = null;
+
+  let impulseDetected =
+    impulseTrigger.impulseDetected;
+
+  let consolidationDetected =
+    impulseTrigger.consolidationDetected;
+
+  let impulseBreakoutDetected =
+    impulseTrigger.breakoutDetected;
+
   if (!tradingWindow.allowed) {
     skipReason =
       tradingWindow.message;
@@ -1512,6 +1781,7 @@ export async function analyzeMarket(
   ) {
     side = 'long';
     buy = true;
+    entryPattern = 'pullback_reclaim';
   } else if (
     ENABLE_TREND_DOWN_TRADES &&
     regime === 'trend_down' &&
@@ -1519,10 +1789,27 @@ export async function analyzeMarket(
   ) {
     side = 'short';
     sell = true;
+    entryPattern = 'pullback_reclaim';
+  } else if (
+    ENABLE_IMPULSE_CONTINUATION_TRADES &&
+    regime === 'trend_up' &&
+    impulseTrigger.long
+  ) {
+    side = 'long';
+    buy = true;
+    entryPattern = 'impulse_continuation';
+  } else if (
+    ENABLE_IMPULSE_CONTINUATION_TRADES &&
+    regime === 'trend_down' &&
+    impulseTrigger.short
+  ) {
+    side = 'short';
+    sell = true;
+    entryPattern = 'impulse_continuation';
   } else {
     skipReason =
       trigger.reason == null
-        ? 'No pullback/reclaim signal'
+        ? 'No pullback/reclaim or impulse continuation signal'
         : `No valid signal: ${trigger.reason}`;
   }
 
@@ -1656,6 +1943,7 @@ export async function analyzeMarket(
           side = 'long';
           buy = true;
           sell = false;
+          entryPattern = 'breakout';
 
           const exits =
             getAtrBasedExitPrices({
@@ -1673,6 +1961,7 @@ export async function analyzeMarket(
           side = 'short';
           sell = true;
           buy = false;
+          entryPattern = 'breakout';
 
           const exits =
             getAtrBasedExitPrices({
@@ -1827,6 +2116,7 @@ export async function analyzeMarket(
           trigger.pullbackDetected,
         reclaimDetected:
           trigger.reclaimDetected,
+        entryPattern: entryPattern ?? 'pullback_reclaim',
         now
       });
 
@@ -2058,9 +2348,14 @@ export async function analyzeMarket(
     const riskPerUnit =
       Math.abs(price - stopLossPrice);
 
+    const capitalForTrade =
+      entryPattern === 'impulse_continuation'
+        ? impulseRiskCapital
+        : riskCapital;
+
     positionSize =
       riskPerUnit > 0
-        ? riskCapital / riskPerUnit
+        ? capitalForTrade / riskPerUnit
         : null;
   }
 
@@ -2142,7 +2437,13 @@ export async function analyzeMarket(
       reclaimDetected:
         trigger.reclaimDetected,
       signalReason:
-        trigger.reason,
+        entryPattern === 'impulse_continuation'
+          ? impulseTrigger.reason
+          : trigger.reason,
+      entryPattern,
+      impulseDetected,
+      consolidationDetected,
+      impulseBreakoutDetected,
       tce
     }
   };
@@ -2174,6 +2475,12 @@ export async function notifyStrategyResult(
     `Signal: ${
       result.indicators.signalReason ?? '-'
     }\n` +
+    `Entry pattern: ${
+      result.indicators.entryPattern ?? '-'
+    }\n` +
+    `Impulse: ${result.indicators.impulseDetected}\n` +
+    `Consolidation: ${result.indicators.consolidationDetected}\n` +
+    `Impulse breakout: ${result.indicators.impulseBreakoutDetected}\n` +
     `Pullback: ${
       result.indicators.pullbackDetected
     }\n` +
