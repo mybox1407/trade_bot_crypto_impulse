@@ -744,21 +744,12 @@ async function reconcileLocalPositionsWithExchange(
 
       if (!closeResult.ok) {
         markReconciliationPending(symbol);
-        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, {
-          symbol,
-          positionId: local.id,
-          closeReason
-        });
+        tradeError('LOCAL_POSITION_CLOSE_FAILED', closeResult.message, { symbol, positionId: local.id, closeReason });
       } else {
         // ⭐ Установить cooldown после успешного закрытия
         setSymbolCooldown(symbol);
         unlockSymbol(symbol);
-        tradeLog('POSITION_CLOSED', {
-          symbol,
-          positionId: local.id,
-          closeReason,
-          closePrice
-        });
+        tradeLog('POSITION_CLOSED', { symbol, positionId: local.id, closeReason, closePrice });
       }
     }
 
@@ -773,15 +764,11 @@ async function reconcileLocalPositionsWithExchange(
 
     for (const remote of remotePositions) {
       const symbol = normalizeSymbol(remote.symbol);
-      const hasLocal =
-        localByMarketId.has(remote.marketId) ||
-        localBySymbol.has(symbol);
+      const hasLocal = localByMarketId.has(remote.marketId) || localBySymbol.has(symbol);
 
       if (hasLocal) continue;
       const pending = pendingFilledOpens.get(symbol);
-      if (
-        pending &&
-        Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS &&
+      if ( pending && Date.now() - pending.createdAt <= PENDING_OPENING_TTL_MS &&
         await hasKnownRemotePosition(remote, pending)
       ) {
         const restored = tryRestorePendingFilledOpen(symbol);
@@ -814,13 +801,9 @@ async function reconcileLocalPositionsWithExchange(
 
       if (!hasEssentialData) {
         markReconciliationPending(symbol);
-        tradeError(
-          'LOCAL_POSITION_MISSING',
-          'Remote position has no essential data (entryPrice or quantity)',
+        tradeError( 'LOCAL_POSITION_MISSING', 'Remote position has no essential data (entryPrice or quantity)',
           {
-            symbol: remote.symbol,
-            marketId: remote.marketId,
-            remoteSide: remote.side,
+            symbol: remote.symbol, marketId: remote.marketId, remoteSide: remote.side,
             entryPrice: Number.isFinite(entryPrice) ? entryPrice : null,
             quantity: Number.isFinite(quantity) ? quantity : null
           }
@@ -850,12 +833,7 @@ async function reconcileLocalPositionsWithExchange(
         exchangeTakeProfitPrice: 0,
         exchangeStopLossOrderId: undefined,
         exchangeTakeProfitOrderId: undefined,
-        metadata: buildPositionMetadata(
-          'reconciled-remote',
-          {},
-          Date.now(),
-          new Date().toISOString()
-        ),
+        metadata: buildPositionMetadata( 'reconciled-remote', {}, Date.now(), new Date().toISOString() ),
         executionOrderId: remote.orderId,
         clientOrderId: `${symbol}-${Date.now()}-remote-restore`
       };
@@ -863,11 +841,7 @@ async function reconcileLocalPositionsWithExchange(
       const openResult = openPosition(restoreInput);
       if (!openResult.ok) {
         markReconciliationPending(symbol);
-        tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
-          symbol: remote.symbol,
-          marketId: remote.marketId,
-          source: 'remote-position'
-        });
+        tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, { symbol: remote.symbol, marketId: remote.marketId, source: 'remote-position' });
         continue;
       }
 
@@ -875,10 +849,7 @@ async function reconcileLocalPositionsWithExchange(
       tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', { symbol: remote.symbol, marketId: remote.marketId, positionId: openResult.position?.id ?? null, entryPrice, quantity });
     }
   } catch (error) {
-    tradeError('EXCHANGE_SYNC_FAILED', error, {
-      accountIndex,
-      localPositions: localPositions.length
-    });
+    tradeError('EXCHANGE_SYNC_FAILED', error, { accountIndex, localPositions: localPositions.length });
     throw error;
   }
 }
@@ -897,7 +868,6 @@ async function checkPositions(): Promise<void> {
       try {
         const markPrice = getMarkPrice(symbol);
         if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) {
-          // ⭐ Пропускаем проверку, если цена ещё не доступна (WebSocket не подключился)
           continue;
         }
         const pnl = position.side === 'long' ? (markPrice - position.entryPrice) * position.quantity : (position.entryPrice - markPrice) * position.quantity;
@@ -941,13 +911,8 @@ export async function startScheduler(): Promise<void> {
     signalCheckInterval = setInterval(() => void checkSignals().catch(error => tradeError('SIGNAL_INTERVAL_FAILED', error)), SIGNAL_CHECK_INTERVAL_MS);
     positionCheckInterval = setInterval(() => void checkPositions().catch(error => tradeError('POSITION_INTERVAL_FAILED', error)), POSITION_CHECK_INTERVAL_MS);
 
-    notifyStartup({
-      port: Number(process.env.PORT) || 3006,
-      tradingPairs: getActiveTradingPairs(),
-      signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
-      positionInterval: POSITION_CHECK_INTERVAL_MS / 1000,
-      balance: getBalance()
-    });
+    notifyStartup({ port: Number(process.env.PORT) || 3006, tradingPairs: getActiveTradingPairs(), signalInterval: SIGNAL_CHECK_INTERVAL_MS / 1000,
+      positionInterval: POSITION_CHECK_INTERVAL_MS / 1000, balance: getBalance() });
   } catch (error) {
     schedulerStarted = false;
     stopMarketRefresh();
