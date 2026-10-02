@@ -4,7 +4,7 @@ import { stopMarketData, getMarkPrice, resolveMarket, normalizeSymbol } from './
 import { getPositions, openPosition, closePosition, hasOpenPosition, getOpenPositionsCount, MAX_PARALLEL_POSITIONS, getBalance, getRiskCapital, getPositionNotional,
   updatePositionMetadata, flushPositionPersistence, beginPositionOpening, endPositionOpening, isPositionOpening, loadReconciliationPendingSymbols, addReconciliationPendingSymbol,
   removeReconciliationPendingSymbol, isReconciliationPendingSymbol } from './positionState';
-import { TRADE_FEE_RATE, isTradingTimeUtcPlus4, getCooldownRemainingMs } from './strategy';
+import { TRADE_FEE_RATE, isTradingTimeUtcPlus4, IMPULSE_MAX_RISK_PER_TRADE, getCooldownRemainingMs } from './strategy';
 import { logPositionCheck, logError, logSignalCheck } from './logger';
 import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
 import { refreshTopMarkets, startMarketRefresh, stopMarketRefresh, getActiveTradingPairs, getActiveMarket } from './scheduler.dynamic.parts';
@@ -32,6 +32,12 @@ const symbolLocks = new Map<string, number>();
 // Cooldown после сделки (1 час)
 const symbolCooldowns = new Map<string, number>();
 
+type EntryPattern =
+  | 'pullback_reclaim'
+  | 'impulse_continuation'
+  | 'breakout'
+  | null;
+
 type SignalResult = {
   symbol: string;
   status:
@@ -46,6 +52,10 @@ type SignalResult = {
   side?: 'long' | 'short' | 'none';
   price?: number;
   reason?: string;
+  entryPattern?: EntryPattern;
+  impulseDetected?: boolean;
+  consolidationDetected?: boolean;
+  impulseBreakoutDetected?: boolean;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -72,6 +82,7 @@ type PendingFilledOpen = {
   orderId?: string;
   clientOrderId: string;
   regime: string;
+  entryPattern: EntryPattern;
   indicators: any;
   signalTime?: number;
   signalTimeIso?: string;
@@ -230,36 +241,107 @@ async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
 }
 
 function buildPositionMetadata(
-  regime: string, indicators: any, signalTime?: number, signalTimeIso?: string ) {
+  regime: string,
+  indicators: any,
+  signalTime?: number,
+  signalTimeIso?: string
+) {
   return {
     regime,
-    macdCrossUp: indicators?.macdCrossUp ?? false,
-    macdCrossDown: indicators?.macdCrossDown ?? false,
-    lastRsi: indicators?.lastRsi ?? 0,
-    lastAtr: indicators?.lastAtr ?? 0,
-    adx: indicators?.adx ?? 0,
-    bbWidth: indicators?.bbWidth ?? 0,
-    atrPct: indicators?.atrPct ?? 0,
-    ema20: indicators?.ema20 ?? 0,
-    ema50: indicators?.regimeIndicators?.ema50 ?? 0,
-    ema200: indicators?.ema200 ?? 0,
-    entryExtensionAtr: indicators?.entryExtensionAtr ?? 0,
-    maxEntryExtensionAtr: indicators?.maxEntryExtensionAtr ?? 0,
-    entryTooExtended: indicators?.entryTooExtended ?? false,
-    entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? 0,
-    entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? 0,
-    tceScore: indicators?.tce?.tceScore ?? null,
-    tceRegime: indicators?.tce?.tceRegime ?? null,
-    tceReason: indicators?.tce?.tceReason ?? null,
-    tceTrendAligned: indicators?.tce?.tceTrendAligned ?? null,
-    tceErFast: indicators?.tce?.tceErFast ?? null,
-    tceErSlow: indicators?.tce?.tceErSlow ?? null,
-    tceRoomAtr: indicators?.tce?.tceRoomAtr ?? null,
-    tceEntryExtensionAtr: indicators?.tce?.tceEntryExtensionAtr ?? null,
-    tceCandleRangeAtr: indicators?.tce?.tceCandleRangeAtr ?? null,
-    tceBodyRatio: indicators?.tce?.tceBodyRatio ?? null,
-    signalTime: signalTime ?? Date.now(),
-    signalTimeIso: signalTimeIso ?? new Date().toISOString()
+
+    entryPattern:
+      indicators?.entryPattern ?? null,
+
+    impulseDetected:
+      indicators?.impulseDetected ?? false,
+
+    consolidationDetected:
+      indicators?.consolidationDetected ?? false,
+
+    impulseBreakoutDetected:
+      indicators?.impulseBreakoutDetected ?? false,
+
+    macdCrossUp:
+      indicators?.macdCrossUp ?? false,
+
+    macdCrossDown:
+      indicators?.macdCrossDown ?? false,
+
+    lastRsi:
+      indicators?.lastRsi ?? 0,
+
+    lastAtr:
+      indicators?.lastAtr ?? 0,
+
+    adx:
+      indicators?.adx ?? 0,
+
+    bbWidth:
+      indicators?.bbWidth ?? 0,
+
+    atrPct:
+      indicators?.atrPct ?? 0,
+
+    ema20:
+      indicators?.ema20 ?? 0,
+
+    ema50:
+      indicators?.regimeIndicators?.ema50 ?? 0,
+
+    ema200:
+      indicators?.ema200 ?? 0,
+
+    entryExtensionAtr:
+      indicators?.entryExtensionAtr ?? 0,
+
+    maxEntryExtensionAtr:
+      indicators?.maxEntryExtensionAtr ?? 0,
+
+    entryTooExtended:
+      indicators?.entryTooExtended ?? false,
+
+    entryDistanceFromEma20:
+      indicators?.entryDistanceFromEma20 ?? 0,
+
+    entryDistanceFromEma20Atr:
+      indicators?.entryDistanceFromEma20Atr ?? 0,
+
+    tceScore:
+      indicators?.tce?.tceScore ?? null,
+
+    tceRegime:
+      indicators?.tce?.tceRegime ?? null,
+
+    tceReason:
+      indicators?.tce?.tceReason ?? null,
+
+    tceTrendAligned:
+      indicators?.tce?.tceTrendAligned ?? null,
+
+    tceErFast:
+      indicators?.tce?.tceErFast ?? null,
+
+    tceErSlow:
+      indicators?.tce?.tceErSlow ?? null,
+
+    tceRoomAtr:
+      indicators?.tce?.tceRoomAtr ?? null,
+
+    tceEntryExtensionAtr:
+      indicators?.tce?.tceEntryExtensionAtr ?? null,
+
+    tceCandleRangeAtr:
+      indicators?.tce?.tceCandleRangeAtr ?? null,
+
+    tceBodyRatio:
+      indicators?.tce?.tceBodyRatio ?? null,
+
+    signalTime:
+      signalTime ?? Date.now(),
+
+    signalTimeIso:
+      signalTimeIso ??
+      new Date().toISOString()
   };
 }
 
@@ -430,7 +512,8 @@ async function checkSignals(): Promise<void> {
 
         const result = await runBotOnce(symbol, '15m');
         if (!result.ready) {
-          results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready' });
+          results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready', entryPattern,
+            impulseDetected, consolidationDetected, impulseBreakoutDetected, });
           continue;
         }
 
@@ -450,6 +533,10 @@ async function checkSignals(): Promise<void> {
         const tceScore = tce?.tceScore ?? null;
         const tceRegime = tce?.tceRegime ?? null;
         const tceReason = tce?.tceReason ?? null;
+        const entryPattern = indicators?.entryPattern ?? null;
+        const impulseDetected = indicators?.impulseDetected ?? false;
+        const consolidationDetected = indicators?.consolidationDetected ?? false;
+        const impulseBreakoutDetected = indicators?.impulseBreakoutDetected ?? false;
 
         if (LOG_ONLY_TRADING_REGIMES && regime !== 'trend_up' && regime !== 'trend_down') {
           tradeLog('SIGNAL_SKIPPED_NON_TRADING_REGIME', {
@@ -490,6 +577,13 @@ async function checkSignals(): Promise<void> {
           atrPct: indicators?.atrPct ?? 0,
           signalTriggered: buy || sell,
           positionOpened: false,
+          pullbackDetected: indicators?.pullbackDetected ?? false,
+          reclaimDetected: indicators?.reclaimDetected ?? false,
+          signalReason: indicators?.signalReason ?? null,
+          entryPattern,
+          impulseDetected,
+          consolidationDetected,
+          impulseBreakoutDetected,
           entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? null,
           entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? null,
           entryTooExtended: indicators?.entryTooExtended ?? false,
@@ -547,7 +641,8 @@ async function checkSignals(): Promise<void> {
         const stopDistance = Math.abs(expectedPrice - stopLossPrice);
         const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
         if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) throw new Error(`Invalid total risk per unit: ${totalRiskPerUnit}`);
-        const rawQuantity = validateQuantity(Math.min(getRiskCapital() / totalRiskPerUnit, getPositionNotional() / expectedPrice));
+        const riskCapital = entryPattern === 'impulse_continuation' ? getBalance() * IMPULSE_MAX_RISK_PER_TRADE : getRiskCapital();
+        const rawQuantity = validateQuantity(Math.min(riskCapital / totalRiskPerUnit, getPositionNotional() / expectedPrice ) );
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
         if (!beginPositionOpening(symbol)) {
@@ -592,6 +687,10 @@ async function checkSignals(): Promise<void> {
             regime,
             indicators: {
               ...indicators,
+              entryPattern,
+              impulseDetected,
+              consolidationDetected,
+              impulseBreakoutDetected
             },
             signalTime,
             signalTimeIso,
