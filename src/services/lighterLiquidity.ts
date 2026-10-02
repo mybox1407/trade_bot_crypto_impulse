@@ -89,6 +89,14 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'USDJPY',
   'STABLECOINX',
   'TAO',
+  'GOOGL',
+  'SAMSUNGUSD',
+  'MSTR',
+  'TSLA',
+  'COIN',
+  'NBIS',
+  'CRCL',
+  'SOXL',
 
   //блеклист
   'AI',
