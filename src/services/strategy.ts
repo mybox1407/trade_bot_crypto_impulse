@@ -1806,18 +1806,18 @@ export async function analyzeMarket(
     TceMetrics | null = null;
 
   let entryPattern:
-    'pullback_reclaim' |
-    'impulse_continuation' |
-    'breakout' |
-    null = null;
+    | 'pullback_reclaim'
+    | 'impulse_continuation'
+    | 'breakout'
+    | null = null;
 
-  let impulseDetected =
+  const impulseDetected =
     impulseTrigger.impulseDetected;
 
-  let consolidationDetected =
+  const consolidationDetected =
     impulseTrigger.consolidationDetected;
 
-  let impulseBreakoutDetected =
+  const impulseBreakoutDetected =
     impulseTrigger.breakoutDetected;
 
   if (!tradingWindow.allowed) {
@@ -1883,20 +1883,24 @@ export async function analyzeMarket(
       entryExtensionAtr >
       MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
 
+    const consolidationLow =
+      impulseTrigger.consolidationLow;
+
+    const consolidationHigh =
+      impulseTrigger.consolidationHigh;
+
     const useImpulseExits =
       entryPattern === 'impulse_continuation' &&
-      impulseTrigger.consolidationLow != null &&
-      impulseTrigger.consolidationHigh != null;
+      consolidationLow != null &&
+      consolidationHigh != null;
 
     const exits = useImpulseExits
       ? getImpulseExitPrices({
           side,
           price,
           atr: lastAtr,
-          consolidationLow:
-            impulseTrigger.consolidationLow,
-          consolidationHigh:
-            impulseTrigger.consolidationHigh
+          consolidationLow,
+          consolidationHigh
         })
       : getAtrBasedExitPrices({
           side,
@@ -1904,32 +1908,41 @@ export async function analyzeMarket(
           atr: lastAtr
         });
 
-    stopLossPrice = exits.stopLossPrice;
-    takeProfitPrice = exits.takeProfitPrice;
+    stopLossPrice =
+      exits.stopLossPrice;
+
+    takeProfitPrice =
+      exits.takeProfitPrice;
 
     if (
       entryPattern === 'impulse_continuation' &&
       (
-        impulseTrigger.consolidationLow == null ||
-        impulseTrigger.consolidationHigh == null
+        consolidationLow == null ||
+        consolidationHigh == null
       )
     ) {
-      const resetState = resetSignalState({
-        buy,
-        sell,
-        side,
-        takeProfitPrice,
-        stopLossPrice,
-        positionSize
-      });
+      const resetState =
+        resetSignalState({
+          buy,
+          sell,
+          side,
+          takeProfitPrice,
+          stopLossPrice,
+          positionSize
+        });
 
       buy = resetState.buy;
       sell = resetState.sell;
       side = resetState.side;
-      takeProfitPrice = resetState.takeProfitPrice;
-      stopLossPrice = resetState.stopLossPrice;
-      positionSize = resetState.positionSize;
+      takeProfitPrice =
+        resetState.takeProfitPrice;
+      stopLossPrice =
+        resetState.stopLossPrice;
+      positionSize =
+        resetState.positionSize;
+
       entryPattern = null;
+
       skipReason =
         'Impulse continuation rejected: ' +
         'consolidation boundaries unavailable';
@@ -2119,6 +2132,8 @@ export async function analyzeMarket(
       positionSize =
         resetState.positionSize;
 
+      entryPattern = null;
+
       skipReason =
         `Price moved ${adverseMoveAtr.toFixed(2)} ATR ` +
         `against signal`;
@@ -2145,6 +2160,8 @@ export async function analyzeMarket(
         resetState.stopLossPrice;
       positionSize =
         resetState.positionSize;
+
+      entryPattern = null;
 
       skipReason =
         `Entry too late: price moved ` +
@@ -2187,10 +2204,13 @@ export async function analyzeMarket(
         symbol,
         side,
         price,
-        ema20: regimeIndicators.ema20,
+        ema20:
+          regimeIndicators.ema20,
         lastRsi,
-        atrPct: regimeIndicators.atrPct,
-        adx: regimeIndicators.adx,
+        atrPct:
+          regimeIndicators.atrPct,
+        adx:
+          regimeIndicators.adx,
         adxRising:
           regimeIndicators.adxRising,
         plusDi:
@@ -2210,7 +2230,9 @@ export async function analyzeMarket(
           trigger.pullbackDetected,
         reclaimDetected:
           trigger.reclaimDetected,
-        entryPattern: entryPattern ?? 'pullback_reclaim',
+        entryPattern:
+          entryPattern ??
+          'pullback_reclaim',
         now
       });
 
@@ -2236,6 +2258,8 @@ export async function analyzeMarket(
         resetState.stopLossPrice;
       positionSize =
         resetState.positionSize;
+
+      entryPattern = null;
 
       if (skipReason == null) {
         const failedFilter =
@@ -2272,80 +2296,40 @@ export async function analyzeMarket(
             trigger.reclaimDetected
           }\n` +
           `RSI: ${lastRsi.toFixed(2)} ` +
-          `[${rsiRange}]` +
-          `${
-            failedFilter === 'rsi'
-              ? ' ❌'
-              : ''
-          }\n` +
-          `ADX: ${regimeIndicators.adx.toFixed(2)} ` +
-          `[${adxRange}]` +
-          `${
-            failedFilter === 'adx'
-              ? ' ❌'
-              : ''
-          }\n` +
-          `ADX rising: ` +
-          `${regimeIndicators.adxRising}` +
-          `${
-            failedFilter === 'adx_not_rising'
-              ? ' ❌'
-              : ''
+          `[${rsiRange}]\n` +
+          `ADX: ${
+            regimeIndicators.adx.toFixed(2)
+          } [${adxRange}]\n` +
+          `ADX rising: ${
+            regimeIndicators.adxRising
           }\n` +
           `+DI/-DI: ` +
           `${regimeIndicators.plusDi.toFixed(2)}/` +
-          `${regimeIndicators.minusDi.toFixed(2)}` +
-          `${
-            failedFilter === 'di_direction'
-              ? ' ❌'
-              : ''
+          `${regimeIndicators.minusDi.toFixed(2)}\n` +
+          `ATR%: ${
+            (
+              regimeIndicators.atrPct * 100
+            ).toFixed(3)
+          } [${atrRange}]\n` +
+          `BB Width: ${
+            regimeIndicators.bbWidth.toFixed(5)
           }\n` +
-          `ATR%: ` +
-          `${(
-            regimeIndicators.atrPct * 100
-          ).toFixed(3)} ` +
-          `[${atrRange}]` +
-          `${
-            failedFilter === 'atr_pct'
-              ? ' ❌'
-              : ''
+          `BB rising: ${
+            regimeIndicators.bbWidthRising
           }\n` +
-          `BB Width: ` +
-          `${regimeIndicators.bbWidth.toFixed(5)}\n` +
-          `BB rising: ` +
-          `${regimeIndicators.bbWidthRising}\n` +
-          `Candle ATR: ` +
-          `${regimeIndicators.candleRangeAtr.toFixed(2)} ` +
-          `[max ${MAX_SIGNAL_CANDLE_ATR}]` +
-          `${
-            failedFilter ===
-            'signal_candle_too_large'
-              ? ' ❌'
-              : ''
-          }\n` +
-          `EMA20 direction: ` +
-          `${
-            failedFilter ===
-            'ema20_direction'
+          `Candle ATR: ${
+            regimeIndicators.candleRangeAtr.toFixed(2)
+          } [max ${MAX_SIGNAL_CANDLE_ATR}]\n` +
+          `EMA20 direction: ${
+            failedFilter === 'ema20_direction'
               ? '❌ wrong side'
               : 'OK'
           }\n` +
-          `Dist EMA20 ATR: ` +
-          `${entryDistanceFromEma20Atr.toFixed(3)} ` +
-          `[${distRange}]` +
-          `${
-            failedFilter ===
-            'entry_distance_atr_high'
-              ? ' ❌'
-              : ''
-          }\n` +
-          `Too Extended: ` +
-          `${entryTooExtended}` +
-          `${
-            failedFilter ===
-            'entry_too_extended'
-              ? ' ❌'
-              : ''
+          `Dist EMA20 ATR: ${
+            entryDistanceFromEma20Atr.toFixed(3)
+          } [${distRange}]\n` +
+          `Too Extended: ${
+            entryTooExtended
           }`;
       }
     }
@@ -2394,6 +2378,8 @@ export async function analyzeMarket(
         positionSize =
           resetState.positionSize;
 
+        entryPattern = null;
+
         skipReason =
           `TCE filter rejected ${sideBeforeTce}: ` +
           `score=${
@@ -2430,6 +2416,8 @@ export async function analyzeMarket(
       positionSize =
         resetState.positionSize;
 
+      entryPattern = null;
+
       skipReason =
         `TCE filter failed: ${message}`;
     }
@@ -2440,7 +2428,9 @@ export async function analyzeMarket(
     stopLossPrice != null
   ) {
     const riskPerUnit =
-      Math.abs(price - stopLossPrice);
+      Math.abs(
+        price - stopLossPrice
+      );
 
     const capitalForTrade =
       entryPattern === 'impulse_continuation'
@@ -2465,7 +2455,8 @@ export async function analyzeMarket(
     side !== 'none' &&
     lastAtr > 0 &&
     entryDistanceFromEma20ForLog != null
-      ? entryDistanceFromEma20ForLog / lastAtr
+      ? entryDistanceFromEma20ForLog /
+        lastAtr
       : entryDistanceFromEma20AtrForTrade;
 
   return {
