@@ -708,6 +708,31 @@ async function checkSignals(): Promise<void> {
             continue;
           }
 
+          // === ИСПРАВЛЕНИЕ: пересчитываем SL/TP от фактической цены исполнения ===
+          const actualEntryPrice = executionResult.averageFillPrice as number;
+          const slDistance = Math.abs(expectedPrice - stopLossPrice);
+          const tpDistance = Math.abs(takeProfitPrice - expectedPrice);
+
+          const newStopLoss = side === 'long' 
+            ? actualEntryPrice - slDistance 
+            : actualEntryPrice + slDistance;
+          
+          const newTakeProfit = side === 'long' 
+            ? actualEntryPrice + tpDistance 
+            : actualEntryPrice - tpDistance;
+
+          tradeLog('SL_TP_RECALCULATED', {
+            symbol,
+            expectedPrice,
+            actualEntryPrice,
+            originalSL: stopLossPrice,
+            originalTP: takeProfitPrice,
+            newSL: newStopLoss,
+            newTP: newTakeProfit,
+            slDistance,
+            tpDistance
+          });
+
           const pending: PendingFilledOpen = {
             symbol,
             marketId,
@@ -715,11 +740,11 @@ async function checkSignals(): Promise<void> {
             requestedQuantity: quantity,
             filledQuantity: executionResult.filledQuantity,
             expectedPrice,
-            averageFillPrice: executionResult.averageFillPrice as number,
-            takeProfitPrice,
-            stopLossPrice,
-            exchangeStopLossPrice: stopLossPrice,
-            exchangeTakeProfitPrice: takeProfitPrice,
+            averageFillPrice: actualEntryPrice,
+            takeProfitPrice: newTakeProfit,
+            stopLossPrice: newStopLoss,
+            exchangeStopLossPrice: newStopLoss,
+            exchangeTakeProfitPrice: newTakeProfit,
             orderId: executionResult.orderId,
             clientOrderId,
             regime,
@@ -769,9 +794,9 @@ async function checkSignals(): Promise<void> {
             }
           }
 
-          tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: pending.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: pending.averageFillPrice, stopLossPrice, takeProfitPrice, executionOrderId: pending.orderId ?? null, stopLossOrderId: pending.protectionStopLossOrderId ?? null, takeProfitOrderId: pending.protectionTakeProfitOrderId ?? null, protectionConfirmed: Boolean(pending.protectionStopLossOrderId && pending.protectionTakeProfitOrderId)});
+          tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: pending.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: pending.averageFillPrice, stopLossPrice: pending.stopLossPrice, takeProfitPrice: pending.takeProfitPrice, executionOrderId: pending.orderId ?? null, stopLossOrderId: pending.protectionStopLossOrderId ?? null, takeProfitOrderId: pending.protectionTakeProfitOrderId ?? null, protectionConfirmed: Boolean(pending.protectionStopLossOrderId && pending.protectionTakeProfitOrderId)});
           const position = getPositions().find(item => normalizeSymbol(item.symbol) === symbol && item.marketId === marketId);
-          if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);         
+          if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);        
           if (!pending.protectionStopLossOrderId || !pending.protectionTakeProfitOrderId) {
             await ensurePositionProtection(position, activeMarket);
           }
@@ -821,7 +846,7 @@ async function checkSignals(): Promise<void> {
     
     await sendAggregatedSignalSummary({
       results: telegramAndCsvResults,
-      openPositionsCount: getOpenPositionsCount(), // ← ДОБАВИТЬ ЭТУ СТРОКУ
+      openPositionsCount: getOpenPositionsCount(),
       errorsBySymbol: errorsBySymbol.size > 0
         ? Object.fromEntries(errorsBySymbol)
         : undefined,
