@@ -7,88 +7,85 @@ import {
 } from './strategy';
 import { logSignalCheck } from './logger';
 
-// 15m в миллисекундах
 const TIMEFRAME_15M_MS = 15 * 60 * 1000;
 
-/**
- * Оставляет только закрытые 15m-свечи.
- * time — время открытия свечи.
- * Свеча считается закрытой, когда наступило время открытия следующей свечи.
- */
 function getClosedCandles<T extends { time: number }>(
   candles: T[],
   now = Date.now()
 ): T[] {
   if (candles.length === 0) return [];
 
-  const nowMs = now < 1_000_000_000_000
-    ? now * 1000
-    : now;
+  const nowMs = now < 1_000_000_000_000 ? now * 1000 : now;
 
   return candles.filter(candle => {
     const candleMs = candle.time < 1_000_000_000_000
       ? candle.time * 1000
       : candle.time;
 
-    // time — открытие свечи. Закрыта, если уже наступило время следующей 15m-свечи.
     return candleMs + TIMEFRAME_15M_MS <= nowMs;
   });
 }
 
 export type BotRunResult =
-  | {
-      symbol: string;
-      timeframe: string;
-      ready: false;
-      reason: string;
-    }
-  | ({
-      symbol: string;
-      timeframe: string;
-      ready: true;
-    } & StrategyResult);
+  | { symbol: string; timeframe: string; ready: false; reason: string }
+  | ({ symbol: string; timeframe: string; ready: true } & StrategyResult);
 
 export async function runBotOnce(
   symbol = 'BTC/USDT',
   timeframe = '15m'
 ): Promise<BotRunResult> {
-  const candles = await getCandles(
-    symbol,
-    timeframe,
-    250
-  );
+  const candles = await getCandles(symbol, timeframe, 250);
 
   if (candles.length < 200) {
-    return {
-      symbol,
-      timeframe,
-      ready: false,
-      reason: 'not_enough_candles'
-    };
+    console.log(`[BOTRUNNER] Not enough candles: ${candles.length} < 200 for ${symbol}`);
+    return { symbol, timeframe, ready: false, reason: 'not_enough_candles' };
   }
 
-  // Оставляем только закрытые свечи — текущую незакрытую не используем.
   const closedCandles = getClosedCandles(candles, Date.now());
 
   if (closedCandles.length < 200) {
-    return {
-      symbol,
-      timeframe,
-      ready: false,
-      reason: 'not_enough_closed_candles'
-    };
+    console.log(`[BOTRUNNER] Not enough closed candles: ${closedCandles.length} < 200 for ${symbol}`);
+    return { symbol, timeframe, ready: false, reason: 'not_enough_closed_candles' };
   }
 
-  const result = await analyzeMarket(
-    closedCandles,
-    symbol,
-    undefined,
-    new Date()
-  );
+  // === ЛОГИРОВАНИЕ ПЕРЕД ANALYZEMARKET ===
+  const lastCandle = closedCandles[closedCandles.length - 1];
+  const firstCandle = closedCandles[0];
+  console.log(`\n[=== BOTRUNNER DEBUG ${symbol} ${timeframe} ===]`);
+  console.log(`Candles: total=${candles.length}, closed=${closedCandles.length}`);
+  console.log(`First candle: time=${new Date(firstCandle.time).toISOString()}`);
+  console.log(`Last candle: time=${new Date(lastCandle.time).toISOString()}, open=${lastCandle.open}, high=${lastCandle.high}, low=${lastCandle.low}, close=${lastCandle.close}`);
+  console.log(`Now: ${new Date().toISOString()}`);
+  console.log(`[=== END DEBUG ===]\n`);
 
+  const result = await analyzeMarket(closedCandles, symbol, undefined, new Date());
+
+  // === ЛОГИРОВАНИЕ ПОСЛЕ ANALYZEMARKET ===
   const indicators = result.indicators;
-  const hasSignal = result.buy || result.sell;
+  console.log(`\n[=== STRATEGY RESULT ${symbol} ===]`);
+  console.log(`Ready: ${result.ready}, Side: ${result.side}, Price: ${result.price}`);
+  console.log(`SL: ${result.stopLossPrice}, TP: ${result.takeProfitPrice}, Size: ${result.positionSize}`);
+  console.log(`Regime: ${result.regime}, Skip: ${result.skipReason ?? 'none'}`);
+  console.log(`ATR: ${indicators.lastAtr}, ATR%: ${(indicators.atrPct * 100).toFixed(3)}%`);
+  console.log(`RSI: ${indicators.lastRsi.toFixed(2)}, ADX: ${indicators.adx.toFixed(2)}`);
+  console.log(`EMA20: ${indicators.ema20}, EMA50: ${indicators.regimeIndicators.ema50}, EMA200: ${indicators.ema200}`);
+  
+  if (result.stopLossPrice != null && result.takeProfitPrice != null && indicators.lastAtr > 0) {
+    const slDistance = Math.abs(result.price - result.stopLossPrice);
+    const tpDistance = Math.abs(result.takeProfitPrice - result.price);
+    const slAtr = slDistance / indicators.lastAtr;
+    const tpAtr = tpDistance / indicators.lastAtr;
+    console.log(`SL distance: ${slDistance.toFixed(4)} (${slAtr.toFixed(3)} ATR)`);
+    console.log(`TP distance: ${tpDistance.toFixed(4)} (${tpAtr.toFixed(3)} ATR)`);
+    console.log(`SL/TP ratio: ${(tpAtr/slAtr).toFixed(3)} (should be ~1.0 for symmetric)`);
+    
+    if (Math.abs(slAtr - 3.0) > 0.1 || Math.abs(tpAtr - 3.0) > 0.1) {
+      console.warn(`⚠️ WARNING: SL/TP multipliers deviate from expected 3.0!`);
+    }
+  }
+  console.log(`[=== END RESULT ===]\n`);
 
+  const hasSignal = result.buy || result.sell;
   const tce = indicators.tce ?? null;
 
   logSignalCheck({
@@ -119,7 +116,6 @@ export async function runBotOnce(
     atrPct: indicators.atrPct,
     signalTriggered: hasSignal,
     positionOpened: false,
-    openPositionError: result.skipReason ?? undefined,
     entryDistanceFromEma20: indicators.entryDistanceFromEma20 ?? undefined,
     entryDistanceFromEma20Atr: indicators.entryDistanceFromEma20Atr ?? undefined,
     entryTooExtended: indicators.entryTooExtended,
@@ -140,47 +136,24 @@ export async function runBotOnce(
     tceBodyRatio: tce?.tceBodyRatio ?? null
   });
 
-  return {
-    symbol,
-    timeframe,
-    ready: true,
-    ...result
-  };
+  return { symbol, timeframe, ready: true, ...result };
 }
 
 export async function getMarketRegimeOnce(
   symbol = 'BTC/USDT',
   timeframe = '15m'
 ) {
-  const candles = await getCandles(
-    symbol,
-    timeframe,
-    250
-  );
+  const candles = await getCandles(symbol, timeframe, 250);
 
   if (candles.length < 200) {
-    return {
-      symbol,
-      timeframe,
-      ready: false,
-      reason: 'not_enough_candles'
-    };
+    return { symbol, timeframe, ready: false, reason: 'not_enough_candles' };
   }
 
   const closedCandles = getClosedCandles(candles, Date.now());
 
   if (closedCandles.length < 200) {
-    return {
-      symbol,
-      timeframe,
-      ready: false,
-      reason: 'not_enough_closed_candles'
-    };
+    return { symbol, timeframe, ready: false, reason: 'not_enough_closed_candles' };
   }
 
-  return {
-    symbol,
-    timeframe,
-    ...detectMarketRegime(closedCandles)
-  };
+  return { symbol, timeframe, ...detectMarketRegime(closedCandles) };
 }
