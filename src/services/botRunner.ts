@@ -8,7 +8,7 @@ import {
 import { logSignalCheck } from './logger';
 
 const TIMEFRAME_15M_MS = 15 * 60 * 1000;
-const TOLERANCE_MS = 2 * 60 * 1000; // 2 минуты tolerance
+const TOLERANCE_MS = 2 * 60 * 1000;
 
 function getClosedCandles<T extends { time: number }>(
   candles: T[],
@@ -23,7 +23,6 @@ function getClosedCandles<T extends { time: number }>(
       ? candle.time * 1000
       : candle.time;
 
-    // Свеча считается закрытой если время + 15min - tolerance <= now
     return candleMs + TIMEFRAME_15M_MS - TOLERANCE_MS <= nowMs;
   });
 }
@@ -63,7 +62,7 @@ export async function runBotOnce(
 
   const indicators = result.indicators;
   console.log(`\n[=== STRATEGY RESULT ${symbol} ===]`);
-  console.log(`Ready: ${result.ready}, Side: ${result.side}, Price: ${result.price}`);
+  console.log(`Side: ${result.side}, Price: ${result.price}`);
   console.log(`SL: ${result.stopLossPrice}, TP: ${result.takeProfitPrice}, Size: ${result.positionSize}`);
   console.log(`Regime: ${result.regime}, Skip: ${result.skipReason ?? 'none'}`);
   console.log(`ATR: ${indicators.lastAtr}, ATR%: ${(indicators.atrPct * 100).toFixed(3)}%`);
