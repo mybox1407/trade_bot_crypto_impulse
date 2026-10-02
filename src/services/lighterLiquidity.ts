@@ -97,7 +97,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'NBIS',
   'CRCL',
   'SOXL',
-  'SPCX'
+  'SPCX',
   'HOOD',
   
   //блеклист
