@@ -551,18 +551,8 @@ async function checkSignals(): Promise<void> {
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
         if (!beginPositionOpening(symbol)) {
-          results.push({
-            symbol,
-            status: 'not-ready',
-            regime: 'opening',
-            hasSignal: true,
-            side,
-            price: expectedPrice,
-            reason: 'Opening already in progress',
-            tceScore,
-            tceRegime,
-            tceReason
-          });
+          results.push({ symbol, status: 'not-ready', regime: 'opening', hasSignal: true, side,
+            price: expectedPrice, reason: 'Opening already in progress', tceScore, tceRegime, tceReason });
           continue;
         }
 
@@ -577,20 +567,11 @@ async function checkSignals(): Promise<void> {
             const reason = executionResult.message ?? 'Execution failed';
             tradeError('POSITION_OPEN_FAILED', reason, { symbol, marketId, side, quantity, expectedPrice, status: executionResult.status, orderId: executionResult.orderId ?? null });
             if (executionResult.status === 'unknown') markReconciliationPending(symbol);
-            results.push({
-              symbol,
+            results.push({ symbol,
               status: executionResult.status === 'unknown'
                 ? 'not-ready'
                 : 'signal',
-              regime,
-              hasSignal: true,
-              side,
-              price: expectedPrice,
-              reason,
-              tceScore,
-              tceRegime,
-              tceReason
-            });
+              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason });
             continue;
           }
 
@@ -620,7 +601,6 @@ async function checkSignals(): Promise<void> {
           };
 
           savePendingFilledOpen(pending);
-
           endPositionOpening(symbol);
           openingFinished = true;
 
@@ -637,7 +617,6 @@ async function checkSignals(): Promise<void> {
           }
 
           tradeLog('POSITION_OPENED', { symbol, marketId, side, quantity: pending.filledQuantity, requestedPrice: expectedPrice, averageFillPrice: pending.averageFillPrice, stopLossPrice, takeProfitPrice, executionOrderId: pending.orderId ?? null, stopLossOrderId: pending.protectionStopLossOrderId ?? null, takeProfitOrderId: pending.protectionTakeProfitOrderId ?? null, protectionConfirmed: Boolean(pending.protectionStopLossOrderId && pending.protectionTakeProfitOrderId)});
-
           const position = getPositions().find(item => normalizeSymbol(item.symbol) === symbol && item.marketId === marketId);
           if (!position) throw new Error(`Position not found after confirmed fill: ${symbol}`);         
           if (!pending.protectionStopLossOrderId || !pending.protectionTakeProfitOrderId) {
@@ -645,18 +624,7 @@ async function checkSignals(): Promise<void> {
           }
           clearPendingFilledOpen(symbol);
           unlockSymbol(symbol);
-          results.push({
-            symbol,
-            status: 'signal',
-            regime,
-            hasSignal: true,
-            side,
-            price: expectedPrice,
-            reason: 'Position opened and protected',
-            tceScore,
-            tceRegime,
-            tceReason
-          });
+          results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened and protected', tceScore, tceRegime, tceReason });
           if (!PAPER_TRADING && signerClient) {
             await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol }));
           }
@@ -675,13 +643,7 @@ async function checkSignals(): Promise<void> {
         logError({ timestamp: new Date().toISOString(), context: 'signal-check', symbol, error: message });
         tradeError('SIGNAL_CHECK_FAILED', error, { symbol });
         errorsBySymbol.set(symbol, message);
-        results.push({
-          symbol,
-          status: 'error',
-          regime: 'error',
-          hasSignal: false,
-          reason: message
-        });
+        results.push({ symbol, status: 'error', regime: 'error', hasSignal: false, reason: message });
       }
     }
 
@@ -773,11 +735,7 @@ async function reconcileLocalPositionsWithExchange(
       ) {
         const restored = tryRestorePendingFilledOpen(symbol);
         if (restored) {
-          tradeLog('LOCAL_POSITION_RECONCILED', {
-            symbol,
-            marketId: remote.marketId,
-            source: 'pending-filled-open'
-          });
+          tradeLog('LOCAL_POSITION_RECONCILED', { symbol, marketId: remote.marketId, source: 'pending-filled-open' });
           continue;
         }
       }
