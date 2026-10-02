@@ -512,8 +512,7 @@ async function checkSignals(): Promise<void> {
 
         const result = await runBotOnce(symbol, '15m');
         if (!result.ready) {
-          results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready', entryPattern,
-            impulseDetected, consolidationDetected, impulseBreakoutDetected, });
+          results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready' });
           continue;
         }
 
@@ -628,6 +627,10 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason,
+            entryPattern,
+            impulseDetected,
+            consolidationDetected,
+            impulseBreakoutDetected,
             tceScore,
             tceRegime,
             tceReason
@@ -644,6 +647,10 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason: 'Outside trading window',
+            entryPattern,
+            impulseDetected,
+            consolidationDetected,
+            impulseBreakoutDetected,
             tceScore,
             tceRegime,
             tceReason
@@ -663,8 +670,22 @@ async function checkSignals(): Promise<void> {
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
         if (!beginPositionOpening(symbol)) {
-          results.push({ symbol, status: 'not-ready', regime: 'opening', hasSignal: true, side,
-            price: expectedPrice, reason: 'Opening already in progress', tceScore, tceRegime, tceReason });
+          results.push({
+            symbol,
+            status: 'not-ready',
+            regime: 'opening',
+            hasSignal: true,
+            side,
+            price: expectedPrice,
+            reason: 'Opening already in progress',
+            entryPattern,
+            impulseDetected,
+            consolidationDetected,
+            impulseBreakoutDetected,
+            tceScore,
+            tceRegime,
+            tceReason
+          });
           continue;
         }
 
@@ -683,7 +704,7 @@ async function checkSignals(): Promise<void> {
               status: executionResult.status === 'unknown'
                 ? 'not-ready'
                 : 'signal',
-              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason });
+              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, });
             continue;
           }
 
@@ -702,6 +723,7 @@ async function checkSignals(): Promise<void> {
             orderId: executionResult.orderId,
             clientOrderId,
             regime,
+            entryPattern,
             indicators: {
               ...indicators,
               entryPattern,
@@ -727,7 +749,22 @@ async function checkSignals(): Promise<void> {
               const reason = `Filled but local state was not created: ${openResult.message}`;
               tradeError('LOCAL_POSITION_CREATE_FAILED', reason, { symbol, marketId, side, quantity: pending.filledQuantity, orderId: pending.orderId ?? null });
               errorsBySymbol.set(symbol, reason);
-              results.push({ symbol, status: 'error', regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason });
+              results.push({
+                symbol,
+                status: 'error',
+                regime,
+                hasSignal: true,
+                side,
+                price: expectedPrice,
+                reason,
+                entryPattern,
+                impulseDetected,
+                consolidationDetected,
+                impulseBreakoutDetected,
+                tceScore,
+                tceRegime,
+                tceReason
+              });
               continue;
             }
           }
@@ -740,7 +777,22 @@ async function checkSignals(): Promise<void> {
           }
           clearPendingFilledOpen(symbol);
           unlockSymbol(symbol);
-          results.push({ symbol, status: 'signal', regime, hasSignal: true, side, price: expectedPrice, reason: 'Position opened and protected', tceScore, tceRegime, tceReason });
+          results.push({
+            symbol,
+            status: 'signal',
+            regime,
+            hasSignal: true,
+            side,
+            price: expectedPrice,
+            reason: 'Position opened and protected',
+            entryPattern,
+            impulseDetected,
+            consolidationDetected,
+            impulseBreakoutDetected,
+            tceScore,
+            tceRegime,
+            tceReason
+          });   
           if (!PAPER_TRADING && signerClient) {
             await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol }));
           }
