@@ -8,6 +8,7 @@ import {
 import { logSignalCheck } from './logger';
 
 const TIMEFRAME_15M_MS = 15 * 60 * 1000;
+const TOLERANCE_MS = 2 * 60 * 1000; // 2 минуты tolerance
 
 function getClosedCandles<T extends { time: number }>(
   candles: T[],
@@ -22,7 +23,8 @@ function getClosedCandles<T extends { time: number }>(
       ? candle.time * 1000
       : candle.time;
 
-    return candleMs + TIMEFRAME_15M_MS <= nowMs;
+    // Свеча считается закрытой если время + 15min - tolerance <= now
+    return candleMs + TIMEFRAME_15M_MS - TOLERANCE_MS <= nowMs;
   });
 }
 
@@ -48,7 +50,6 @@ export async function runBotOnce(
     return { symbol, timeframe, ready: false, reason: 'not_enough_closed_candles' };
   }
 
-  // === ЛОГИРОВАНИЕ ПЕРЕД ANALYZEMARKET ===
   const lastCandle = closedCandles[closedCandles.length - 1];
   const firstCandle = closedCandles[0];
   console.log(`\n[=== BOTRUNNER DEBUG ${symbol} ${timeframe} ===]`);
@@ -60,7 +61,6 @@ export async function runBotOnce(
 
   const result = await analyzeMarket(closedCandles, symbol, undefined, new Date());
 
-  // === ЛОГИРОВАНИЕ ПОСЛЕ ANALYZEMARKET ===
   const indicators = result.indicators;
   console.log(`\n[=== STRATEGY RESULT ${symbol} ===]`);
   console.log(`Ready: ${result.ready}, Side: ${result.side}, Price: ${result.price}`);
