@@ -1,7 +1,4 @@
-import {
-  SIGNAL_CHECK_INTERVAL_MS,
-  POSITION_CHECK_INTERVAL_MS
-} from '../config/constants';
+import { SIGNAL_CHECK_INTERVAL_MS, POSITION_CHECK_INTERVAL_MS } from '../config/constants';
 import { runBotOnce } from './botRunner';
 import { stopMarketData, getMarkPrice, resolveMarket, normalizeSymbol } from './exchange';
 import { getPositions, openPosition, closePosition, hasOpenPosition, getOpenPositionsCount, MAX_PARALLEL_POSITIONS, getBalance, getRiskCapital, getPositionNotional,
@@ -251,7 +248,6 @@ function buildPositionMetadata(
     entryTooExtended: indicators?.entryTooExtended ?? false,
     entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? 0,
     entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? 0,
-
     tceScore: indicators?.tce?.tceScore ?? null,
     tceRegime: indicators?.tce?.tceRegime ?? null,
     tceReason: indicators?.tce?.tceReason ?? null,
@@ -262,7 +258,6 @@ function buildPositionMetadata(
     tceEntryExtensionAtr: indicators?.tce?.tceEntryExtensionAtr ?? null,
     tceCandleRangeAtr: indicators?.tce?.tceCandleRangeAtr ?? null,
     tceBodyRatio: indicators?.tce?.tceBodyRatio ?? null,
-    
     signalTime: signalTime ?? Date.now(),
     signalTimeIso: signalTimeIso ?? new Date().toISOString()
   };
@@ -298,12 +293,7 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     exchangeTakeProfitPrice: input.exchangeTakeProfitPrice,
     exchangeStopLossOrderId: input.protectionStopLossOrderId,
     exchangeTakeProfitOrderId: input.protectionTakeProfitOrderId,
-    metadata: buildPositionMetadata(
-      input.regime,
-      input.indicators,
-      input.signalTime,
-      input.signalTimeIso
-    ),
+    metadata: buildPositionMetadata( input.regime,  input.indicators, input.signalTime, input.signalTimeIso ),
     executionOrderId: input.orderId,
     clientOrderId: input.clientOrderId
   };
@@ -325,22 +315,13 @@ function tryRestorePendingFilledOpen(symbol: string): boolean {
 
   const openResult = openPosition(buildOpenPositionInput(pending));
   if (!openResult.ok) {
-    tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
-      symbol: pending.symbol,
-      marketId: pending.marketId,
-      orderId: pending.orderId ?? null
-    });
+    tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, { symbol: pending.symbol, marketId: pending.marketId, orderId: pending.orderId ?? null });
     return false;
   }
 
   clearPendingFilledOpen(key);
   unlockSymbol(key);
-  tradeLog('LOCAL_POSITION_RESTORED_FROM_FILLED_ORDER', {
-    symbol: pending.symbol,
-    marketId: pending.marketId,
-    positionId: openResult.position?.id ?? null,
-    orderId: pending.orderId ?? null
-  });
+  tradeLog('LOCAL_POSITION_RESTORED_FROM_FILLED_ORDER', { symbol: pending.symbol, marketId: pending.marketId, positionId: openResult.position?.id ?? null, orderId: pending.orderId ?? null });
   return true;
 }
 
@@ -368,12 +349,7 @@ async function ensurePositionProtection(
   }
   const updated = updatePositionMetadata(position.id, { reconciliationIssue: undefined });
   if (!updated) throw new Error(`Failed to update protection state for ${position.symbol}`);
-  tradeLog('PROTECTION_RECOVERED', {
-    symbol: position.symbol,
-    marketId: position.marketId,
-    stopLossOrderId: protection.stopLossOrderId,
-    takeProfitOrderId: protection.takeProfitOrderId
-  });
+  tradeLog('PROTECTION_RECOVERED', { symbol: position.symbol, marketId: position.marketId, stopLossOrderId: protection.stopLossOrderId, takeProfitOrderId: protection.takeProfitOrderId });
 }
 
 async function hasKnownRemotePosition(remote: any, pending?: PendingFilledOpen): Promise<boolean> {
@@ -420,13 +396,7 @@ async function checkSignals(): Promise<void> {
         // Проверка cooldown
         const cooldownReason = getSymbolCooldownReason(symbol);
         if (cooldownReason != null) {
-          results.push({
-            symbol,
-            status: 'not-ready',
-            regime: 'cooldown',
-            hasSignal: false,
-            reason: cooldownReason
-          });
+          results.push({ symbol, status: 'not-ready', regime: 'cooldown', hasSignal: false, reason: cooldownReason });
           continue;
         }
 
