@@ -89,6 +89,8 @@ const IMPULSE_MAX_CONSOLIDATION_RANGE_ATR = 1.2;
 const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.8;
 const IMPULSE_MIN_ADX = 21;
 const IMPULSE_MAX_ADX = 55;
+const IMPULSE_STOP_BUFFER_ATR = 0.2;
+const IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 
 const symbolCooldowns =
   new Map<string, number>();
@@ -469,6 +471,59 @@ function getAtrBasedExitPrices(params: {
     takeProfitPrice:
       price -
       atr * TAKE_PROFIT_ATR_MULTIPLIER
+  };
+}
+
+function getImpulseExitPrices(params: {
+  side: 'long' | 'short';
+  price: number;
+  atr: number;
+  consolidationLow: number;
+  consolidationHigh: number;
+}): {
+  stopLossPrice: number;
+  takeProfitPrice: number;
+} {
+  const {
+    side,
+    price,
+    atr,
+    consolidationLow,
+    consolidationHigh
+  } = params;
+
+  if (
+    !Number.isFinite(price) ||
+    !Number.isFinite(atr) ||
+    atr <= 0 ||
+    !Number.isFinite(consolidationLow) ||
+    !Number.isFinite(consolidationHigh)
+  ) {
+    return getAtrBasedExitPrices({
+      side,
+      price,
+      atr
+    });
+  }
+
+  if (side === 'long') {
+    return {
+      stopLossPrice:
+        consolidationLow -
+        atr * IMPULSE_STOP_BUFFER_ATR,
+      takeProfitPrice:
+        price +
+        atr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER
+    };
+  }
+
+  return {
+    stopLossPrice:
+      consolidationHigh +
+      atr * IMPULSE_STOP_BUFFER_ATR,
+    takeProfitPrice:
+      price -
+      atr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER
   };
 }
 
@@ -1828,18 +1883,57 @@ export async function analyzeMarket(
       entryExtensionAtr >
       MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
 
-    const exits =
-      getAtrBasedExitPrices({
+    const useImpulseExits =
+      entryPattern === 'impulse_continuation' &&
+      impulseTrigger.consolidationLow != null &&
+      impulseTrigger.consolidationHigh != null;
+
+    const exits = useImpulseExits
+      ? getImpulseExitPrices({
+          side,
+          price,
+          atr: lastAtr,
+          consolidationLow:
+            impulseTrigger.consolidationLow,
+          consolidationHigh:
+            impulseTrigger.consolidationHigh
+        })
+      : getAtrBasedExitPrices({
+          side,
+          price,
+          atr: lastAtr
+        });
+
+    stopLossPrice = exits.stopLossPrice;
+    takeProfitPrice = exits.takeProfitPrice;
+
+    if (
+      entryPattern === 'impulse_continuation' &&
+      (
+        impulseTrigger.consolidationLow == null ||
+        impulseTrigger.consolidationHigh == null
+      )
+    ) {
+      const resetState = resetSignalState({
+        buy,
+        sell,
         side,
-        price,
-        atr: lastAtr
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
       });
 
-    stopLossPrice =
-      exits.stopLossPrice;
-
-    takeProfitPrice =
-      exits.takeProfitPrice;
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+      skipReason =
+        'Impulse continuation rejected: ' +
+        'consolidation boundaries unavailable';
+    }
   }
 
   if (
