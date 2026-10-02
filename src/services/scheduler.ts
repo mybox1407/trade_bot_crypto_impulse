@@ -3,72 +3,22 @@ import {
   POSITION_CHECK_INTERVAL_MS
 } from '../config/constants';
 import { runBotOnce } from './botRunner';
-import {
-  stopMarketData,
-  getMarkPrice,
-  resolveMarket,
-  normalizeSymbol
-} from './exchange';
-import {
-  getPositions,
-  openPosition,
-  closePosition,
-  hasOpenPosition,
-  getOpenPositionsCount,
-  MAX_PARALLEL_POSITIONS,
-  getBalance,
-  getRiskCapital,
-  getPositionNotional,
-  updatePositionMetadata,
-  flushPositionPersistence,
-  beginPositionOpening,
-  endPositionOpening,
-  isPositionOpening,
-  loadReconciliationPendingSymbols,
-  addReconciliationPendingSymbol,
-  removeReconciliationPendingSymbol,
-  isReconciliationPendingSymbol
-} from './positionState';
-import {
-  TRADE_FEE_RATE,
-  isTradingTimeUtcPlus4,
-  getCooldownRemainingMs
-} from './strategy';
-import {
-  logPositionCheck,
-  logError,
-  logSignalCheck
-} from './logger';
-import {
-  notifyStartup,
-  notifyError,
-  sendAggregatedSignalSummary
-} from './telegram';
-import {
-  refreshTopMarkets,
-  startMarketRefresh,
-  stopMarketRefresh,
-  getActiveTradingPairs,
-  getActiveMarket
-} from './scheduler.dynamic.parts';
-import {
-  PaperExecutionService,
-  LighterExecutionService,
-  ExecutionService
-} from './execution';
+import { stopMarketData, getMarkPrice, resolveMarket, normalizeSymbol } from './exchange';
+import { getPositions, openPosition, closePosition, hasOpenPosition, getOpenPositionsCount, MAX_PARALLEL_POSITIONS, getBalance, getRiskCapital, getPositionNotional,
+  updatePositionMetadata, flushPositionPersistence, beginPositionOpening, endPositionOpening, isPositionOpening, loadReconciliationPendingSymbols, addReconciliationPendingSymbol,
+  removeReconciliationPendingSymbol, isReconciliationPendingSymbol } from './positionState';
+import { RADE_FEE_RATE, isTradingTimeUtcPlus4, getCooldownRemainingMs } from './strategy';
+import { logPositionCheck, logError, logSignalCheck } from './logger';
+import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
+import { refreshTopMarkets, startMarketRefresh, stopMarketRefresh, getActiveTradingPairs, getActiveMarket } from './scheduler.dynamic.parts';
+import { PaperExecutionService, LighterExecutionService, ExecutionService } from './execution';
 import { SignerClient } from 'zklighter-sdk';
-import {
-  restoreStateAfterRestart,
-  reconcileAccount,
-  fetchAccountPositions,
-  syncLiveBalance
-} from './reconciliation';
+import { restoreStateAfterRestart, reconcileAccount, fetchAccountPositions, syncLiveBalance } from './reconciliation';
 import type { EnsureProtectiveOrdersRequest } from './execution/types';
 
 const PAPER_TRADING = process.env.PAPER_TRADING !== 'false';
 const SIGNAL_LOCK_MS = 15 * 60_000;
 const PENDING_OPENING_TTL_MS = 30 * 60_000;
-
 const LOG_ONLY_TRADING_REGIMES = true;
 
 let executionService: ExecutionService;
@@ -82,7 +32,6 @@ let positionCheckRunning = false;
 let schedulerStopping = false;
 let schedulerStarted = false;
 const symbolLocks = new Map<string, number>();
-
 // Cooldown после сделки (1 час)
 const symbolCooldowns = new Map<string, number>();
 
@@ -284,11 +233,7 @@ async function hasPendingRemoteOrder(marketId: number): Promise<boolean> {
 }
 
 function buildPositionMetadata(
-  regime: string,
-  indicators: any,
-  signalTime?: number,
-  signalTimeIso?: string
-) {
+  regime: string, indicators: any, signalTime?: number, signalTimeIso?: string ) {
   return {
     regime,
     macdCrossUp: indicators?.macdCrossUp ?? false,
@@ -446,20 +391,17 @@ function setSymbolCooldown(symbol: string, timestamp = Date.now()): void {
 
 function getSymbolCooldownReason(symbol: string, now = new Date()): string | null {
   const lastTradeAt = symbolCooldowns.get(normalizeSymbol(symbol));
-
   if (lastTradeAt == null) {
     return null;
   }
 
   const remainingMs = getCooldownRemainingMs(lastTradeAt, new Date(now));
-
   if (remainingMs <= 0) {
     symbolCooldowns.delete(normalizeSymbol(symbol));
     return null;
   }
 
   const remainingMinutes = Math.ceil(remainingMs / 60_000);
-
   return `Symbol cooldown active: ${remainingMinutes} min remaining`;
 }
 
@@ -797,7 +739,6 @@ async function reconcileLocalPositionsWithExchange(
   if (PAPER_TRADING || !signerClient) return;
 
   const accountIndex = Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0);
-
   try {
     const remotePositions = await fetchAccountPositions(signerClient, accountIndex);
 
@@ -815,7 +756,6 @@ async function reconcileLocalPositionsWithExchange(
         : remoteBySymbol.get(symbol);
 
       if (remote) continue;
-
       const markPrice = getMarkPrice(symbol);
       const closePrice = markPrice != null && Number.isFinite(markPrice) && markPrice > 0
         ? markPrice
@@ -843,7 +783,6 @@ async function reconcileLocalPositionsWithExchange(
       } else {
         // ⭐ Установить cooldown после успешного закрытия
         setSymbolCooldown(symbol);
-
         unlockSymbol(symbol);
         tradeLog('POSITION_CLOSED', {
           symbol,
@@ -870,7 +809,6 @@ async function reconcileLocalPositionsWithExchange(
         localBySymbol.has(symbol);
 
       if (hasLocal) continue;
-
       const pending = pendingFilledOpens.get(symbol);
       if (
         pending &&
@@ -1032,7 +970,6 @@ export async function startScheduler(): Promise<void> {
   try {
     executionService = createExecutionService();
     initializeSignerClient();
-
     await refreshTopMarkets();
     await loadReconciliationPendingSymbols();
     if (!PAPER_TRADING && signerClient) {
