@@ -528,15 +528,32 @@ async function checkSignals(): Promise<void> {
         const skipReason = (result as any).skipReason as string | null;
         const signalTime = (result as any).signalTime as number | undefined;
         const signalTimeIso = (result as any).signalTimeIso as string | undefined;
-        const indicators = (result as any).indicators as any;
-        const tce = indicators?.tce ?? null;
-        const tceScore = tce?.tceScore ?? null;
-        const tceRegime = tce?.tceRegime ?? null;
-        const tceReason = tce?.tceReason ?? null;
-        const entryPattern = indicators?.entryPattern ?? null;
-        const impulseDetected = indicators?.impulseDetected ?? false;
-        const consolidationDetected = indicators?.consolidationDetected ?? false;
-        const impulseBreakoutDetected = indicators?.impulseBreakoutDetected ?? false;
+        const indicators =
+          (result as any).indicators as any;
+        
+        const tce =
+          indicators?.tce ?? null;
+        
+        const tceScore =
+          tce?.tceScore ?? null;
+        
+        const tceRegime =
+          tce?.tceRegime ?? null;
+        
+        const tceReason =
+          tce?.tceReason ?? null;
+        
+        const entryPattern =
+          indicators?.entryPattern ?? null;
+        
+        const impulseDetected =
+          indicators?.impulseDetected ?? false;
+        
+        const consolidationDetected =
+          indicators?.consolidationDetected ?? false;
+        
+        const impulseBreakoutDetected =
+          indicators?.impulseBreakoutDetected ?? false;
 
         if (LOG_ONLY_TRADING_REGIMES && regime !== 'trend_up' && regime !== 'trend_down') {
           tradeLog('SIGNAL_SKIPPED_NON_TRADING_REGIME', {
