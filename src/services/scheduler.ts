@@ -487,7 +487,6 @@ async function checkSignals(): Promise<void> {
             regime,
             reason: 'Only trend_up and trend_down are logged to signal CSV/Telegram'
           });
-        
           continue;
         }
         
@@ -892,7 +891,6 @@ async function reconcileLocalPositionsWithExchange(
       };
 
       const openResult = openPosition(restoreInput);
-
       if (!openResult.ok) {
         markReconciliationPending(symbol);
         tradeError('LOCAL_POSITION_RESTORE_FAILED', openResult.message, {
@@ -904,13 +902,7 @@ async function reconcileLocalPositionsWithExchange(
       }
 
       unlockSymbol(symbol);
-      tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', {
-        symbol: remote.symbol,
-        marketId: remote.marketId,
-        positionId: openResult.position?.id ?? null,
-        entryPrice,
-        quantity
-      });
+      tradeLog('LOCAL_POSITION_RESTORED_FROM_REMOTE', { symbol: remote.symbol, marketId: remote.marketId, positionId: openResult.position?.id ?? null, entryPrice, quantity });
     }
   } catch (error) {
     tradeError('EXCHANGE_SYNC_FAILED', error, {
@@ -933,13 +925,6 @@ async function checkPositions(): Promise<void> {
       if (!position || isReconciliationPending(position.symbol)) continue;
       const symbol = normalizeSymbol(position.symbol);
       try {
-        // ⭐ Биржа уже управляет TP/SL — не создаём дубликаты
-        // if (!position.exchangeStopLossOrderId && !position.exchangeTakeProfitOrderId) {
-        //   const protectionMarket = getActiveMarket(symbol);
-        //   if (!protectionMarket) throw new Error(`Active market metadata not found: ${symbol}`);
-        //   await ensurePositionProtection(position, protectionMarket);
-        //   unlockSymbol(symbol);
-        // }
         const markPrice = getMarkPrice(symbol);
         if (markPrice == null || !Number.isFinite(markPrice) || markPrice <= 0) {
           // ⭐ Пропускаем проверку, если цена ещё не доступна (WebSocket не подключился)
