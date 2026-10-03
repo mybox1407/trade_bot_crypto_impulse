@@ -639,6 +639,7 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
+            impulseBreakoutRejectReason,
             tceScore,
             tceRegime,
             tceReason
@@ -659,6 +660,7 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
+            impulseBreakoutRejectReason,
             tceScore,
             tceRegime,
             tceReason
@@ -696,6 +698,7 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
+            impulseBreakoutRejectReason,
             tceScore,
             tceRegime,
             tceReason
@@ -718,7 +721,7 @@ async function checkSignals(): Promise<void> {
               status: executionResult.status === 'unknown'
                 ? 'not-ready'
                 : 'signal',
-              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, });
+              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, impulseBreakoutRejectReason});
             continue;
           }
 
@@ -800,6 +803,7 @@ async function checkSignals(): Promise<void> {
                 impulseDetected,
                 consolidationDetected,
                 impulseBreakoutDetected,
+                impulseBreakoutRejectReason,
                 tceScore,
                 tceRegime,
                 tceReason
