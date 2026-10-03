@@ -68,6 +68,8 @@ export const IMPULSE_MIN_FILTER_ADX = 22;
 export const IMPULSE_MAX_FILTER_ADX = 60;
 export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
 
+export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 2.0;
+
 const IMPULSE_MIN_BODY_ATR = 0.7;
 const IMPULSE_MAX_BODY_ATR = 1.5;
 const IMPULSE_MIN_CLOSE_POSITION = 0.7;
@@ -827,9 +829,9 @@ export async function analyzeMarket(
       : `No valid signal: ${trigger.reason}`;
   }
 
-  let atrUsedForExit: number | undefined = undefined;
-  let slMultiplierUsed: number | undefined = undefined;
-  let tpMultiplierUsed: number | undefined = undefined;
+  let atrUsedForExit: number | undefined;
+  let slMultiplierUsed: number | undefined;
+  let tpMultiplierUsed: number | undefined;
 
   if (side !== 'none' && lastAtr > 0) {
     entryExtensionAtr = getEntryDistanceFromEma20Atr(
@@ -940,14 +942,11 @@ export async function analyzeMarket(
         );
 
         if (extremePrice !== 0 && lastAtr > 0) {
-          const distanceFromExtremum =
-            sideForExtremum === 'long'
-              ? price - extremePrice
-              : extremePrice - price;
+          const distanceFromExtremum = sideForExtremum === 'long'
+            ? price - extremePrice
+            : extremePrice - price;
 
-          const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
-
-          if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
+          if (Math.abs(distanceFromExtremum) / lastAtr > MAX_EXTREMUM_DISTANCE_ATR) {
             extremumOk = false;
           }
         }
@@ -1073,6 +1072,8 @@ export async function analyzeMarket(
 
     if (!filterResult.passed) {
       const rejectedSide = side;
+      const rejectedPattern = entryPattern;
+      const isRejectedImpulse = rejectedPattern === 'impulse_continuation';
 
       const resetState = resetSignalState({
         buy,
@@ -1095,25 +1096,45 @@ export async function analyzeMarket(
         const failedFilter = filterResult.failedFilter ?? 'unknown';
         const isShortSide = rejectedSide === 'short';
 
-        const rsiRange = isShortSide
-          ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
-          : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+        const rsiRange = isRejectedImpulse
+          ? isShortSide
+            ? `${IMPULSE_MIN_RSI_SHORT}–${IMPULSE_MAX_RSI_SHORT}`
+            : `${IMPULSE_MIN_RSI_LONG}–${IMPULSE_MAX_RSI_LONG}`
+          : isShortSide
+            ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
+            : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
 
-        const adxRange = isShortSide
-          ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
-          : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+        const adxRange = isRejectedImpulse
+          ? `${IMPULSE_MIN_FILTER_ADX}–${IMPULSE_MAX_FILTER_ADX}`
+          : isShortSide
+            ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
+            : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
 
         const atrRange = isShortSide
           ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}`
           : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
 
-        const distRange = `0–${MAX_ENTRY_DISTANCE_FROM_EMA20_ATR}`;
+        const maxDistanceAtr = isRejectedImpulse
+          ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR
+          : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+        const maxCandleAtr = isRejectedImpulse
+          ? IMPULSE_MAX_SIGNAL_CANDLE_ATR
+          : MAX_SIGNAL_CANDLE_ATR;
+
+        const signalReason = isRejectedImpulse
+          ? impulseTrigger.reason ?? '-'
+          : trigger.reason ?? '-';
 
         skipReason = [
           `Filter failed: ${failedFilter}`,
-          `Signal: ${trigger.reason ?? '-'}`,
+          `Signal: ${signalReason}`,
+          `Entry pattern: ${rejectedPattern ?? '-'}`,
           `Pullback: ${trigger.pullbackDetected}`,
           `Reclaim: ${trigger.reclaimDetected}`,
+          `Impulse: ${impulseTrigger.impulseDetected}`,
+          `Consolidation: ${impulseTrigger.consolidationDetected}`,
+          `Impulse breakout: ${impulseTrigger.breakoutDetected}`,
           `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]`,
           `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]`,
           `ADX rising: ${regimeIndicators.adxRising}`,
@@ -1121,9 +1142,9 @@ export async function analyzeMarket(
           `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]`,
           `BB Width: ${regimeIndicators.bbWidth.toFixed(5)}`,
           `BB rising: ${regimeIndicators.bbWidthRising}`,
-          `Candle ATR: ${regimeIndicators.candleRangeAtr.toFixed(2)} [max ${MAX_SIGNAL_CANDLE_ATR}]`,
+          `Candle ATR: ${regimeIndicators.candleRangeAtr.toFixed(2)} [max ${maxCandleAtr}]`,
           `EMA20 direction: ${failedFilter === 'ema20_direction' ? 'wrong side' : 'OK'}`,
-          `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}]`,
+          `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [0–${maxDistanceAtr}]`,
           `Too Extended: ${entryTooExtended}`
         ].join('\n');
       }
@@ -1195,19 +1216,23 @@ export async function analyzeMarket(
 
   if (side !== 'none' && stopLossPrice != null) {
     const riskPerUnit = Math.abs(price - stopLossPrice);
-    const capitalForTrade =
-      entryPattern === 'impulse_continuation' ? impulseRiskCapital : riskCapital;
+    const capitalForTrade = entryPattern === 'impulse_continuation'
+      ? impulseRiskCapital
+      : riskCapital;
 
-    positionSize = riskPerUnit > 0 ? capitalForTrade / riskPerUnit : null;
+    positionSize = riskPerUnit > 0
+      ? capitalForTrade / riskPerUnit
+      : null;
   }
 
-  const entryDistanceFromEma20ForLog =
-    side !== 'none'
-      ? getEntryDistanceFromEma20(price, regimeIndicators.ema20)
-      : entryDistanceFromEma20ForTrade;
+  const entryDistanceFromEma20ForLog = side !== 'none'
+    ? getEntryDistanceFromEma20(price, regimeIndicators.ema20)
+    : entryDistanceFromEma20ForTrade;
 
   const entryDistanceFromEma20AtrForLog =
-    side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null
+    side !== 'none' &&
+    lastAtr > 0 &&
+    entryDistanceFromEma20ForLog != null
       ? entryDistanceFromEma20ForLog / lastAtr
       : entryDistanceFromEma20AtrForTrade;
 
