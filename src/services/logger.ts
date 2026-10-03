@@ -4,7 +4,13 @@ import path from 'path';
 const LOG_DIR = process.env.LOG_DIR ?? '/app/logs';
 
 type CsvValue = string | number | boolean | null | undefined;
-type EntryPattern = 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
+
+type EntryPattern =
+  | 'pullback_reclaim'
+  | 'impulse_breakout'
+  | 'impulse_continuation'
+  | 'breakout'
+  | null;
 
 const FILE_HEADERS: Record<string, string[]> = {
   'signal_log.csv': [
@@ -15,12 +21,12 @@ const FILE_HEADERS: Record<string, string[]> = {
     'bbWidth', 'atrPct', 'signalTriggered', 'positionOpened',
     'openPositionError', 'pullbackDetected', 'reclaimDetected', 'signalReason',
     'entryPattern', 'impulseDetected', 'consolidationDetected',
-    'impulseBreakoutDetected', 'entryDistanceFromEma20',
-    'entryDistanceFromEma20Atr', 'entryTooExtended', 'signalTimeIso',
-    'isTradingWindow', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
-    'tceScore', 'tceRegime', 'tceReason', 'tceTrendAligned', 'tceErFast',
-    'tceErSlow', 'tceRoomAtr', 'tceEntryExtensionAtr', 'tceCandleRangeAtr',
-    'tceBodyRatio'
+    'impulseBreakoutDetected', 'impulseBreakoutRejectReason',
+    'entryDistanceFromEma20', 'entryDistanceFromEma20Atr', 'entryTooExtended',
+    'signalTimeIso', 'isTradingWindow', 'mlProbability', 'mlThreshold',
+    'mlPassed', 'mlTrainedAt', 'tceScore', 'tceRegime', 'tceReason',
+    'tceTrendAligned', 'tceErFast', 'tceErSlow', 'tceRoomAtr',
+    'tceEntryExtensionAtr', 'tceCandleRangeAtr', 'tceBodyRatio'
   ],
 
   'position_open_log.csv': [
@@ -29,13 +35,14 @@ const FILE_HEADERS: Record<string, string[]> = {
     'balanceAfter', 'riskCapital', 'maxNotionalByPercent', 'stopDistance',
     'totalRiskPerUnit', 'calculatedQuantity', 'regime', 'entryPattern',
     'impulseDetected', 'consolidationDetected', 'impulseBreakoutDetected',
-    'macdCrossUp', 'macdCrossDown', 'lastRsi', 'lastAtr', 'adx', 'bbWidth',
-    'atrPct', 'ema20', 'ema50', 'ema200', 'entryDistanceFromEma20',
-    'entryDistanceFromEma20Percent', 'entryDistanceFromEma20Atr',
-    'entryTooExtended', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
-    'signalTime', 'signalTimeIso', 'tceScore', 'tceRegime', 'tceReason',
-    'tceTrendAligned', 'tceErFast', 'tceErSlow', 'tceRoomAtr',
-    'tceEntryExtensionAtr', 'tceCandleRangeAtr', 'tceBodyRatio'
+    'impulseBreakoutRejectReason', 'macdCrossUp', 'macdCrossDown', 'lastRsi',
+    'lastAtr', 'adx', 'bbWidth', 'atrPct', 'ema20', 'ema50', 'ema200',
+    'entryDistanceFromEma20', 'entryDistanceFromEma20Percent',
+    'entryDistanceFromEma20Atr', 'entryTooExtended', 'mlProbability',
+    'mlThreshold', 'mlPassed', 'mlTrainedAt', 'signalTime', 'signalTimeIso',
+    'tceScore', 'tceRegime', 'tceReason', 'tceTrendAligned', 'tceErFast',
+    'tceErSlow', 'tceRoomAtr', 'tceEntryExtensionAtr', 'tceCandleRangeAtr',
+    'tceBodyRatio'
   ],
 
   'position_check_log.csv': [
@@ -74,9 +81,16 @@ function ensureDirExists(): void {
   }
 }
 
-function ensureFileExists(filePath: string, headers: string[]): void {
+function ensureFileExists(
+  filePath: string,
+  headers: string[]
+): void {
   if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, `${headers.join(',')}\n`, 'utf8');
+    fs.writeFileSync(
+      filePath,
+      `${headers.join(',')}\n`,
+      'utf8'
+    );
   }
 }
 
@@ -99,7 +113,10 @@ function escapeCsvValue(value: CsvValue): string {
   return stringValue;
 }
 
-function writeRow(fileName: string, row: Record<string, CsvValue>): void {
+function writeRow(
+  fileName: string,
+  row: Record<string, CsvValue>
+): void {
   ensureDirExists();
 
   const filePath = path.join(LOG_DIR, fileName);
@@ -107,8 +124,15 @@ function writeRow(fileName: string, row: Record<string, CsvValue>): void {
 
   ensureFileExists(filePath, headers);
 
-  const values = headers.map(header => escapeCsvValue(row[header]));
-  fs.appendFileSync(filePath, `${values.join(',')}\n`, 'utf8');
+  const values = headers.map(
+    header => escapeCsvValue(row[header])
+  );
+
+  fs.appendFileSync(
+    filePath,
+    `${values.join(',')}\n`,
+    'utf8'
+  );
 }
 
 export function logSignalCheck(row: {
@@ -147,6 +171,7 @@ export function logSignalCheck(row: {
   impulseDetected?: boolean;
   consolidationDetected?: boolean;
   impulseBreakoutDetected?: boolean;
+  impulseBreakoutRejectReason?: string | null;
   entryDistanceFromEma20?: number;
   entryDistanceFromEma20Atr?: number;
   entryTooExtended?: boolean;
@@ -193,6 +218,7 @@ export function logPositionOpen(row: {
   impulseDetected?: boolean;
   consolidationDetected?: boolean;
   impulseBreakoutDetected?: boolean;
+  impulseBreakoutRejectReason?: string | null;
   macdCrossUp: boolean;
   macdCrossDown: boolean;
   lastRsi: number;
