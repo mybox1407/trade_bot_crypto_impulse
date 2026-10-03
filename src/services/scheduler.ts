@@ -34,6 +34,7 @@ const symbolCooldowns = new Map<string, number>();
 
 type EntryPattern =
   | 'pullback_reclaim'
+  | 'impulse_breakout'
   | 'impulse_continuation'
   | 'breakout'
   | null;
@@ -665,7 +666,13 @@ async function checkSignals(): Promise<void> {
         const stopDistance = Math.abs(expectedPrice - stopLossPrice);
         const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
         if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) throw new Error(`Invalid total risk per unit: ${totalRiskPerUnit}`);
-        const riskCapital = entryPattern === 'impulse_continuation' ? getBalance() * IMPULSE_MAX_RISK_PER_TRADE : getRiskCapital();
+        
+        const riskCapital =
+          entryPattern === 'impulse_continuation' ||
+          entryPattern === 'impulse_breakout'
+            ? getBalance() * IMPULSE_MAX_RISK_PER_TRADE
+            : getRiskCapital();
+        
         const rawQuantity = validateQuantity(Math.min(riskCapital / totalRiskPerUnit, getPositionNotional() / expectedPrice ) );
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
