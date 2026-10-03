@@ -18,13 +18,23 @@ export const MAX_SIGNAL_DRIFT_ATR = 0.35;
 export const MAX_ADVERSE_SIGNAL_MOVE_ATR = 0.5;
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [[0, 24]];
-export const MIN_ENTRY_RSI_SHORT = 32;
-export const MAX_ENTRY_RSI_SHORT = 52;
-export const MIN_ENTRY_RSI_LONG = 48;
-export const MAX_ENTRY_RSI_LONG = 68;
-export const MIN_ENTRY_ADX_SHORT = 21;
-export const MIN_ENTRY_ADX_LONG = 21;
-export const MAX_ENTRY_ADX = 55;
+//export const MIN_ENTRY_RSI_SHORT = 32;
+//export const MAX_ENTRY_RSI_SHORT = 52;
+//export const MIN_ENTRY_RSI_LONG = 48;
+//export const MAX_ENTRY_RSI_LONG = 68;
+// === Pullback / reclaim ===
+export const MIN_ENTRY_RSI_LONG = 51;
+export const MAX_ENTRY_RSI_LONG = 64;
+export const MIN_ENTRY_RSI_SHORT = 36;
+export const MAX_ENTRY_RSI_SHORT = 49;
+
+//export const MIN_ENTRY_ADX_SHORT = 21;
+//export const MIN_ENTRY_ADX_LONG = 21;
+//export const MAX_ENTRY_ADX = 55;
+export const MIN_ENTRY_ADX_LONG = 28;
+export const MIN_ENTRY_ADX_SHORT = 28;
+export const MAX_ENTRY_ADX = 40;
+
 export const HIGH_ADX_THRESHOLD = 45;
 export const HIGH_ADX_MAX_ENTRY_DISTANCE_ATR = 0.65;
 export const MIN_LAST_ATR_PCT = 0.001;
@@ -34,8 +44,10 @@ export const MIN_BB_WIDTH_LONG = 0.0;
 export const MAX_BB_WIDTH_LONG = 0.12;
 export const MIN_BB_WIDTH_SHORT = 0.0;
 export const MAX_BB_WIDTH_SHORT = 0.12;
+//export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
+//export const MAX_SIGNAL_CANDLE_ATR = 1.5;
 export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
-export const MAX_SIGNAL_CANDLE_ATR = 1.5;
+export const MAX_SIGNAL_CANDLE_ATR = 1.2;
 export const MIN_SIGNAL_BODY_ATR = 0.2;
 export const REQUIRE_ADX_RISING = false;
 export const REQUIRE_BB_WIDTH_RISING = false;
@@ -47,6 +59,14 @@ export const LONG_BLACKLIST = [''];
 export const STOP_LOSS_ATR_MULTIPLIER = 3.0;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 export const ENABLE_TRAILING_STOP = false;
+
+export const IMPULSE_MIN_RSI_LONG = 45;
+export const IMPULSE_MAX_RSI_LONG = 78;
+export const IMPULSE_MIN_RSI_SHORT = 22;
+export const IMPULSE_MAX_RSI_SHORT = 55;
+export const IMPULSE_MIN_FILTER_ADX = 22;
+export const IMPULSE_MAX_FILTER_ADX = 60;
+export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
 
 const IMPULSE_MIN_BODY_ATR = 0.7;
 const IMPULSE_MAX_BODY_ATR = 1.5;
@@ -187,31 +207,185 @@ function resetSignalState(state: SignalState): SignalState { return { ...state, 
 
 type PullbackSignal = { long: boolean; short: boolean; pullbackDetected: boolean; reclaimDetected: boolean; reason: string | null };
 
-function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[]; ema50: number[]; ema200: number[]; atr: number[]; regimeIndicators: RegimeIndicators }): PullbackSignal {
+//function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[]; ema50: number[]; ema200: number[]; atr: number[]; regimeIndicators: RegimeIndicators }): PullbackSignal {
+//  const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
+//  if (candles.length < 3 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1 || atr.length < 3) {
+//    return { long: false, short: false, pullbackDetected: false, reclaimDetected: false, reason: 'not_enough_trigger_data' };
+//  }
+//  const current = candles[candles.length - 1], previous = candles[candles.length - 2];
+//  const currentEma20 = ema20[ema20.length - 1], previousEma20 = ema20[ema20.length - 2];
+//  const currentEma50 = ema50[ema50.length - 1], previousEma50 = ema50[ema50.length - 2];
+//  const currentEma200 = ema200[ema200.length - 1], currentAtr = atr[atr.length - 1];
+//  const ema20Rising = currentEma20 > previousEma20, ema20Falling = currentEma20 < previousEma20;
+//  const previousTouchedLongZone = previous.low <= previousEma20 || previous.low <= previousEma50;
+//  const previousTouchedShortZone = previous.high >= previousEma20 || previous.high >= previousEma50;
+//  const bullishReclaim = current.close > current.open && current.close > currentEma20 && current.close > previous.close;
+//  const bearishReclaim = current.close < current.open && current.close < currentEma20 && current.close < previous.close;
+//  const candleRangeAtr = getCandleRangeAtr(current, currentAtr), bodyAtr = getBodyAtr(current, currentAtr);
+//  const validCandle = candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR && bodyAtr >= MIN_SIGNAL_BODY_ATR;
+//  const entryDistanceAtr = getEntryDistanceFromEma20Atr(current.close, currentEma20, currentAtr);
+//  const notExtended = entryDistanceAtr <= MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+//  const longContext = current.close > currentEma200 && currentEma20 > currentEma50 && currentEma50 > currentEma200 && ema20Rising && regimeIndicators.plusDi > regimeIndicators.minusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_LONG && regimeIndicators.adx <= MAX_ENTRY_ADX;
+//  const shortContext = current.close < currentEma200 && currentEma20 < currentEma50 && currentEma50 < currentEma200 && ema20Falling && regimeIndicators.minusDi > regimeIndicators.plusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_SHORT && regimeIndicators.adx <= MAX_ENTRY_ADX;
+//  const long = longContext && previousTouchedLongZone && bullishReclaim && validCandle && notExtended;
+//  const short = shortContext && previousTouchedShortZone && bearishReclaim && validCandle && notExtended;
+//  if (long) return { long: true, short: false, pullbackDetected: true, reclaimDetected: true, reason: 'long_pullback_reclaim' };
+//  if (short) return { long: false, short: true, pullbackDetected: true, reclaimDetected: true, reason: 'short_pullback_reclaim' };
+//  return { long: false, short: false, pullbackDetected: previousTouchedLongZone || previousTouchedShortZone, reclaimDetected: bullishReclaim || bearishReclaim, reason: null };
+//}
+
+function detectPullbackReclaimSignal(params: {
+  candles: Candle[];
+  ema20: number[];
+  ema50: number[];
+  ema200: number[];
+  atr: number[];
+  regimeIndicators: RegimeIndicators;
+}): PullbackSignal {
   const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
-  if (candles.length < 3 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1 || atr.length < 3) {
-    return { long: false, short: false, pullbackDetected: false, reclaimDetected: false, reason: 'not_enough_trigger_data' };
+
+  if (candles.length < 21 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1 || atr.length < 3) {
+    return {
+      long: false,
+      short: false,
+      pullbackDetected: false,
+      reclaimDetected: false,
+      reason: 'not_enough_trigger_data'
+    };
   }
-  const current = candles[candles.length - 1], previous = candles[candles.length - 2];
-  const currentEma20 = ema20[ema20.length - 1], previousEma20 = ema20[ema20.length - 2];
-  const currentEma50 = ema50[ema50.length - 1], previousEma50 = ema50[ema50.length - 2];
-  const currentEma200 = ema200[ema200.length - 1], currentAtr = atr[atr.length - 1];
-  const ema20Rising = currentEma20 > previousEma20, ema20Falling = currentEma20 < previousEma20;
-  const previousTouchedLongZone = previous.low <= previousEma20 || previous.low <= previousEma50;
-  const previousTouchedShortZone = previous.high >= previousEma20 || previous.high >= previousEma50;
-  const bullishReclaim = current.close > current.open && current.close > currentEma20 && current.close > previous.close;
-  const bearishReclaim = current.close < current.open && current.close < currentEma20 && current.close < previous.close;
-  const candleRangeAtr = getCandleRangeAtr(current, currentAtr), bodyAtr = getBodyAtr(current, currentAtr);
-  const validCandle = candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR && bodyAtr >= MIN_SIGNAL_BODY_ATR;
-  const entryDistanceAtr = getEntryDistanceFromEma20Atr(current.close, currentEma20, currentAtr);
-  const notExtended = entryDistanceAtr <= MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-  const longContext = current.close > currentEma200 && currentEma20 > currentEma50 && currentEma50 > currentEma200 && ema20Rising && regimeIndicators.plusDi > regimeIndicators.minusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_LONG && regimeIndicators.adx <= MAX_ENTRY_ADX;
-  const shortContext = current.close < currentEma200 && currentEma20 < currentEma50 && currentEma50 < currentEma200 && ema20Falling && regimeIndicators.minusDi > regimeIndicators.plusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_SHORT && regimeIndicators.adx <= MAX_ENTRY_ADX;
-  const long = longContext && previousTouchedLongZone && bullishReclaim && validCandle && notExtended;
-  const short = shortContext && previousTouchedShortZone && bearishReclaim && validCandle && notExtended;
-  if (long) return { long: true, short: false, pullbackDetected: true, reclaimDetected: true, reason: 'long_pullback_reclaim' };
-  if (short) return { long: false, short: true, pullbackDetected: true, reclaimDetected: true, reason: 'short_pullback_reclaim' };
-  return { long: false, short: false, pullbackDetected: previousTouchedLongZone || previousTouchedShortZone, reclaimDetected: bullishReclaim || bearishReclaim, reason: null };
+
+  const current = candles[candles.length - 1];
+  const previous = candles[candles.length - 2];
+
+  const currentEma20 = ema20[ema20.length - 1];
+  const previousEma20 = ema20[ema20.length - 2];
+  const currentEma50 = ema50[ema50.length - 1];
+  const previousEma50 = ema50[ema50.length - 2];
+  const currentEma200 = ema200[ema200.length - 1];
+  const currentAtr = atr[atr.length - 1];
+
+  if (!Number.isFinite(currentAtr) || currentAtr <= 0) {
+    return {
+      long: false,
+      short: false,
+      pullbackDetected: false,
+      reclaimDetected: false,
+      reason: 'invalid_trigger_atr'
+    };
+  }
+
+  const ema20Rising = currentEma20 > previousEma20;
+  const ema20Falling = currentEma20 < previousEma20;
+
+  const previousTouchedLongZone =
+    previous.low <= previousEma20 ||
+    previous.low <= previousEma50;
+
+  const previousTouchedShortZone =
+    previous.high >= previousEma20 ||
+    previous.high >= previousEma50;
+
+  const candleRange = current.high - current.low;
+  const candleRangeAtr = getCandleRangeAtr(current, currentAtr);
+  const bodyAtr = getBodyAtr(current, currentAtr);
+
+  const closePosition = candleRange > 0
+    ? (current.close - current.low) / candleRange
+    : 0.5;
+
+  const volumes = candles.map(c => Number(c.volume) || 0);
+  const avgVolume20 = mean(volumes.slice(-21, -1));
+  const currentVolume = Number(current.volume) || 0;
+  const volumeRatio = avgVolume20 > 0 ? currentVolume / avgVolume20 : 0;
+
+  const bullishReclaim =
+    current.close > current.open &&
+    current.close > currentEma20 &&
+    current.close > previous.high &&
+    bodyAtr >= 0.35 &&
+    closePosition >= 0.6 &&
+    volumeRatio >= 1.2;
+
+  const bearishReclaim =
+    current.close < current.open &&
+    current.close < currentEma20 &&
+    current.close < previous.low &&
+    bodyAtr >= 0.35 &&
+    closePosition <= 0.4 &&
+    volumeRatio >= 1.2;
+
+  const validCandle =
+    candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR &&
+    bodyAtr >= MIN_SIGNAL_BODY_ATR;
+
+  const entryDistanceAtr = getEntryDistanceFromEma20Atr(
+    current.close,
+    currentEma20,
+    currentAtr
+  );
+
+  const notExtended =
+    entryDistanceAtr <= MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+  const longContext =
+    current.close > currentEma200 &&
+    currentEma20 > currentEma50 &&
+    currentEma50 > currentEma200 &&
+    ema20Rising &&
+    regimeIndicators.plusDi > regimeIndicators.minusDi &&
+    regimeIndicators.adx >= MIN_ENTRY_ADX_LONG &&
+    regimeIndicators.adx <= MAX_ENTRY_ADX;
+
+  const shortContext =
+    current.close < currentEma200 &&
+    currentEma20 < currentEma50 &&
+    currentEma50 < currentEma200 &&
+    ema20Falling &&
+    regimeIndicators.minusDi > regimeIndicators.plusDi &&
+    regimeIndicators.adx >= MIN_ENTRY_ADX_SHORT &&
+    regimeIndicators.adx <= MAX_ENTRY_ADX;
+
+  const long =
+    longContext &&
+    previousTouchedLongZone &&
+    bullishReclaim &&
+    validCandle &&
+    notExtended;
+
+  const short =
+    shortContext &&
+    previousTouchedShortZone &&
+    bearishReclaim &&
+    validCandle &&
+    notExtended;
+
+  if (long) {
+    return {
+      long: true,
+      short: false,
+      pullbackDetected: true,
+      reclaimDetected: true,
+      reason: 'long_pullback_reclaim'
+    };
+  }
+
+  if (short) {
+    return {
+      long: false,
+      short: true,
+      pullbackDetected: true,
+      reclaimDetected: true,
+      reason: 'short_pullback_reclaim'
+    };
+  }
+
+  return {
+    long: false,
+    short: false,
+    pullbackDetected: previousTouchedLongZone || previousTouchedShortZone,
+    reclaimDetected: bullishReclaim || bearishReclaim,
+    reason: null
+  };
 }
 
 type ImpulseContinuationSignal = { long: boolean; short: boolean; reason: string | null; impulseDetected: boolean; consolidationDetected: boolean; breakoutDetected: boolean; breakoutLevel: number | null; consolidationLow: number | null; consolidationHigh: number | null };
@@ -275,36 +449,829 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   return { regime, ready: true, indicators: { lastClose, lastAtr, atrPct, adx: adxValue, previousAdx: previousAdxValue, adxRising, plusDi, minusDi, ema20: lastEma20, ema50: lastEma50, ema200: lastEma200, previousEma20, previousEma50, bbWidth, previousBbWidth, bbWidthRising, avgVol20, candleRangeAtr } };
 }
 
-export function canOpenTrade(params: { symbol: string; side: 'long' | 'short' | 'none'; price: number; ema20: number; lastRsi: number; atrPct: number; adx: number; adxRising?: boolean; plusDi?: number; minusDi?: number; bbWidth: number; bbWidthRising?: boolean; candleRangeAtr?: number; entryDistanceFromEma20: number; entryDistanceFromEma20Atr: number; entryTooExtended: boolean; pullbackDetected: boolean; reclaimDetected: boolean; entryPattern?: 'pullback_reclaim' | 'impulse_continuation' | 'breakout'; now?: Date }): FilterCheckResult {
-  const { symbol, side, price, ema20, lastRsi, atrPct, adx, adxRising = true, plusDi = 0, minusDi = 0, bbWidth, bbWidthRising = true, candleRangeAtr = 0, entryDistanceFromEma20Atr, entryTooExtended, pullbackDetected, reclaimDetected, entryPattern = 'pullback_reclaim', now = new Date() } = params;
+export function canOpenTrade(params: {
+  symbol: string;
+  side: 'long' | 'short' | 'none';
+  price: number;
+  ema20: number;
+  lastRsi: number;
+  atrPct: number;
+  adx: number;
+  adxRising?: boolean;
+  plusDi?: number;
+  minusDi?: number;
+  bbWidth: number;
+  bbWidthRising?: boolean;
+  candleRangeAtr?: number;
+  entryDistanceFromEma20: number;
+  entryDistanceFromEma20Atr: number;
+  entryTooExtended: boolean;
+  pullbackDetected: boolean;
+  reclaimDetected: boolean;
+  entryPattern?: 'pullback_reclaim' | 'impulse_continuation' | 'breakout';
+  now?: Date;
+}): FilterCheckResult {
+  const {
+    symbol, side, price, ema20, lastRsi, atrPct, adx,
+    adxRising = true, plusDi = 0, minusDi = 0,
+    bbWidth, bbWidthRising = true, candleRangeAtr = 0,
+    entryDistanceFromEma20Atr, entryTooExtended,
+    pullbackDetected, reclaimDetected,
+    entryPattern = 'pullback_reclaim', now = new Date()
+  } = params;
+
+  const isImpulse = entryPattern === 'impulse_continuation';
+  const isPullback = entryPattern === 'pullback_reclaim';
+
   if (!isTradingTimeUtcPlus4(now)) return { passed: false, failedFilter: 'trading_window' };
   if (isSymbolOnCooldown(symbol, now)) return { passed: false, failedFilter: 'cooldown' };
-  if (side === 'long') { const baseSymbol = symbol.split('/')[0].toUpperCase(); if (LONG_BLACKLIST.includes(baseSymbol)) return { passed: false, failedFilter: 'blacklist' }; }
+
   if (side !== 'long' && side !== 'short') return { passed: false, failedFilter: 'invalid_side' };
-  if (entryPattern === 'pullback_reclaim' && !pullbackDetected) return { passed: false, failedFilter: 'pullback_not_detected' };
-  if (entryPattern === 'pullback_reclaim' && !reclaimDetected) return { passed: false, failedFilter: 'reclaim_not_detected' };
-  if (!isPriceOnCorrectSideOfEma20(side, price, ema20)) return { passed: false, failedFilter: 'ema20_direction' };
-  if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) return { passed: false, failedFilter: 'rsi' };
-  if (side === 'long' && (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG)) return { passed: false, failedFilter: 'rsi' };
+
+  if (side === 'long') {
+    const baseSymbol = symbol.split('/')[0].toUpperCase();
+    if (LONG_BLACKLIST.includes(baseSymbol)) return { passed: false, failedFilter: 'blacklist' };
+  }
+
+  if (isPullback && !pullbackDetected) return { passed: false, failedFilter: 'pullback_not_detected' };
+  if (isPullback && !reclaimDetected) return { passed: false, failedFilter: 'reclaim_not_detected' };
+
+  if (!isPriceOnCorrectSideOfEma20(side, price, ema20)) {
+    return { passed: false, failedFilter: 'ema20_direction' };
+  }
+
+  if (isPullback) {
+    if (side === 'long' && (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG)) {
+      return { passed: false, failedFilter: 'rsi' };
+    }
+    if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) {
+      return { passed: false, failedFilter: 'rsi' };
+    }
+  }
+
+  if (isImpulse) {
+    if (side === 'long' && (lastRsi < IMPULSE_MIN_RSI_LONG || lastRsi > IMPULSE_MAX_RSI_LONG)) {
+      return { passed: false, failedFilter: 'impulse_rsi' };
+    }
+    if (side === 'short' && (lastRsi < IMPULSE_MIN_RSI_SHORT || lastRsi > IMPULSE_MAX_RSI_SHORT)) {
+      return { passed: false, failedFilter: 'impulse_rsi' };
+    }
+  }
+
   const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
-  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return { passed: false, failedFilter: 'atr_pct' };
-  const minAdx = side === 'short' ? MIN_ENTRY_ADX_SHORT : MIN_ENTRY_ADX_LONG;
-  if (adx < minAdx) return { passed: false, failedFilter: 'adx' };
-  if (entryPattern === 'pullback_reclaim' && adx > MAX_ENTRY_ADX) return { passed: false, failedFilter: 'adx' };
-  if (adx > HIGH_ADX_THRESHOLD && entryDistanceFromEma20Atr > HIGH_ADX_MAX_ENTRY_DISTANCE_ATR) return { passed: false, failedFilter: 'high_adx_entry_extended' };
-  if (REQUIRE_ADX_RISING && !adxRising) return { passed: false, failedFilter: 'adx_not_rising' };
-  if (REQUIRE_DI_DIRECTION) { if (side === 'long' && plusDi <= minusDi) return { passed: false, failedFilter: 'di_direction' }; if (side === 'short' && minusDi <= plusDi) return { passed: false, failedFilter: 'di_direction' }; }
-  const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT, maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
-  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return { passed: false, failedFilter: 'bb_width' };
-  if (REQUIRE_BB_WIDTH_RISING && !bbWidthRising) return { passed: false, failedFilter: 'bb_width_not_rising' };
-  if (candleRangeAtr > 0 && candleRangeAtr > MAX_SIGNAL_CANDLE_ATR) return { passed: false, failedFilter: 'signal_candle_too_large' };
-  if (!Number.isFinite(entryDistanceFromEma20Atr)) return { passed: false, failedFilter: 'entry_distance_atr_invalid' };
-  if (entryPattern === 'pullback_reclaim' && entryDistanceFromEma20Atr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR) return { passed: false, failedFilter: 'entry_distance_atr_high' };
-  if (entryPattern === 'pullback_reclaim' && REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return { passed: false, failedFilter: 'entry_too_extended' };
+  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) {
+    return { passed: false, failedFilter: 'atr_pct' };
+  }
+
+  const minAdx = isImpulse
+    ? IMPULSE_MIN_FILTER_ADX
+    : side === 'long' ? MIN_ENTRY_ADX_LONG : MIN_ENTRY_ADX_SHORT;
+
+  const maxAdx = isImpulse ? IMPULSE_MAX_FILTER_ADX : MAX_ENTRY_ADX;
+
+  if (adx < minAdx || adx > maxAdx) {
+    return { passed: false, failedFilter: isImpulse ? 'impulse_adx' : 'adx' };
+  }
+
+  if (REQUIRE_ADX_RISING && !adxRising) {
+    return { passed: false, failedFilter: 'adx_not_rising' };
+  }
+
+  if (REQUIRE_DI_DIRECTION) {
+    if (side === 'long' && plusDi <= minusDi) {
+      return { passed: false, failedFilter: 'di_direction' };
+    }
+    if (side === 'short' && minusDi <= plusDi) {
+      return { passed: false, failedFilter: 'di_direction' };
+    }
+  }
+
+  const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT;
+  const maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
+
+  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) {
+    return { passed: false, failedFilter: 'bb_width' };
+  }
+
+  if (REQUIRE_BB_WIDTH_RISING && !bbWidthRising) {
+    return { passed: false, failedFilter: 'bb_width_not_rising' };
+  }
+
+  const maxSignalCandleAtr = isImpulse
+    ? IMPULSE_MAX_SIGNAL_CANDLE_ATR
+    : MAX_SIGNAL_CANDLE_ATR;
+
+  if (candleRangeAtr > 0 && candleRangeAtr > maxSignalCandleAtr) {
+    return {
+      passed: false,
+      failedFilter: isImpulse ? 'impulse_signal_candle_too_large' : 'signal_candle_too_large'
+    };
+  }
+
+  if (!Number.isFinite(entryDistanceFromEma20Atr)) {
+    return { passed: false, failedFilter: 'entry_distance_atr_invalid' };
+  }
+
+  const maxDistanceAtr = isImpulse
+    ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR
+    : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+  if (entryDistanceFromEma20Atr > maxDistanceAtr) {
+    return {
+      passed: false,
+      failedFilter: isImpulse ? 'impulse_entry_distance_atr_high' : 'entry_distance_atr_high'
+    };
+  }
+
+  if (isPullback && REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) {
+    return { passed: false, failedFilter: 'entry_too_extended' };
+  }
+
   return { passed: true };
 }
 
-export async function analyzeMarket(candles: Candle[], symbol: string, signalPrice?: number, now = new Date()): Promise<StrategyResult> {
+//export function canOpenTrade(params: { symbol: string; side: 'long' | 'short' | 'none'; price: number; ema20: number; lastRsi: number; atrPct: number; adx: number; adxRising?: boolean; plusDi?: number; minusDi?: number; bbWidth: number; bbWidthRising?: boolean; candleRangeAtr?: number; entryDistanceFromEma20: number; entryDistanceFromEma20Atr: number; entryTooExtended: boolean; pullbackDetected: boolean; reclaimDetected: boolean; entryPattern?: 'pullback_reclaim' | 'impulse_continuation' | 'breakout'; now?: Date }): FilterCheckResult {
+//  const { symbol, side, price, ema20, lastRsi, atrPct, adx, adxRising = true, plusDi = 0, minusDi = 0, bbWidth, bbWidthRising = true, candleRangeAtr = 0, entryDistanceFromEma20Atr, entryTooExtended, pullbackDetected, reclaimDetected, entryPattern = 'pullback_reclaim', now = new Date() } = params;
+//  if (!isTradingTimeUtcPlus4(now)) return { passed: false, failedFilter: 'trading_window' };
+//  if (isSymbolOnCooldown(symbol, now)) return { passed: false, failedFilter: 'cooldown' };
+//  if (side === 'long') { const baseSymbol = symbol.split('/')[0].toUpperCase(); if (LONG_BLACKLIST.includes(baseSymbol)) return { passed: false, failedFilter: 'blacklist' }; }
+//  if (side !== 'long' && side !== 'short') return { passed: false, failedFilter: 'invalid_side' };
+//  if (entryPattern === 'pullback_reclaim' && !pullbackDetected) return { passed: false, failedFilter: 'pullback_not_detected' };
+//  if (entryPattern === 'pullback_reclaim' && !reclaimDetected) return { passed: false, failedFilter: 'reclaim_not_detected' };
+//  if (!isPriceOnCorrectSideOfEma20(side, price, ema20)) return { passed: false, failedFilter: 'ema20_direction' };
+//  if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) return { passed: false, failedFilter: 'rsi' };
+//  if (side === 'long' && (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG)) return { passed: false, failedFilter: 'rsi' };
+//  const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
+//  if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return { passed: false, failedFilter: 'atr_pct' };
+//  const minAdx = side === 'short' ? MIN_ENTRY_ADX_SHORT : MIN_ENTRY_ADX_LONG;
+//  if (adx < minAdx) return { passed: false, failedFilter: 'adx' };
+//  if (entryPattern === 'pullback_reclaim' && adx > MAX_ENTRY_ADX) return { passed: false, failedFilter: 'adx' };
+//  if (adx > HIGH_ADX_THRESHOLD && entryDistanceFromEma20Atr > HIGH_ADX_MAX_ENTRY_DISTANCE_ATR) return { passed: false, failedFilter: 'high_adx_entry_extended' };
+//  if (REQUIRE_ADX_RISING && !adxRising) return { passed: false, failedFilter: 'adx_not_rising' };
+//  if (REQUIRE_DI_DIRECTION) { if (side === 'long' && plusDi <= minusDi) return { passed: false, failedFilter: 'di_direction' }; if (side === 'short' && minusDi <= plusDi) return { passed: false, failedFilter: 'di_direction' }; }
+//  const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT, maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
+//  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return { passed: false, failedFilter: 'bb_width' };
+//  if (REQUIRE_BB_WIDTH_RISING && !bbWidthRising) return { passed: false, failedFilter: 'bb_width_not_rising' };
+//  if (candleRangeAtr > 0 && candleRangeAtr > MAX_SIGNAL_CANDLE_ATR) return { passed: false, failedFilter: 'signal_candle_too_large' };
+//  if (!Number.isFinite(entryDistanceFromEma20Atr)) return { passed: false, failedFilter: 'entry_distance_atr_invalid' };
+//  if (entryPattern === 'pullback_reclaim' && entryDistanceFromEma20Atr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR) return { passed: false, failedFilter: 'entry_distance_atr_high' };
+//  if (entryPattern === 'pullback_reclaim' && REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return { passed: false, failedFilter: 'entry_too_extended' };
+//  return { passed: true };
+//}
+
+export async function analyzeMarket(
+  candles: Candle[],
+  symbol: string,
+  signalPrice?: number,
+  now = new Date()
+): Promise<StrategyResult> {
+  const closedCandles = candles;
+  const closes = closedCandles.map(c => c.close);
+  const highs = closedCandles.map(c => c.high);
+  const lows = closedCandles.map(c => c.low);
+
+  const regimeInfo = detectMarketRegime(closedCandles);
+  const tradingWindow = getTradingWindowCheck(now);
+
+  const macd = MACD.calculate({
+    values: closes,
+    fastPeriod: 12,
+    slowPeriod: 26,
+    signalPeriod: 9,
+    SimpleMAOscillator: false,
+    SimpleMASignal: false
+  });
+
+  const rsi = RSI.calculate({ period: 14, values: closes });
+  const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
+  const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
+  const ema20 = EMA.calculate({ period: 20, values: closes });
+  const ema50 = EMA.calculate({ period: 50, values: closes });
+  const ema200 = EMA.calculate({ period: 200, values: closes });
+
+  const lastCandle = closedCandles[closedCandles.length - 1];
+  const signalTime = lastCandle?.time ?? Date.now();
+  const signalTimeIso = new Date(normalizeTimestamp(signalTime)).toISOString();
+
+  const emptyIndicators = (): StrategyIndicators => ({
+    macdCrossUp: false,
+    macdCrossDown: false,
+    lastRsi: 0,
+    lastAtr: 0,
+    bbUpper: 0,
+    bbMiddle: 0,
+    bbLower: 0,
+    regimeReady: false,
+    regimeIndicators: regimeInfo.indicators ?? ({} as RegimeIndicators),
+    entryExtensionAtr: null,
+    maxEntryExtensionAtr: MAX_ENTRY_DISTANCE_FROM_EMA20_ATR,
+    entryTooExtended: false,
+    tradeFeeRate: TRADE_FEE_RATE,
+    ready: false,
+    atrPct: 0,
+    adx: 0,
+    adxRising: false,
+    plusDi: 0,
+    minusDi: 0,
+    bbWidth: 0,
+    bbWidthRising: false,
+    candleRangeAtr: 0,
+    ema20: 0,
+    ema200: 0,
+    priceVsEma200: null,
+    entryDistanceFromEma20: null,
+    entryDistanceFromEma20Atr: null,
+    isCandleClosed: false,
+    pullbackDetected: false,
+    reclaimDetected: false,
+    signalReason: null,
+    entryPattern: null,
+    impulseDetected: false,
+    consolidationDetected: false,
+    impulseBreakoutDetected: false,
+    tce: null
+  });
+
+  if (
+    closedCandles.length < TCE_REQUIRED_CANDLES ||
+    !regimeInfo.ready ||
+    !regimeInfo.indicators ||
+    macd.length < 2 ||
+    rsi.length < 1 ||
+    atr.length < 1 ||
+    bb.length < 1 ||
+    ema20.length < 3 ||
+    ema50.length < 3 ||
+    ema200.length < 1
+  ) {
+    return {
+      price: closes[closes.length - 1] ?? 0,
+      buy: false,
+      sell: false,
+      side: 'none',
+      takeProfitPrice: null,
+      stopLossPrice: null,
+      positionSize: null,
+      regime: 'unknown',
+      skipReason: 'Indicators not ready',
+      signalTime,
+      signalTimeIso,
+      indicators: emptyIndicators()
+    };
+  }
+
+  const price = last(closes);
+  const lastMacd = macd[macd.length - 1];
+  const previousMacd = macd[macd.length - 2];
+
+  const macdCrossUp =
+    previousMacd.MACD != null &&
+    previousMacd.signal != null &&
+    lastMacd.MACD != null &&
+    lastMacd.signal != null &&
+    previousMacd.MACD < previousMacd.signal &&
+    lastMacd.MACD > lastMacd.signal;
+
+  const macdCrossDown =
+    previousMacd.MACD != null &&
+    previousMacd.signal != null &&
+    lastMacd.MACD != null &&
+    lastMacd.signal != null &&
+    previousMacd.MACD > previousMacd.signal &&
+    lastMacd.MACD < lastMacd.signal;
+
+  const lastRsi = last(rsi);
+  const lastAtr = last(atr);
+  const lastBb = last(bb);
+
+  const regime = regimeInfo.regime;
+  const regimeIndicators = regimeInfo.indicators;
+
+  const trigger = detectPullbackReclaimSignal({
+    candles: closedCandles,
+    ema20,
+    ema50,
+    ema200,
+    atr,
+    regimeIndicators
+  });
+
+  const impulseTrigger = detectImpulseContinuationSignal({
+    candles: closedCandles,
+    ema20,
+    ema50,
+    ema200,
+    atr,
+    regimeIndicators
+  });
+
+  const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
+  const impulseRiskCapital = STARTING_BALANCE * IMPULSE_MAX_RISK_PER_TRADE;
+
+  let side: 'long' | 'short' | 'none' = 'none';
+  let buy = false;
+  let sell = false;
+  let takeProfitPrice: number | null = null;
+  let stopLossPrice: number | null = null;
+  let positionSize: number | null = null;
+  let skipReason: string | null = null;
+  let entryExtensionAtr: number | null = null;
+  const maxEntryExtensionAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+  let entryTooExtended = false;
+  let tce: TceMetrics | null = null;
+  let entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null = null;
+
+  const impulseDetected = impulseTrigger.impulseDetected;
+  const consolidationDetected = impulseTrigger.consolidationDetected;
+  const impulseBreakoutDetected = impulseTrigger.breakoutDetected;
+
+  if (!tradingWindow.allowed) {
+    skipReason = tradingWindow.message;
+  } else if (regime === 'high_volatility' || regime === 'range') {
+    skipReason = `Trading disabled for regime: ${regime}`;
+  } else if (
+    ENABLE_IMPULSE_CONTINUATION_TRADES &&
+    regime === 'trend_up' &&
+    impulseTrigger.long
+  ) {
+    side = 'long';
+    buy = true;
+    entryPattern = 'impulse_continuation';
+  } else if (
+    ENABLE_IMPULSE_CONTINUATION_TRADES &&
+    regime === 'trend_down' &&
+    impulseTrigger.short
+  ) {
+    side = 'short';
+    sell = true;
+    entryPattern = 'impulse_continuation';
+  } else if (
+    ENABLE_TREND_UP_TRADES &&
+    regime === 'trend_up' &&
+    trigger.long
+  ) {
+    side = 'long';
+    buy = true;
+    entryPattern = 'pullback_reclaim';
+  } else if (
+    ENABLE_TREND_DOWN_TRADES &&
+    regime === 'trend_down' &&
+    trigger.short
+  ) {
+    side = 'short';
+    sell = true;
+    entryPattern = 'pullback_reclaim';
+  } else {
+    skipReason = trigger.reason == null
+      ? 'No impulse continuation or pullback/reclaim signal'
+      : `No valid signal: ${trigger.reason}`;
+  }
+
+  let atrUsedForExit: number | undefined = undefined;
+  let slMultiplierUsed: number | undefined = undefined;
+  let tpMultiplierUsed: number | undefined = undefined;
+
+  if (side !== 'none' && lastAtr > 0) {
+    entryExtensionAtr = getEntryDistanceFromEma20Atr(
+      price,
+      regimeIndicators.ema20,
+      lastAtr
+    );
+
+    entryTooExtended = entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+    const consolidationLow = impulseTrigger.consolidationLow;
+    const consolidationHigh = impulseTrigger.consolidationHigh;
+
+    const useImpulseExits =
+      entryPattern === 'impulse_continuation' &&
+      consolidationLow != null &&
+      consolidationHigh != null;
+
+    if (useImpulseExits) {
+      stopLossPrice = side === 'long'
+        ? consolidationLow - lastAtr * IMPULSE_STOP_BUFFER_ATR
+        : consolidationHigh + lastAtr * IMPULSE_STOP_BUFFER_ATR;
+
+      takeProfitPrice = side === 'long'
+        ? price + lastAtr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER
+        : price - lastAtr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER;
+
+      slMultiplierUsed = IMPULSE_STOP_BUFFER_ATR;
+      tpMultiplierUsed = IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER;
+    } else {
+      stopLossPrice = side === 'long'
+        ? price - lastAtr * STOP_LOSS_ATR_MULTIPLIER
+        : price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
+
+      takeProfitPrice = side === 'long'
+        ? price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER
+        : price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
+
+      slMultiplierUsed = STOP_LOSS_ATR_MULTIPLIER;
+      tpMultiplierUsed = TAKE_PROFIT_ATR_MULTIPLIER;
+    }
+
+    atrUsedForExit = lastAtr;
+
+    if (
+      entryPattern === 'impulse_continuation' &&
+      (consolidationLow == null || consolidationHigh == null)
+    ) {
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+      skipReason = 'Impulse continuation rejected: consolidation boundaries unavailable';
+    }
+  }
+
+  if (ENABLE_BREAKOUT_TRADES && tradingWindow.allowed && regime === 'breakout_watch') {
+    const lastSignalCandle = closedCandles[closedCandles.length - 1];
+
+    if (lastSignalCandle == null) {
+      skipReason = 'No closed candle for breakout';
+    } else {
+      const candleBody = Math.abs(lastSignalCandle.close - lastSignalCandle.open);
+      const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
+      const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
+
+      const breakoutUp =
+        lastSignalCandle.close > lastBb.upper + atrBuffer &&
+        candleBody >= minBody &&
+        lastRsi > 45 &&
+        lastRsi < 75;
+
+      const breakoutDown =
+        lastSignalCandle.close < lastBb.lower - atrBuffer &&
+        candleBody >= minBody &&
+        lastRsi < 55 &&
+        lastRsi > 25;
+
+      const atrPct = price > 0 ? lastAtr / price : 0;
+      const bbWidth = getBbWidth(lastBb);
+
+      const volatilityOkForBreakout =
+        atrPct >= BREAKOUT_MIN_ATR_PCT &&
+        atrPct <= BREAKOUT_MAX_ATR_PCT &&
+        bbWidth >= BREAKOUT_MIN_BB_WIDTH &&
+        bbWidth <= BREAKOUT_MAX_BB_WIDTH;
+
+      let extremumOk = true;
+
+      if (breakoutUp || breakoutDown) {
+        const sideForExtremum = breakoutUp ? 'long' : 'short';
+        const { extremePrice } = findLocalExtremum(
+          closedCandles,
+          sideForExtremum,
+          EXTREMUM_LOOKBACK
+        );
+
+        if (extremePrice !== 0 && lastAtr > 0) {
+          const distanceFromExtremum =
+            sideForExtremum === 'long'
+              ? price - extremePrice
+              : extremePrice - price;
+
+          const distanceAtr = Math.abs(distanceFromExtremum) / lastAtr;
+
+          if (distanceAtr > MAX_EXTREMUM_DISTANCE_ATR) {
+            extremumOk = false;
+          }
+        }
+      }
+
+      if (volatilityOkForBreakout && extremumOk) {
+        if (breakoutUp) {
+          side = 'long';
+          buy = true;
+          sell = false;
+          entryPattern = 'breakout';
+          stopLossPrice = price - lastAtr * 1.5;
+          takeProfitPrice = price + lastAtr * 2.2;
+          atrUsedForExit = lastAtr;
+          slMultiplierUsed = 1.5;
+          tpMultiplierUsed = 2.2;
+        } else if (breakoutDown) {
+          side = 'short';
+          sell = true;
+          buy = false;
+          entryPattern = 'breakout';
+          stopLossPrice = price + lastAtr * 1.5;
+          takeProfitPrice = price - lastAtr * 2.2;
+          atrUsedForExit = lastAtr;
+          slMultiplierUsed = 1.5;
+          tpMultiplierUsed = 2.2;
+        }
+      }
+    }
+  }
+
+  if ((buy || sell) && signalPrice != null && lastAtr > 0) {
+    const favorableMove = side === 'long'
+      ? price - signalPrice
+      : signalPrice - price;
+
+    const adverseMove = side === 'long'
+      ? signalPrice - price
+      : price - signalPrice;
+
+    const favorableMoveAtr = favorableMove / lastAtr;
+    const adverseMoveAtr = adverseMove / lastAtr;
+
+    if (adverseMoveAtr > MAX_ADVERSE_SIGNAL_MOVE_ATR) {
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+      skipReason = `Price moved ${adverseMoveAtr.toFixed(2)} ATR against signal`;
+    } else if (favorableMoveAtr > MAX_SIGNAL_DRIFT_ATR) {
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+      skipReason = `Entry too late: price moved ${favorableMoveAtr.toFixed(2)} ATR in signal direction`;
+    }
+  }
+
+  let entryDistanceFromEma20ForTrade: number | null = null;
+  let entryDistanceFromEma20AtrForTrade: number | null = null;
+
+  if (side !== 'none' && stopLossPrice != null) {
+    const entryDistanceFromEma20 = getEntryDistanceFromEma20(
+      price,
+      regimeIndicators.ema20
+    );
+
+    const entryDistanceFromEma20Atr = getEntryDistanceFromEma20Atr(
+      price,
+      regimeIndicators.ema20,
+      lastAtr
+    );
+
+    entryDistanceFromEma20ForTrade = entryDistanceFromEma20;
+    entryDistanceFromEma20AtrForTrade = entryDistanceFromEma20Atr;
+
+    const filterResult = canOpenTrade({
+      symbol,
+      side,
+      price,
+      ema20: regimeIndicators.ema20,
+      lastRsi,
+      atrPct: regimeIndicators.atrPct,
+      adx: regimeIndicators.adx,
+      adxRising: regimeIndicators.adxRising,
+      plusDi: regimeIndicators.plusDi,
+      minusDi: regimeIndicators.minusDi,
+      bbWidth: regimeIndicators.bbWidth,
+      bbWidthRising: regimeIndicators.bbWidthRising,
+      candleRangeAtr: regimeIndicators.candleRangeAtr,
+      entryDistanceFromEma20,
+      entryDistanceFromEma20Atr,
+      entryTooExtended,
+      pullbackDetected: trigger.pullbackDetected,
+      reclaimDetected: trigger.reclaimDetected,
+      entryPattern: entryPattern ?? 'pullback_reclaim',
+      now
+    });
+
+    if (!filterResult.passed) {
+      const rejectedSide = side;
+
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+
+      if (skipReason == null) {
+        const failedFilter = filterResult.failedFilter ?? 'unknown';
+        const isShortSide = rejectedSide === 'short';
+
+        const rsiRange = isShortSide
+          ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
+          : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+
+        const adxRange = isShortSide
+          ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
+          : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+
+        const atrRange = isShortSide
+          ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}`
+          : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
+
+        const distRange = `0–${MAX_ENTRY_DISTANCE_FROM_EMA20_ATR}`;
+
+        skipReason = [
+          `Filter failed: ${failedFilter}`,
+          `Signal: ${trigger.reason ?? '-'}`,
+          `Pullback: ${trigger.pullbackDetected}`,
+          `Reclaim: ${trigger.reclaimDetected}`,
+          `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]`,
+          `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]`,
+          `ADX rising: ${regimeIndicators.adxRising}`,
+          `+DI/-DI: ${regimeIndicators.plusDi.toFixed(2)}/${regimeIndicators.minusDi.toFixed(2)}`,
+          `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]`,
+          `BB Width: ${regimeIndicators.bbWidth.toFixed(5)}`,
+          `BB rising: ${regimeIndicators.bbWidthRising}`,
+          `Candle ATR: ${regimeIndicators.candleRangeAtr.toFixed(2)} [max ${MAX_SIGNAL_CANDLE_ATR}]`,
+          `EMA20 direction: ${failedFilter === 'ema20_direction' ? 'wrong side' : 'OK'}`,
+          `Dist EMA20 ATR: ${entryDistanceFromEma20Atr.toFixed(3)} [${distRange}]`,
+          `Too Extended: ${entryTooExtended}`
+        ].join('\n');
+      }
+    }
+  }
+
+  if (ENABLE_TCE_FILTER && side !== 'none' && stopLossPrice != null) {
+    const sideBeforeTce = side;
+
+    try {
+      tce = calculateTce(
+        closedCandles,
+        sideBeforeTce,
+        price,
+        regimeIndicators.ema20,
+        regimeIndicators.ema50,
+        regimeIndicators.ema200
+      );
+
+      const tcePassed =
+        tce.tceRegime === 'strong' &&
+        Number.isFinite(tce.tceScore) &&
+        tce.tceScore >= TCE_STRONG_MIN;
+
+      if (!tcePassed) {
+        const resetState = resetSignalState({
+          buy,
+          sell,
+          side,
+          takeProfitPrice,
+          stopLossPrice,
+          positionSize
+        });
+
+        buy = resetState.buy;
+        sell = resetState.sell;
+        side = resetState.side;
+        takeProfitPrice = resetState.takeProfitPrice;
+        stopLossPrice = resetState.stopLossPrice;
+        positionSize = resetState.positionSize;
+        entryPattern = null;
+
+        skipReason = `TCE filter rejected ${sideBeforeTce}: score=${
+          Number.isFinite(tce.tceScore) ? tce.tceScore : '-'
+        }, regime=${tce.tceRegime}, reason=${tce.tceReason}`;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      const resetState = resetSignalState({
+        buy,
+        sell,
+        side,
+        takeProfitPrice,
+        stopLossPrice,
+        positionSize
+      });
+
+      buy = resetState.buy;
+      sell = resetState.sell;
+      side = resetState.side;
+      takeProfitPrice = resetState.takeProfitPrice;
+      stopLossPrice = resetState.stopLossPrice;
+      positionSize = resetState.positionSize;
+      entryPattern = null;
+      skipReason = `TCE filter failed: ${message}`;
+    }
+  }
+
+  if (side !== 'none' && stopLossPrice != null) {
+    const riskPerUnit = Math.abs(price - stopLossPrice);
+    const capitalForTrade =
+      entryPattern === 'impulse_continuation' ? impulseRiskCapital : riskCapital;
+
+    positionSize = riskPerUnit > 0 ? capitalForTrade / riskPerUnit : null;
+  }
+
+  const entryDistanceFromEma20ForLog =
+    side !== 'none'
+      ? getEntryDistanceFromEma20(price, regimeIndicators.ema20)
+      : entryDistanceFromEma20ForTrade;
+
+  const entryDistanceFromEma20AtrForLog =
+    side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null
+      ? entryDistanceFromEma20ForLog / lastAtr
+      : entryDistanceFromEma20AtrForTrade;
+
+  return {
+    price,
+    buy,
+    sell,
+    side,
+    takeProfitPrice,
+    stopLossPrice,
+    positionSize,
+    regime,
+    skipReason,
+    signalTime,
+    signalTimeIso,
+    indicators: {
+      macdCrossUp,
+      macdCrossDown,
+      lastRsi,
+      lastAtr,
+      bbUpper: lastBb.upper,
+      bbMiddle: lastBb.middle,
+      bbLower: lastBb.lower,
+      regimeReady: regimeInfo.ready,
+      regimeIndicators,
+      entryExtensionAtr,
+      maxEntryExtensionAtr,
+      entryTooExtended,
+      tradeFeeRate: TRADE_FEE_RATE,
+      ready: regimeInfo.ready,
+      atrPct: regimeIndicators.atrPct,
+      adx: regimeIndicators.adx,
+      adxRising: regimeIndicators.adxRising,
+      plusDi: regimeIndicators.plusDi,
+      minusDi: regimeIndicators.minusDi,
+      bbWidth: regimeIndicators.bbWidth,
+      bbWidthRising: regimeIndicators.bbWidthRising,
+      candleRangeAtr: regimeIndicators.candleRangeAtr,
+      ema20: regimeIndicators.ema20,
+      ema200: regimeIndicators.ema200,
+      priceVsEma200: regimeIndicators.ema200 > 0
+        ? (price - regimeIndicators.ema200) / regimeIndicators.ema200
+        : null,
+      entryDistanceFromEma20: entryDistanceFromEma20ForLog,
+      entryDistanceFromEma20Atr: entryDistanceFromEma20AtrForLog,
+      isCandleClosed: closedCandles.length > 0,
+      pullbackDetected: trigger.pullbackDetected,
+      reclaimDetected: trigger.reclaimDetected,
+      signalReason: entryPattern === 'impulse_continuation'
+        ? impulseTrigger.reason
+        : trigger.reason,
+      entryPattern,
+      impulseDetected,
+      consolidationDetected,
+      impulseBreakoutDetected,
+      tce
+    },
+    atrUsedForExit,
+    slMultiplierUsed,
+    tpMultiplierUsed
+  };
+}
+
+/*export async function analyzeMarket(candles: Candle[], symbol: string, signalPrice?: number, now = new Date()): Promise<StrategyResult> {
   const closedCandles = candles;
   const closes = closedCandles.map(c => c.close), highs = closedCandles.map(c => c.high), lows = closedCandles.map(c => c.low);
   const regimeInfo = detectMarketRegime(closedCandles);
@@ -469,7 +1436,7 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   const entryDistanceFromEma20ForLog = side !== 'none' ? getEntryDistanceFromEma20(price, regimeIndicators.ema20) : entryDistanceFromEma20ForTrade;
   const entryDistanceFromEma20AtrForLog = side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null ? entryDistanceFromEma20ForLog / lastAtr : entryDistanceFromEma20AtrForTrade;
   return { price, buy, sell, side, takeProfitPrice, stopLossPrice, positionSize, regime, skipReason, signalTime, signalTimeIso, indicators: { macdCrossUp, macdCrossDown, lastRsi, lastAtr, bbUpper: lastBb.upper, bbMiddle: lastBb.middle, bbLower: lastBb.lower, regimeReady: regimeInfo.ready, regimeIndicators, entryExtensionAtr, maxEntryExtensionAtr, entryTooExtended, tradeFeeRate: TRADE_FEE_RATE, ready: regimeInfo.ready, atrPct: regimeIndicators.atrPct, adx: regimeIndicators.adx, adxRising: regimeIndicators.adxRising, plusDi: regimeIndicators.plusDi, minusDi: regimeIndicators.minusDi, bbWidth: regimeIndicators.bbWidth, bbWidthRising: regimeIndicators.bbWidthRising, candleRangeAtr: regimeIndicators.candleRangeAtr, ema20: regimeIndicators.ema20, ema200: regimeIndicators.ema200, priceVsEma200: regimeIndicators.ema200 > 0 ? (price - regimeIndicators.ema200) / regimeIndicators.ema200 : null, entryDistanceFromEma20: entryDistanceFromEma20ForLog, entryDistanceFromEma20Atr: entryDistanceFromEma20AtrForLog, isCandleClosed: closedCandles.length > 0, pullbackDetected: trigger.pullbackDetected, reclaimDetected: trigger.reclaimDetected, signalReason: entryPattern === 'impulse_continuation' ? impulseTrigger.reason : trigger.reason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, tce }, atrUsedForExit, slMultiplierUsed, tpMultiplierUsed };
-}
+}*/
 
 export type TelegramSender = (message: string) => Promise<void>;
 
