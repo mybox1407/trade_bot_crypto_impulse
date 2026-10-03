@@ -57,6 +57,7 @@ type SignalResult = {
   impulseDetected?: boolean;
   consolidationDetected?: boolean;
   impulseBreakoutDetected?: boolean;
+  impulseBreakoutRejectReason?: string | null;
   tceScore?: number | null;
   tceRegime?: string | null;
   tceReason?: string | null;
@@ -261,6 +262,9 @@ function buildPositionMetadata(
 
     impulseBreakoutDetected:
       indicators?.impulseBreakoutDetected ?? false,
+
+    impulseBreakoutRejectReason:
+      indicators?.impulseBreakoutRejectReason ?? null,
 
     macdCrossUp:
       indicators?.macdCrossUp ?? false,
@@ -554,6 +558,9 @@ async function checkSignals(): Promise<void> {
         
         const impulseBreakoutDetected =
           indicators?.impulseBreakoutDetected ?? false;
+        
+        const impulseBreakoutRejectReason =
+          indicators?.impulseBreakoutRejectReason ?? null;
 
         if (LOG_ONLY_TRADING_REGIMES && regime !== 'trend_up' && regime !== 'trend_down') {
           tradeLog('SIGNAL_SKIPPED_NON_TRADING_REGIME', {
