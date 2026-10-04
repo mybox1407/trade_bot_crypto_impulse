@@ -31,9 +31,9 @@ export const MAX_ENTRY_RSI_SHORT = 49;
 //export const MIN_ENTRY_ADX_SHORT = 21;
 //export const MIN_ENTRY_ADX_LONG = 21;
 //export const MAX_ENTRY_ADX = 55;
-export const MIN_ENTRY_ADX_LONG = 28;
-export const MIN_ENTRY_ADX_SHORT = 28;
-export const MAX_ENTRY_ADX = 40;
+export const MIN_ENTRY_ADX_LONG = 26;
+export const MIN_ENTRY_ADX_SHORT = 26;
+export const MAX_ENTRY_ADX = 38;
 
 export const HIGH_ADX_THRESHOLD = 45;
 export const HIGH_ADX_MAX_ENTRY_DISTANCE_ATR = 0.65;
@@ -46,7 +46,7 @@ export const MIN_BB_WIDTH_SHORT = 0.0;
 export const MAX_BB_WIDTH_SHORT = 0.12;
 //export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
 //export const MAX_SIGNAL_CANDLE_ATR = 1.5;
-export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
+export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.6;
 export const MAX_SIGNAL_CANDLE_ATR = 1.2;
 export const MIN_SIGNAL_BODY_ATR = 0.2;
 export const REQUIRE_ADX_RISING = false;
@@ -61,14 +61,14 @@ export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 export const ENABLE_TRAILING_STOP = false;
 
 export const IMPULSE_MIN_RSI_LONG = 45;
-export const IMPULSE_MAX_RSI_LONG = 78;
+export const IMPULSE_MAX_RSI_LONG = 72;
 export const IMPULSE_MIN_RSI_SHORT = 22;
 export const IMPULSE_MAX_RSI_SHORT = 55;
 export const IMPULSE_MIN_FILTER_ADX = 22;
-export const IMPULSE_MAX_FILTER_ADX = 60;
+export const IMPULSE_MAX_FILTER_ADX = 38;
 export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
 
-export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 2.0;
+export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 1.8;
 
 const IMPULSE_MIN_BODY_ATR = 0.7;
 const IMPULSE_MAX_BODY_ATR = 1.5;
@@ -77,8 +77,8 @@ const IMPULSE_MAX_CONSOLIDATION_RANGE_ATR = 1.2;
 const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.8;
 const IMPULSE_MIN_ADX = 21;
 const IMPULSE_MAX_ADX = 55;
-const IMPULSE_STOP_BUFFER_ATR = 0.2;
-const IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
+const IMPULSE_STOP_BUFFER_ATR = 0.4;
+const IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER = 2.5;
 
 const symbolCooldowns = new Map<string, number>();
 const lastProcessedSignalCandleBySymbol = new Map<string, number>();
