@@ -70,6 +70,9 @@ export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
 
 export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 1.8;
 
+export const IMPULSE_MIN_BREAKOUT_ATR = 0.15;
+export const IMPULSE_MIN_BREAKOUT_VOLUME_RATIO = 1.2;
+
 const IMPULSE_MIN_BODY_ATR = 0.7;
 const IMPULSE_MAX_BODY_ATR = 1.5;
 const IMPULSE_MIN_CLOSE_POSITION = 0.7;
@@ -393,29 +396,162 @@ function detectPullbackReclaimSignal(params: {
 type ImpulseContinuationSignal = { long: boolean; short: boolean; reason: string | null; impulseDetected: boolean; consolidationDetected: boolean; breakoutDetected: boolean; breakoutLevel: number | null; consolidationLow: number | null; consolidationHigh: number | null };
 function noImpulseSignal(reason: string | null = null): ImpulseContinuationSignal { return { long: false, short: false, reason, impulseDetected: false, consolidationDetected: false, breakoutDetected: false, breakoutLevel: null, consolidationLow: null, consolidationHigh: null }; }
 
-function detectImpulseContinuationSignal(params: { candles: Candle[]; ema20: number[]; ema50: number[]; ema200: number[]; atr: number[]; regimeIndicators: RegimeIndicators }): ImpulseContinuationSignal {
+function detectImpulseContinuationSignal(params: {
+  candles: Candle[];
+  ema20: number[];
+  ema50: number[];
+  ema200: number[];
+  atr: number[];
+  regimeIndicators: RegimeIndicators;
+}): ImpulseContinuationSignal {
   const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
-  if (candles.length < 5 || ema20.length < 2 || ema50.length < 1 || ema200.length < 1 || atr.length < 4) return noImpulseSignal('not_enough_impulse_data');
-  const impulse = candles[candles.length - 4], pauseOne = candles[candles.length - 3], pauseTwo = candles[candles.length - 2], current = candles[candles.length - 1];
-  const currentAtr = atr[atr.length - 1], currentEma20 = ema20[ema20.length - 1], currentEma50 = ema50[ema50.length - 1], currentEma200 = ema200[ema200.length - 1];
-  if (!Number.isFinite(currentAtr) || currentAtr <= 0) return noImpulseSignal('invalid_impulse_atr');
-  const impulseRange = impulse.high - impulse.low, impulseBody = getBodySize(impulse);
-  const impulseClosePosition = impulseRange > 0 ? (impulse.close - impulse.low) / impulseRange : 0.5;
+
+  if (
+    candles.length < 5 ||
+    ema20.length < 2 ||
+    ema50.length < 1 ||
+    ema200.length < 1 ||
+    atr.length < 4
+  ) {
+    return noImpulseSignal('not_enough_impulse_data');
+  }
+
+  const impulse = candles[candles.length - 4];
+  const pauseOne = candles[candles.length - 3];
+  const pauseTwo = candles[candles.length - 2];
+  const current = candles[candles.length - 1];
+
+  const currentAtr = atr[atr.length - 1];
+  const currentEma20 = ema20[ema20.length - 1];
+  const currentEma50 = ema50[ema50.length - 1];
+  const currentEma200 = ema200[ema200.length - 1];
+
+  if (!Number.isFinite(currentAtr) || currentAtr <= 0) {
+    return noImpulseSignal('invalid_impulse_atr');
+  }
+
+  const impulseRange = impulse.high - impulse.low;
+  const impulseBody = getBodySize(impulse);
+  const impulseClosePosition =
+    impulseRange > 0 ? (impulse.close - impulse.low) / impulseRange : 0.5;
   const impulseBodyAtr = impulseBody / currentAtr;
-  const bullishImpulse = impulse.close > impulse.open && impulseBodyAtr >= IMPULSE_MIN_BODY_ATR && impulseBodyAtr <= IMPULSE_MAX_BODY_ATR && impulseClosePosition >= IMPULSE_MIN_CLOSE_POSITION;
-  const bearishImpulse = impulse.close < impulse.open && impulseBodyAtr >= IMPULSE_MIN_BODY_ATR && impulseBodyAtr <= IMPULSE_MAX_BODY_ATR && impulseClosePosition <= 1 - IMPULSE_MIN_CLOSE_POSITION;
-  const consolidationHigh = Math.max(pauseOne.high, pauseTwo.high), consolidationLow = Math.min(pauseOne.low, pauseTwo.low);
+
+  const bullishImpulse =
+    impulse.close > impulse.open &&
+    impulseBodyAtr >= IMPULSE_MIN_BODY_ATR &&
+    impulseBodyAtr <= IMPULSE_MAX_BODY_ATR &&
+    impulseClosePosition >= IMPULSE_MIN_CLOSE_POSITION;
+
+  const bearishImpulse =
+    impulse.close < impulse.open &&
+    impulseBodyAtr >= IMPULSE_MIN_BODY_ATR &&
+    impulseBodyAtr <= IMPULSE_MAX_BODY_ATR &&
+    impulseClosePosition <= 1 - IMPULSE_MIN_CLOSE_POSITION;
+
+  const consolidationHigh = Math.max(pauseOne.high, pauseTwo.high);
+  const consolidationLow = Math.min(pauseOne.low, pauseTwo.low);
   const consolidationRange = consolidationHigh - consolidationLow;
-  const consolidationDetected = consolidationRange <= currentAtr * IMPULSE_MAX_CONSOLIDATION_RANGE_ATR;
-  const longContext = current.close > currentEma200 && currentEma20 > currentEma50 && currentEma50 > currentEma200 && regimeIndicators.plusDi > regimeIndicators.minusDi && regimeIndicators.adx >= IMPULSE_MIN_ADX && regimeIndicators.adx <= IMPULSE_MAX_ADX && pauseOne.close >= currentEma20 && pauseTwo.close >= currentEma20;
-  const shortContext = current.close < currentEma200 && currentEma20 < currentEma50 && currentEma50 < currentEma200 && regimeIndicators.minusDi > regimeIndicators.plusDi && regimeIndicators.adx >= IMPULSE_MIN_ADX && regimeIndicators.adx <= IMPULSE_MAX_ADX && pauseOne.close <= currentEma20 && pauseTwo.close <= currentEma20;
-  const breakoutUp = current.close > consolidationHigh && current.close > current.open && current.close - consolidationHigh <= currentAtr * IMPULSE_MAX_BREAKOUT_DRIFT_ATR;
-  const breakoutDown = current.close < consolidationLow && current.close < current.open && consolidationLow - current.close <= currentAtr * IMPULSE_MAX_BREAKOUT_DRIFT_ATR;
-  const long = bullishImpulse && consolidationDetected && longContext && breakoutUp;
-  const short = bearishImpulse && consolidationDetected && shortContext && breakoutDown;
-  if (long) return { long: true, short: false, reason: 'long_impulse_continuation', impulseDetected: true, consolidationDetected: true, breakoutDetected: true, breakoutLevel: consolidationHigh, consolidationLow, consolidationHigh };
-  if (short) return { long: false, short: true, reason: 'short_impulse_continuation', impulseDetected: true, consolidationDetected: true, breakoutDetected: true, breakoutLevel: consolidationLow, consolidationLow, consolidationHigh };
-  return { long: false, short: false, reason: null, impulseDetected: bullishImpulse || bearishImpulse, consolidationDetected, breakoutDetected: breakoutUp || breakoutDown, breakoutLevel: null, consolidationLow, consolidationHigh };
+
+  const consolidationDetected =
+    consolidationRange <= currentAtr * IMPULSE_MAX_CONSOLIDATION_RANGE_ATR;
+
+  const longContext =
+    current.close > currentEma200 &&
+    currentEma20 > currentEma50 &&
+    currentEma50 > currentEma200 &&
+    regimeIndicators.plusDi > regimeIndicators.minusDi &&
+    regimeIndicators.adx >= IMPULSE_MIN_ADX &&
+    regimeIndicators.adx <= IMPULSE_MAX_ADX &&
+    pauseOne.close >= currentEma20 &&
+    pauseTwo.close >= currentEma20;
+
+  const shortContext =
+    current.close < currentEma200 &&
+    currentEma20 < currentEma50 &&
+    currentEma50 < currentEma200 &&
+    regimeIndicators.minusDi > regimeIndicators.plusDi &&
+    regimeIndicators.adx >= IMPULSE_MIN_ADX &&
+    regimeIndicators.adx <= IMPULSE_MAX_ADX &&
+    pauseOne.close <= currentEma20 &&
+    pauseTwo.close <= currentEma20;
+
+  const volumes = candles.map(c => Number(c.volume) || 0);
+  const avgVolume20 = mean(volumes.slice(-21, -1));
+  const currentVolume = Number(current.volume) || 0;
+  const volumeRatio =
+    avgVolume20 > 0 ? currentVolume / avgVolume20 : 0;
+
+  const breakoutUpDistanceAtr =
+    (current.close - consolidationHigh) / currentAtr;
+
+  const breakoutDownDistanceAtr =
+    (consolidationLow - current.close) / currentAtr;
+
+  const breakoutUp =
+    current.close > consolidationHigh &&
+    current.close > current.open &&
+    breakoutUpDistanceAtr >= IMPULSE_MIN_BREAKOUT_ATR &&
+    breakoutUpDistanceAtr <= IMPULSE_MAX_BREAKOUT_DRIFT_ATR &&
+    volumeRatio >= IMPULSE_MIN_BREAKOUT_VOLUME_RATIO;
+
+  const breakoutDown =
+    current.close < consolidationLow &&
+    current.close < current.open &&
+    breakoutDownDistanceAtr >= IMPULSE_MIN_BREAKOUT_ATR &&
+    breakoutDownDistanceAtr <= IMPULSE_MAX_BREAKOUT_DRIFT_ATR &&
+    volumeRatio >= IMPULSE_MIN_BREAKOUT_VOLUME_RATIO;
+
+  const long =
+    bullishImpulse &&
+    consolidationDetected &&
+    longContext &&
+    breakoutUp;
+
+  const short =
+    bearishImpulse &&
+    consolidationDetected &&
+    shortContext &&
+    breakoutDown;
+
+  if (long) {
+    return {
+      long: true,
+      short: false,
+      reason: 'long_impulse_continuation',
+      impulseDetected: true,
+      consolidationDetected: true,
+      breakoutDetected: true,
+      breakoutLevel: consolidationHigh,
+      consolidationLow,
+      consolidationHigh
+    };
+  }
+
+  if (short) {
+    return {
+      long: false,
+      short: true,
+      reason: 'short_impulse_continuation',
+      impulseDetected: true,
+      consolidationDetected: true,
+      breakoutDetected: true,
+      breakoutLevel: consolidationLow,
+      consolidationLow,
+      consolidationHigh
+    };
+  }
+
+  return {
+    long: false,
+    short: false,
+    reason: null,
+    impulseDetected: bullishImpulse || bearishImpulse,
+    consolidationDetected,
+    breakoutDetected: breakoutUp || breakoutDown,
+    breakoutLevel: null,
+    consolidationLow,
+    consolidationHigh
+  };
 }
 
 export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; ready: boolean; indicators: RegimeIndicators | null } {
