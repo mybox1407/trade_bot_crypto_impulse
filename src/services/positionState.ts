@@ -23,6 +23,12 @@ import {
 export const POSITION_PERCENT = 0.30;
 export const MAX_PARALLEL_POSITIONS = 3;
 
+export type EntryPattern =
+  | 'pullback_reclaim'
+  | 'impulse_continuation'
+  | 'breakout'
+  | null;
+
 export type PositionCloseReason =
   | 'take_profit'
   | 'stop_loss'
@@ -57,6 +63,10 @@ export interface VirtualPosition {
   clientOrderId?: string;
   metadata?: {
     regime: string;
+    entryPattern?: EntryPattern;
+    impulseDetected?: boolean;
+    consolidationDetected?: boolean;
+    impulseBreakoutDetected?: boolean;
     macdCrossUp: boolean;
     macdCrossDown: boolean;
     lastRsi: number;
@@ -149,18 +159,30 @@ function isValidLevels(params: {
   stopLossPrice: number;
 }): boolean {
   const { side, entryPrice, takeProfitPrice, stopLossPrice } = params;
-  if (!isFinitePositive(entryPrice) || !isFinitePositive(takeProfitPrice) || !isFinitePositive(stopLossPrice)) return false;
+
+  if (
+    !isFinitePositive(entryPrice) ||
+    !isFinitePositive(takeProfitPrice) ||
+    !isFinitePositive(stopLossPrice)
+  ) {
+    return false;
+  }
+
   return side === 'long'
     ? stopLossPrice < entryPrice && takeProfitPrice > entryPrice
     : stopLossPrice > entryPrice && takeProfitPrice < entryPrice;
 }
 
 function calculateReservedCapital(): number {
-  return currentPositions.reduce((total, position) => total + position.reservedCapital, 0);
+  return currentPositions.reduce(
+    (total, position) => total + position.reservedCapital,
+    0
+  );
 }
 
 function syncReservedCapital(): void {
   reservedCapital = calculateReservedCapital();
+
   if (!Number.isFinite(reservedCapital) || reservedCapital < 0) {
     throw new Error(`Invalid reserved capital calculated: ${reservedCapital}`);
   }
@@ -169,11 +191,15 @@ function syncReservedCapital(): void {
 function schedulePersistence(): void {
   const snapshot = getPositions();
   const pendingSymbols = getReconciliationPendingSymbols();
+
   persistenceQueue = persistenceQueue
     .catch(() => undefined)
     .then(() => saveOpenPositions(snapshot, pendingSymbols))
     .catch(error => {
-      console.error(`[${new Date().toISOString()}] Failed to persist position state:`, error);
+      console.error(
+        `[${new Date().toISOString()}] Failed to persist position state:`,
+        error
+      );
     });
 }
 
@@ -211,7 +237,11 @@ export function isReconciliationPendingSymbol(symbol: string): boolean {
  */
 export function beginPositionOpening(symbol: string): boolean {
   const normalized = normalizeSymbol(symbol);
-  if (openingSymbols.has(normalized) || hasOpenPosition(normalized)) return false;
+
+  if (openingSymbols.has(normalized) || hasOpenPosition(normalized)) {
+    return false;
+  }
+
   openingSymbols.add(normalized);
   return true;
 }
@@ -224,10 +254,15 @@ export function isPositionOpening(symbol: string): boolean {
   return openingSymbols.has(normalizeSymbol(symbol));
 }
 
-export function getBalance(): number { return balance; }
+export function getBalance(): number {
+  return balance;
+}
 
 export function setBalance(nextBalance: number): void {
-  if (!Number.isFinite(nextBalance) || nextBalance < 0) throw new Error(`Invalid balance: ${nextBalance}`);
+  if (!Number.isFinite(nextBalance) || nextBalance < 0) {
+    throw new Error(`Invalid balance: ${nextBalance}`);
+  }
+
   balance = nextBalance;
 }
 
@@ -242,7 +277,10 @@ export function getAvailableBalance(): number {
 }
 
 export function getTotalOpenNotional(): number {
-  return currentPositions.reduce((total, position) => total + position.notional, 0);
+  return currentPositions.reduce(
+    (total, position) => total + position.notional,
+    0
+  );
 }
 
 export function getPositions(): VirtualPosition[] {
@@ -254,25 +292,47 @@ export function getPositions(): VirtualPosition[] {
 
 export function getPosition(symbol?: string): VirtualPosition | null {
   if (!symbol) return currentPositions[0] ?? null;
+
   const normalized = normalizeSymbol(symbol);
-  return currentPositions.find(position => normalizeSymbol(position.symbol) === normalized) ?? null;
+
+  return (
+    currentPositions.find(
+      position => normalizeSymbol(position.symbol) === normalized
+    ) ?? null
+  );
 }
 
 export function getPositionById(positionId: string): VirtualPosition | null {
-  return currentPositions.find(position => position.id === positionId) ?? null;
+  return (
+    currentPositions.find(position => position.id === positionId) ?? null
+  );
 }
 
 export function hasOpenPosition(symbol?: string): boolean {
   if (!symbol) return currentPositions.length > 0;
+
   const normalized = normalizeSymbol(symbol);
-  return currentPositions.some(position => normalizeSymbol(position.symbol) === normalized);
+
+  return currentPositions.some(
+    position => normalizeSymbol(position.symbol) === normalized
+  );
 }
 
-export function getLastClosedTrade(): ClosedTrade | null { return lastClosedTrade; }
+export function getLastClosedTrade(): ClosedTrade | null {
+  return lastClosedTrade;
+}
 
-export function getPositionNotional(): number { return balance * POSITION_PERCENT; }
-export function getRiskCapital(): number { return balance * MAX_RISK_PER_TRADE; }
-export function getOpenPositionsCount(): number { return currentPositions.length; }
+export function getPositionNotional(): number {
+  return balance * POSITION_PERCENT;
+}
+
+export function getRiskCapital(): number {
+  return balance * MAX_RISK_PER_TRADE;
+}
+
+export function getOpenPositionsCount(): number {
+  return currentPositions.length;
+}
 
 export function openPosition(data: {
   symbol: string;
@@ -309,25 +369,69 @@ export function openPosition(data: {
     availableBalanceAfter: getAvailableBalance()
   });
 
-  if (currentPositions.length >= MAX_PARALLEL_POSITIONS) return fail(`Max ${MAX_PARALLEL_POSITIONS} open positions reached`);
-  if (hasOpenPosition(normalizedSymbol)) return fail(`Position for ${normalizedSymbol} is already open`);
+  if (currentPositions.length >= MAX_PARALLEL_POSITIONS) {
+    return fail(
+      `Max ${MAX_PARALLEL_POSITIONS} open positions reached`
+    );
+  }
+
+  if (hasOpenPosition(normalizedSymbol)) {
+    return fail(`Position for ${normalizedSymbol} is already open`);
+  }
 
   // Deliberately no isPositionOpening() check here.
   // A confirmed exchange fill is processed while the submission guard may
   // still be active. The guard protects duplicate order submission only.
 
-  if (data.marketId != null && (!Number.isInteger(data.marketId) || data.marketId < 0)) return fail(`Invalid marketId: ${data.marketId}`);
-  if (!isValidLevels({ side: data.side, entryPrice: data.entryPrice, takeProfitPrice: data.takeProfitPrice, stopLossPrice: data.stopLossPrice })) return fail('Invalid entry / stop / take-profit levels');
-  if (!isFinitePositive(data.quantity)) return fail('Invalid quantity');
+  if (
+    data.marketId != null &&
+    (!Number.isInteger(data.marketId) || data.marketId < 0)
+  ) {
+    return fail(`Invalid marketId: ${data.marketId}`);
+  }
 
-  const exchangeStopLossPrice = data.exchangeStopLossPrice ?? data.stopLossPrice;
-  const exchangeTakeProfitPrice = data.exchangeTakeProfitPrice ?? data.takeProfitPrice;
-  if (!isValidLevels({ side: data.side, entryPrice: data.entryPrice, takeProfitPrice: exchangeTakeProfitPrice, stopLossPrice: exchangeStopLossPrice })) return fail('Invalid exchange SL/TP levels');
+  if (
+    !isValidLevels({
+      side: data.side,
+      entryPrice: data.entryPrice,
+      takeProfitPrice: data.takeProfitPrice,
+      stopLossPrice: data.stopLossPrice
+    })
+  ) {
+    return fail('Invalid entry / stop / take-profit levels');
+  }
+
+  if (!isFinitePositive(data.quantity)) {
+    return fail('Invalid quantity');
+  }
+
+  const exchangeStopLossPrice =
+    data.exchangeStopLossPrice ?? data.stopLossPrice;
+
+  const exchangeTakeProfitPrice =
+    data.exchangeTakeProfitPrice ?? data.takeProfitPrice;
+
+  if (
+    !isValidLevels({
+      side: data.side,
+      entryPrice: data.entryPrice,
+      takeProfitPrice: exchangeTakeProfitPrice,
+      stopLossPrice: exchangeStopLossPrice
+    })
+  ) {
+    return fail('Invalid exchange SL/TP levels');
+  }
 
   const notional = data.quantity * data.entryPrice;
   const entryFee = notional * TRADE_FEE_RATE;
-  if (!isFinitePositive(notional) || !Number.isFinite(entryFee)) return fail('Calculated notional or fee is invalid');
-  if (notional > availableBalanceBefore) return fail('Insufficient available balance to reserve position notional');
+
+  if (!isFinitePositive(notional) || !Number.isFinite(entryFee)) {
+    return fail('Calculated notional or fee is invalid');
+  }
+
+  if (notional > availableBalanceBefore) {
+    return fail('Insufficient available balance to reserve position notional');
+  }
 
   const position: VirtualPosition = {
     id: createPositionId(),
@@ -372,10 +476,17 @@ export function openPosition(data: {
     balanceAfter: balance,
     riskCapital: getRiskCapital(),
     maxNotionalByPercent: getPositionNotional(),
-    stopDistance: data.side === 'long' ? data.entryPrice - data.stopLossPrice : data.stopLossPrice - data.entryPrice,
+    stopDistance:
+      data.side === 'long'
+        ? data.entryPrice - data.stopLossPrice
+        : data.stopLossPrice - data.entryPrice,
     totalRiskPerUnit: 0,
     calculatedQuantity: data.quantity,
     regime: data.metadata?.regime ?? '',
+    entryPattern: data.metadata?.entryPattern ?? null,
+    impulseDetected: data.metadata?.impulseDetected ?? false,
+    consolidationDetected: data.metadata?.consolidationDetected ?? false,
+    impulseBreakoutDetected: data.metadata?.impulseBreakoutDetected ?? false,
     macdCrossUp: data.metadata?.macdCrossUp ?? false,
     macdCrossDown: data.metadata?.macdCrossDown ?? false,
     lastRsi: data.metadata?.lastRsi ?? 0,
@@ -387,10 +498,16 @@ export function openPosition(data: {
     ema50: data.metadata?.ema50 ?? 0,
     ema200: data.metadata?.ema200 ?? 0,
     entryDistanceFromEma20: data.metadata?.entryDistanceFromEma20 ?? 0,
-    entryDistanceFromEma20Percent: data.metadata?.entryDistanceFromEma20Atr != null && data.metadata?.lastAtr != null && data.metadata.lastAtr > 0
-      ? (data.metadata.entryDistanceFromEma20 ?? 0) / data.metadata.lastAtr * 100
-      : 0,
-    entryDistanceFromEma20Atr: data.metadata?.entryDistanceFromEma20Atr ?? 0,
+    entryDistanceFromEma20Percent:
+      data.metadata?.entryDistanceFromEma20Atr != null &&
+      data.metadata?.lastAtr != null &&
+      data.metadata.lastAtr > 0
+        ? ((data.metadata.entryDistanceFromEma20 ?? 0) /
+            data.metadata.lastAtr) *
+          100
+        : 0,
+    entryDistanceFromEma20Atr:
+      data.metadata?.entryDistanceFromEma20Atr ?? 0,
     entryTooExtended: data.metadata?.entryTooExtended ?? false,
     signalTime: data.metadata?.signalTime,
     signalTimeIso: data.metadata?.signalTimeIso,
@@ -436,23 +553,52 @@ export function openPosition(data: {
   };
 }
 
-export function closePosition(positionId: string, exitPrice: number, reason: PositionCloseReason, options?: { executionOrderId?: string; clientOrderId?: string; fee?: number }) {
-  const index = currentPositions.findIndex(position => position.id === positionId);
-  if (index === -1) return { ok: false as const, message: 'No open position' };
-  if (!isFinitePositive(exitPrice)) return { ok: false as const, message: 'Invalid exit price' };
+export function closePosition(
+  positionId: string,
+  exitPrice: number,
+  reason: PositionCloseReason,
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
+) {
+  const index = currentPositions.findIndex(
+    position => position.id === positionId
+  );
+
+  if (index === -1) {
+    return { ok: false as const, message: 'No open position' };
+  }
+
+  if (!isFinitePositive(exitPrice)) {
+    return { ok: false as const, message: 'Invalid exit price' };
+  }
 
   const position = currentPositions[index];
   const balanceBefore = balance;
   const reservedCapitalBefore = reservedCapital;
   const availableBalanceBefore = getAvailableBalance();
-  const realizedPnL = position.side === 'long' ? (exitPrice - position.entryPrice) * position.quantity : (position.entryPrice - exitPrice) * position.quantity;
-  const exitFee = options?.fee ?? exitPrice * position.quantity * TRADE_FEE_RATE;
-  if (!Number.isFinite(exitFee) || exitFee < 0) return { ok: false as const, message: 'Invalid exit fee' };
+
+  const realizedPnL =
+    position.side === 'long'
+      ? (exitPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - exitPrice) * position.quantity;
+
+  const exitFee =
+    options?.fee ?? exitPrice * position.quantity * TRADE_FEE_RATE;
+
+  if (!Number.isFinite(exitFee) || exitFee < 0) {
+    return { ok: false as const, message: 'Invalid exit fee' };
+  }
 
   const netPnL = realizedPnL - exitFee - position.entryFee;
   const closedAt = new Date().toISOString();
   const openedAtMs = new Date(position.openedAt).getTime();
-  const positionAgeSeconds = Math.max(0, Math.floor((Date.now() - openedAtMs) / 1000));
+  const positionAgeSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - openedAtMs) / 1000)
+  );
 
   lastClosedTrade = {
     id: position.id,
@@ -470,11 +616,15 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     openedAt: position.openedAt,
     closedAt,
     reason,
-    executionOrderId: options?.executionOrderId ?? position.executionOrderId,
+    executionOrderId:
+      options?.executionOrderId ?? position.executionOrderId,
     clientOrderId: options?.clientOrderId ?? position.clientOrderId
   };
 
-  currentPositions = currentPositions.filter(openPosition => openPosition.id !== positionId);
+  currentPositions = currentPositions.filter(
+    openPosition => openPosition.id !== positionId
+  );
+
   syncReservedCapital();
   balance += netPnL;
   schedulePersistence();
@@ -489,12 +639,14 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     quantity: position.quantity,
     notional: position.notional,
     realizedPnL,
-    realizedPnLPercent: position.notional > 0 ? realizedPnL / position.notional * 100 : 0,
+    realizedPnLPercent:
+      position.notional > 0 ? (realizedPnL / position.notional) * 100 : 0,
     entryFee: position.entryFee,
     exitFee,
     totalFee: position.entryFee + exitFee,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent:
+      position.notional > 0 ? (netPnL / position.notional) * 100 : 0,
     balanceBefore,
     balanceAfter: balance,
     reason,
@@ -520,7 +672,8 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     notional: position.notional,
     realizedPnL,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent:
+      position.notional > 0 ? (netPnL / position.notional) * 100 : 0,
     reason,
     positionAgeSeconds,
     balance,
@@ -541,21 +694,58 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
   };
 }
 
-export function partialClosePosition(positionId: string, quantityToClose: number, exitPrice: number, options?: { executionOrderId?: string; clientOrderId?: string; fee?: number }): { ok: true; realizedPnL: number; position: VirtualPosition } | { ok: false; message: string } {
-  const index = currentPositions.findIndex(position => position.id === positionId);
-  if (index === -1) return { ok: false, message: 'No open position' };
-  if (!isFinitePositive(exitPrice)) return { ok: false, message: 'Invalid exit price' };
+export function partialClosePosition(
+  positionId: string,
+  quantityToClose: number,
+  exitPrice: number,
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
+):
+  | { ok: true; realizedPnL: number; position: VirtualPosition }
+  | { ok: false; message: string } {
+  const index = currentPositions.findIndex(
+    position => position.id === positionId
+  );
+
+  if (index === -1) {
+    return { ok: false, message: 'No open position' };
+  }
+
+  if (!isFinitePositive(exitPrice)) {
+    return { ok: false, message: 'Invalid exit price' };
+  }
+
   const position = currentPositions[index];
-  if (!isFinitePositive(quantityToClose) || quantityToClose >= position.quantity) return { ok: false, message: 'Invalid quantity for partial close' };
 
-  const exitFee = options?.fee ?? exitPrice * quantityToClose * TRADE_FEE_RATE;
-  if (!Number.isFinite(exitFee) || exitFee < 0) return { ok: false, message: 'Invalid partial close fee' };
+  if (
+    !isFinitePositive(quantityToClose) ||
+    quantityToClose >= position.quantity
+  ) {
+    return { ok: false, message: 'Invalid quantity for partial close' };
+  }
 
-  const realizedPnL = position.side === 'long' ? (exitPrice - position.entryPrice) * quantityToClose : (position.entryPrice - exitPrice) * quantityToClose;
-  const proportionalEntryFee = position.entryFee * quantityToClose / position.quantity;
+  const exitFee =
+    options?.fee ?? exitPrice * quantityToClose * TRADE_FEE_RATE;
+
+  if (!Number.isFinite(exitFee) || exitFee < 0) {
+    return { ok: false, message: 'Invalid partial close fee' };
+  }
+
+  const realizedPnL =
+    position.side === 'long'
+      ? (exitPrice - position.entryPrice) * quantityToClose
+      : (position.entryPrice - exitPrice) * quantityToClose;
+
+  const proportionalEntryFee =
+    (position.entryFee * quantityToClose) / position.quantity;
+
   const netPnL = realizedPnL - exitFee - proportionalEntryFee;
   const newQuantity = position.quantity - quantityToClose;
   const newNotional = newQuantity * position.entryPrice;
+
   const updatedPosition: VirtualPosition = {
     ...position,
     quantity: newQuantity,
@@ -564,6 +754,11 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     entryFee: Math.max(0, position.entryFee - proportionalEntryFee),
     metadata: {
       regime: position.metadata?.regime ?? '',
+      entryPattern: position.metadata?.entryPattern ?? null,
+      impulseDetected: position.metadata?.impulseDetected ?? false,
+      consolidationDetected: position.metadata?.consolidationDetected ?? false,
+      impulseBreakoutDetected:
+        position.metadata?.impulseBreakoutDetected ?? false,
       macdCrossUp: position.metadata?.macdCrossUp ?? false,
       macdCrossDown: position.metadata?.macdCrossDown ?? false,
       lastRsi: position.metadata?.lastRsi ?? 0,
@@ -590,13 +785,27 @@ export function partialClosePosition(positionId: string, quantityToClose: number
       partialCloseQuantity: quantityToClose,
       partialCloseExecutedQuantity: quantityToClose,
       entryDistanceFromEma20: position.metadata?.entryDistanceFromEma20,
-      entryDistanceFromEma20Atr: position.metadata?.entryDistanceFromEma20Atr,
+      entryDistanceFromEma20Atr:
+        position.metadata?.entryDistanceFromEma20Atr,
       signalTime: position.metadata?.signalTime,
-      signalTimeIso: position.metadata?.signalTimeIso
+      signalTimeIso: position.metadata?.signalTimeIso,
+      tceScore: position.metadata?.tceScore ?? null,
+      tceRegime: position.metadata?.tceRegime ?? null,
+      tceReason: position.metadata?.tceReason ?? null,
+      tceTrendAligned: position.metadata?.tceTrendAligned ?? null,
+      tceErFast: position.metadata?.tceErFast ?? null,
+      tceErSlow: position.metadata?.tceErSlow ?? null,
+      tceRoomAtr: position.metadata?.tceRoomAtr ?? null,
+      tceEntryExtensionAtr: position.metadata?.tceEntryExtensionAtr ?? null,
+      tceCandleRangeAtr: position.metadata?.tceCandleRangeAtr ?? null,
+      tceBodyRatio: position.metadata?.tceBodyRatio ?? null
     }
   };
 
-  currentPositions = currentPositions.map(current => current.id === positionId ? updatedPosition : current);
+  currentPositions = currentPositions.map(current =>
+    current.id === positionId ? updatedPosition : current
+  );
+
   balance += netPnL;
   syncReservedCapital();
   schedulePersistence();
@@ -613,32 +822,71 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     originalNotional: position.notional,
     remainingNotional: newNotional,
     realizedPnL,
-    realizedPnLPercent: position.notional > 0 ? realizedPnL / position.notional * 100 : 0,
+    realizedPnLPercent:
+      position.notional > 0 ? (realizedPnL / position.notional) * 100 : 0,
     entryFee: proportionalEntryFee,
     exitFee,
     totalFee: proportionalEntryFee + exitFee,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent:
+      position.notional > 0 ? (netPnL / position.notional) * 100 : 0,
     balanceBefore: balance - netPnL,
     balanceAfter: balance,
     executionOrderId: options?.executionOrderId,
     clientOrderId: options?.clientOrderId
   });
 
-  return { ok: true, realizedPnL: netPnL, position: { ...updatedPosition, metadata: updatedPosition.metadata ? { ...updatedPosition.metadata } : undefined } };
+  return {
+    ok: true,
+    realizedPnL: netPnL,
+    position: {
+      ...updatedPosition,
+      metadata: updatedPosition.metadata
+        ? { ...updatedPosition.metadata }
+        : undefined
+    }
+  };
 }
 
-export function updatePositionMetadata(positionId: string, updates: Partial<NonNullable<VirtualPosition['metadata']>>): boolean {
-  if (!currentPositions.some(position => position.id === positionId)) return false;
-  currentPositions = currentPositions.map(position => position.id === positionId ? { ...position, metadata: { ...(position.metadata ?? {}), ...updates } as NonNullable<VirtualPosition['metadata']> } : position);
+export function updatePositionMetadata(
+  positionId: string,
+  updates: Partial<NonNullable<VirtualPosition['metadata']>>
+): boolean {
+  if (!currentPositions.some(position => position.id === positionId)) {
+    return false;
+  }
+
+  currentPositions = currentPositions.map(position =>
+    position.id === positionId
+      ? {
+          ...position,
+          metadata: {
+            ...(position.metadata ?? {}),
+            ...updates
+          } as NonNullable<VirtualPosition['metadata']>
+        }
+      : position
+  );
+
   schedulePersistence();
   return true;
 }
 
-export function updatePositionStopLoss(positionId: string, newStopLossPrice: number): boolean {
+export function updatePositionStopLoss(
+  positionId: string,
+  newStopLossPrice: number
+): boolean {
   if (!isFinitePositive(newStopLossPrice)) return false;
-  if (!currentPositions.some(position => position.id === positionId)) return false;
-  currentPositions = currentPositions.map(position => position.id === positionId ? { ...position, stopLossPrice: newStopLossPrice } : position);
+  if (!currentPositions.some(position => position.id === positionId)) {
+    return false;
+  }
+
+  currentPositions = currentPositions.map(position =>
+    position.id === positionId
+      ? { ...position, stopLossPrice: newStopLossPrice }
+      : position
+  );
+
   schedulePersistence();
   return true;
 }
