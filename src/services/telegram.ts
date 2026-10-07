@@ -629,10 +629,37 @@ export async function sendAggregatedSignalSummary(data: {
             'Цена ушла далеко от точки входа';
         }
 
+        const cleanedDiagnostics =
+          result.diagnostics
+            ?.split('\n')
+            .filter(line => {
+              const trimmed = line.trim();
+        
+              return ![
+                'Signal:',
+                'Entry pattern:',
+                'Filter failed:',
+                'Long pullback zone:',
+                'Short pullback zone:',
+                'Long context:',
+                'Short context:',
+                'EMA20 rising:',
+                'EMA20 falling:',
+                'Bullish reclaim:',
+                'Bearish reclaim:',
+                'Impulse:',
+                'Consolidation:',
+                'Impulse breakout:'
+              ].some(prefix =>
+                trimmed.startsWith(prefix)
+              );
+            })
+            .join('\n');
+
         const diagnosticsText =
-          result.diagnostics != null &&
-          result.diagnostics.trim().length > 0
-            ? `\n${result.diagnostics}`
+          cleanedDiagnostics != null &&
+          cleanedDiagnostics.trim().length > 0
+            ? `\n${cleanedDiagnostics}`
             : '';
 
         return (
