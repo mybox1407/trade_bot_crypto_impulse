@@ -52,6 +52,7 @@ type SignalResult = {
   side?: 'long' | 'short' | 'none';
   price?: number;
   reason?: string;
+  diagnostics?: string;
   entryPattern?: EntryPattern;
   impulseDetected?: boolean;
   consolidationDetected?: boolean;
@@ -511,6 +512,14 @@ async function checkSignals(): Promise<void> {
         }
 
         const result = await runBotOnce(symbol, '15m');
+
+        const strategyResult = result as any;
+
+        const diagnostics =
+          strategyResult.indicators != null
+            ? formatStrategyDiagnostics(strategyResult)
+            : undefined;
+        
         if (!result.ready) {
           results.push({ symbol, status: 'not-ready', regime: 'unknown', hasSignal: false, reason: result.reason ?? 'Strategy result is not ready' });
           continue;
@@ -619,6 +628,7 @@ async function checkSignals(): Promise<void> {
 
         if (skipReason || (!buy && !sell)) {
           const reason = skipReason ?? 'No signal';
+        
           results.push({
             symbol,
             status: 'no-signal',
@@ -627,6 +637,7 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason,
+            diagnostics,
             entryPattern,
             impulseDetected,
             consolidationDetected,
@@ -635,6 +646,7 @@ async function checkSignals(): Promise<void> {
             tceRegime,
             tceReason
           });
+        
           continue;
         }
         if (side !== 'long' && side !== 'short') throw new Error('Signal side is invalid');
