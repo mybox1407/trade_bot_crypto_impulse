@@ -1068,6 +1068,8 @@ let diagnosticFailedFilter: string | null = null;
     sell = true;
     entryPattern = 'pullback_reclaim';
   } else {
+    diagnosticPattern = 'pullback_reclaim';
+
     skipReason =
       'No pullback/reclaim or impulse continuation signal';
   }
