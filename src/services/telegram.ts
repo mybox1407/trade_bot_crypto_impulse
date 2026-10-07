@@ -14,6 +14,8 @@ interface TelegramMessage {
   disable_web_page_preview?: boolean;
 }
 
+const TELEGRAM_MAX_MESSAGE_LENGTH = 4000;
+
 async function sendMessage(
   message: TelegramMessage
 ): Promise<boolean> {
@@ -64,6 +66,74 @@ async function sendMessage(
     );
 
     return false;
+  }
+}
+
+function splitTelegramMessage(
+  text: string,
+  maxLength = TELEGRAM_MAX_MESSAGE_LENGTH
+): string[] {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const block of text.split('\n\n')) {
+    const candidate =
+      current.length === 0
+        ? block
+        : `${current}\n\n${block}`;
+
+    if (candidate.length <= maxLength) {
+      current = candidate;
+      continue;
+    }
+
+    if (current.length > 0) {
+      chunks.push(current);
+    }
+
+    if (block.length <= maxLength) {
+      current = block;
+      continue;
+    }
+
+    let start = 0;
+
+    while (start < block.length) {
+      chunks.push(
+        block.slice(
+          start,
+          start + maxLength
+        )
+      );
+
+      start += maxLength;
+    }
+
+    current = '';
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+async function sendLongMessage(
+  message: TelegramMessage
+): Promise<void> {
+  const chunks =
+    splitTelegramMessage(message.text);
+
+  for (const chunk of chunks) {
+    await sendMessage({
+      ...message,
+      text: chunk
+    });
   }
 }
 
@@ -415,7 +485,8 @@ export function notifySignalCheck(data: {
       data.reason ?? 'Conditions not met'
     }\n` +
     `${
-      data.diagnostics
+      data.diagnostics != null &&
+      data.diagnostics.trim().length > 0
         ? `${data.diagnostics}\n`
         : ''
     }` +
@@ -508,14 +579,14 @@ export async function sendAggregatedSignalSummary(data: {
       if (result.status === 'error') {
         return (
           `❌ ${result.symbol}: ERROR - ` +
-          `${result.reason}`
+          `${result.reason ?? 'Unknown error'}`
         );
       }
 
       if (result.status === 'not-ready') {
         return (
           `⏳ ${result.symbol}: NOT READY - ` +
-          `${result.reason}`
+          `${result.reason ?? 'Not ready'}`
         );
       }
 
@@ -634,7 +705,7 @@ export async function sendAggregatedSignalSummary(data: {
     `⚠️ Errors: ${errors}\n\n` +
     `${new Date().toISOString()}`;
 
-  await sendMessage({
+  await sendLongMessage({
     chat_id: env.telegramChatId,
     text: message
   });
