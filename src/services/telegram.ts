@@ -629,32 +629,42 @@ export async function sendAggregatedSignalSummary(data: {
             'Цена ушла далеко от точки входа';
         }
 
-        const cleanedDiagnostics =
-          result.diagnostics
-            ?.split('\n')
-            .filter(line => {
-              const trimmed = line.trim();
-        
-              return ![
-                'Signal:',
-                'Entry pattern:',
-                'Filter failed:',
-                'Long pullback zone:',
-                'Short pullback zone:',
-                'Long context:',
-                'Short context:',
-                'EMA20 rising:',
-                'EMA20 falling:',
-                'Bullish reclaim:',
-                'Bearish reclaim:',
-                'Impulse:',
-                'Consolidation:',
-                'Impulse breakout:'
-              ].some(prefix =>
-                trimmed.startsWith(prefix)
-              );
-            })
-            .join('\n');
+      const cleanedDiagnostics =
+        result.diagnostics
+          ?.split('\n')
+          .filter(line => {
+            const trimmed = line.trim();
+      
+            return ![
+              'Signal:',
+              'Entry pattern:',
+              'Filter failed:',
+      
+              'Long pullback zone:',
+              'Short pullback zone:',
+              'Long context:',
+              'Short context:',
+              'EMA20 rising:',
+              'EMA20 falling:',
+              'Bullish reclaim:',
+              'Bearish reclaim:',
+      
+              'Impulse:',
+              'Consolidation:',
+              'Impulse breakout:',
+      
+              'Candle filter:',
+              'Candle ATR:',
+              'Body ATR:',
+              'Volume ratio:',
+              'Volume filter:',
+              'Distance EMA20 ATR:',
+              'Extension filter:'
+            ].some(prefix =>
+              trimmed.startsWith(prefix)
+            );
+          })
+          .join('\n');
 
         const diagnosticsText =
           cleanedDiagnostics != null &&
