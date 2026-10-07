@@ -65,7 +65,7 @@ export const IMPULSE_MAX_RSI_LONG = 72;
 export const IMPULSE_MIN_RSI_SHORT = 22;
 export const IMPULSE_MAX_RSI_SHORT = 55;
 export const IMPULSE_MIN_FILTER_ADX = 22;
-export const IMPULSE_MAX_FILTER_ADX = 38;
+export const IMPULSE_MAX_FILTER_ADX = 39;
 export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
 
 export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 1.8;
