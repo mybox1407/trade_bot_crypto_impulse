@@ -228,17 +228,13 @@ export function notifyPositionClose(data: {
         ? '🛑'
         : data.reason === 'time_stop'
           ? '⏱'
-          : data.reason ===
-            'breakeven_stop'
+          : data.reason === 'breakeven_stop'
             ? '🛡'
-            : data.reason ===
-              'dead_trade_mfe'
+            : data.reason === 'dead_trade_mfe'
               ? '✂️'
-              : data.reason ===
-                'reconciliation_missing_remote'
+              : data.reason === 'reconciliation_missing_remote'
                 ? '🔄'
-                : data.reason ===
-                  'reconciliation_severe_mismatch'
+                : data.reason === 'reconciliation_severe_mismatch'
                   ? '⚠️'
                   : '✋';
 
@@ -369,6 +365,7 @@ export function notifySignalCheck(data: {
   side?: 'long' | 'short';
   price?: number;
   reason?: string;
+  diagnostics?: string;
   pullbackDetected?: boolean;
   reclaimDetected?: boolean;
   signalReason?: string | null;
@@ -417,6 +414,11 @@ export function notifySignalCheck(data: {
     `Reason: ${
       data.reason ?? 'Conditions not met'
     }\n` +
+    `${
+      data.diagnostics
+        ? `${data.diagnostics}\n`
+        : ''
+    }` +
     `${entryDiagnostics}\n` +
     `Pullback: ${
       data.pullbackDetected ?? false
@@ -445,7 +447,14 @@ export async function sendAggregatedSignalSummary(data: {
     side?: string;
     price?: number;
     reason?: string;
+    diagnostics?: string;
     entryPattern?: EntryPattern;
+    impulseDetected?: boolean;
+    consolidationDetected?: boolean;
+    impulseBreakoutDetected?: boolean;
+    tceScore?: number | null;
+    tceRegime?: string | null;
+    tceReason?: string | null;
   }>;
   openPositionsCount?: number;
   errorsBySymbol?: Record<string, string>;
@@ -549,9 +558,16 @@ export async function sendAggregatedSignalSummary(data: {
             'Цена ушла далеко от точки входа';
         }
 
+        const diagnosticsText =
+          result.diagnostics != null &&
+          result.diagnostics.trim().length > 0
+            ? `\n${result.diagnostics}`
+            : '';
+
         return (
           `${result.symbol} [${result.regime}]: ` +
-          `No signal - ${reasonText}`
+          `No signal${diagnosticsText}\n` +
+          `Reason: ${reasonText}`
         );
       }
 
