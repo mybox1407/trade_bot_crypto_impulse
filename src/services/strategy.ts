@@ -183,6 +183,8 @@ export type StrategyIndicators = {
   entryDistanceFromEma20: number | null; entryDistanceFromEma20Atr: number | null; isCandleClosed: boolean;
   pullbackDetected: boolean; reclaimDetected: boolean; signalReason: string | null;
   entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
+  diagnosticPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
+  diagnosticFailedFilter: string | null;
   impulseDetected: boolean; consolidationDetected: boolean; impulseBreakoutDetected: boolean; tce: TceMetrics | null;
 };
 
@@ -760,6 +762,8 @@ export async function analyzeMarket(
     reclaimDetected: false,
     signalReason: null,
     entryPattern: null,
+    diagnosticPattern: null,
+    diagnosticFailedFilter: null,
     impulseDetected: false,
     consolidationDetected: false,
     impulseBreakoutDetected: false,
@@ -854,6 +858,13 @@ export async function analyzeMarket(
   let entryTooExtended = false;
   let tce: TceMetrics | null = null;
   let entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null = null;
+  let diagnosticPattern:
+  | 'pullback_reclaim'
+  | 'impulse_continuation'
+  | 'breakout'
+  | null = null;
+
+let diagnosticFailedFilter: string | null = null;
 
   const impulseDetected = impulseTrigger.impulseDetected;
   const consolidationDetected = impulseTrigger.consolidationDetected;
@@ -896,11 +907,19 @@ export async function analyzeMarket(
     sell = true;
     entryPattern = 'pullback_reclaim';
   } else {
-    skipReason = trigger.reason == null
-      ? 'No impulse continuation or pullback/reclaim signal'
-      : `No valid signal: ${trigger.reason}`;
-  }
+    diagnosticPattern = 'pullback_reclaim';
 
+    const pullbackReason =
+      trigger.reason ?? 'no_pullback_reclaim_signal';
+
+    const impulseReason =
+      impulseTrigger.reason ?? 'no_impulse_continuation_signal';
+
+    skipReason =
+      `No pullback/reclaim or impulse continuation signal: ` +
+      `pullback=${pullbackReason}, impulse=${impulseReason}`;
+  }
+  
   let atrUsedForExit: number | undefined;
   let slMultiplierUsed: number | undefined;
   let tpMultiplierUsed: number | undefined;
@@ -1143,6 +1162,14 @@ export async function analyzeMarket(
     });
 
     if (!filterResult.passed) {
+      diagnosticPattern =
+        entryPattern ??
+        diagnosticPattern ??
+        'pullback_reclaim';
+
+      diagnosticFailedFilter =
+        filterResult.failedFilter ?? 'unknown';
+
       const rejectedSide = side;
       const rejectedPattern = entryPattern;
       const isRejectedImpulse = rejectedPattern === 'impulse_continuation';
@@ -1356,7 +1383,11 @@ export async function analyzeMarket(
       signalReason: entryPattern === 'impulse_continuation'
         ? impulseTrigger.reason
         : trigger.reason,
+
       entryPattern,
+      diagnosticPattern,
+      diagnosticFailedFilter,
+
       impulseDetected,
       consolidationDetected,
       impulseBreakoutDetected,
@@ -1370,15 +1401,185 @@ export async function analyzeMarket(
 
 export type TelegramSender = (message: string) => Promise<void>;
 
-export async function notifyStrategyResult(result: StrategyResult, symbol: string, sendTelegramMessage: TelegramSender): Promise<void> {
-  const tce = result.indicators.tce;
-  const tceText = tce == null ? 'TCE: -' : `TCE score: ${Number.isFinite(tce.tceScore) ? tce.tceScore : '-'}\nTCE regime: ${tce.tceRegime}\nTCE reason: ${tce.tceReason}`;
-  const diagnostics = `Signal: ${result.indicators.signalReason ?? '-'}\nEntry pattern: ${result.indicators.entryPattern ?? '-'}\nImpulse: ${result.indicators.impulseDetected}\nConsolidation: ${result.indicators.consolidationDetected}\nImpulse breakout: ${result.indicators.impulseBreakoutDetected}\nPullback: ${result.indicators.pullbackDetected}\nReclaim: ${result.indicators.reclaimDetected}\nRSI: ${result.indicators.lastRsi.toFixed(2)}\nADX: ${result.indicators.adx.toFixed(2)}\nADX rising: ${result.indicators.adxRising}\n+DI/-DI: ${result.indicators.plusDi.toFixed(2)}/${result.indicators.minusDi.toFixed(2)}\nATR%: ${(result.indicators.atrPct * 100).toFixed(3)}%\nBB Width: ${result.indicators.bbWidth.toFixed(5)}\nBB rising: ${result.indicators.bbWidthRising}\nCandle ATR: ${result.indicators.candleRangeAtr.toFixed(2)}\nDist EMA20 ATR: ${result.indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'}\nToo Extended: ${result.indicators.entryTooExtended}\nMACD: Up=${result.indicators.macdCrossUp}, Down=${result.indicators.macdCrossDown}`;
-  if (result.skipReason != null) { await sendTelegramMessage(`⚠️ ${symbol} [${result.regime}]\n━━━━━━━━━━━━━━━━━━━━━━\n${diagnostics}\n━━━━━━━━━━━━━━━━━━━━━━\n${result.skipReason}\n━━━━━━━━━━━━━━━━━━━━━━\n${tceText}`); return; }
+export async function notifyStrategyResult(
+  result: StrategyResult,
+  symbol: string,
+  sendTelegramMessage: TelegramSender
+): Promise<void> {
+  const indicators = result.indicators;
+  const regime = indicators.regimeIndicators;
+
+  const diagnosticPattern =
+    indicators.diagnosticPattern ??
+    indicators.entryPattern ??
+    'pullback_reclaim';
+
+  const isImpulse =
+    diagnosticPattern === 'impulse_continuation';
+
+  const side =
+    result.side === 'short'
+      ? 'short'
+      : 'long';
+
+  const rsiRange = isImpulse
+    ? side === 'short'
+      ? `${IMPULSE_MIN_RSI_SHORT}–${IMPULSE_MAX_RSI_SHORT}`
+      : `${IMPULSE_MIN_RSI_LONG}–${IMPULSE_MAX_RSI_LONG}`
+    : side === 'short'
+      ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
+      : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+
+  const adxRange = isImpulse
+    ? `${IMPULSE_MIN_FILTER_ADX}–${IMPULSE_MAX_FILTER_ADX}`
+    : side === 'short'
+      ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
+      : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+
+  const maxAtrPct =
+    side === 'short'
+      ? MAX_LAST_ATR_PCT_SHORT
+      : MAX_LAST_ATR_PCT_LONG;
+
+  const maxDistanceAtr = isImpulse
+    ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR
+    : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+  const maxCandleAtr = isImpulse
+    ? IMPULSE_MAX_SIGNAL_CANDLE_ATR
+    : MAX_SIGNAL_CANDLE_ATR;
+
+  const ema20Direction =
+    result.side === 'long'
+      ? regime.lastClose > regime.ema20
+        ? 'OK'
+        : 'wrong side'
+      : result.side === 'short'
+        ? regime.lastClose < regime.ema20
+          ? 'OK'
+          : 'wrong side'
+        : '-';
+
+  const signalReason =
+    indicators.signalReason ??
+    (
+      indicators.pullbackDetected ||
+      indicators.reclaimDetected ||
+      indicators.impulseDetected
+        ? '-'
+        : 'no_signal'
+    );
+
+  const diagnostics = [
+    `Signal: ${signalReason}`,
+    `Entry pattern: ${diagnosticPattern}`,
+    `Filter failed: ${indicators.diagnosticFailedFilter ?? '-'}`,
+    `Pullback: ${indicators.pullbackDetected}`,
+    `Reclaim: ${indicators.reclaimDetected}`,
+    `Impulse: ${indicators.impulseDetected}`,
+    `Consolidation: ${indicators.consolidationDetected}`,
+    `Impulse breakout: ${indicators.impulseBreakoutDetected}`,
+    `RSI: ${indicators.lastRsi.toFixed(2)} [${rsiRange}]`,
+    `ADX: ${indicators.adx.toFixed(2)} [${adxRange}]`,
+    `ADX rising: ${indicators.adxRising}`,
+    `+DI/-DI: ${indicators.plusDi.toFixed(2)}/${indicators.minusDi.toFixed(2)}`,
+    `ATR%: ${(indicators.atrPct * 100).toFixed(3)} [` +
+      `${(MIN_LAST_ATR_PCT * 100).toFixed(1)}–` +
+      `${(maxAtrPct * 100).toFixed(1)}]`,
+    `BB Width: ${indicators.bbWidth.toFixed(5)}`,
+    `BB rising: ${indicators.bbWidthRising}`,
+    `Candle ATR: ${indicators.candleRangeAtr.toFixed(2)} [max ${maxCandleAtr}]`,
+    `EMA20 direction: ${ema20Direction}`,
+    `Dist EMA20 ATR: ${
+      indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'
+    } [0–${maxDistanceAtr}]`,
+    `Too Extended: ${indicators.entryTooExtended}`,
+    `MACD: Up=${indicators.macdCrossUp}, Down=${indicators.macdCrossDown}`
+  ].join('\n');
+
+  const tce = indicators.tce;
+
+  const tceText =
+    tce == null
+      ? 'TCE: -'
+      : [
+          `TCE score: ${
+            Number.isFinite(tce.tceScore)
+              ? tce.tceScore
+              : '-'
+          }`,
+          `TCE regime: ${tce.tceRegime}`,
+          `TCE reason: ${tce.tceReason}`
+        ].join('\n');
+
+  if (result.skipReason != null) {
+    await sendTelegramMessage(
+      `${symbol} [${result.regime}]: No signal\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `${diagnostics}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Reason: ${result.skipReason}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `${tceText}`
+    );
+
+    return;
+  }
+
   if (result.buy || result.sell) {
     const direction = result.buy ? 'LONG' : 'SHORT';
-    const tceDetails = tce == null ? '' : `\nTCE room ATR: ${Number.isFinite(tce.tceRoomAtr) ? tce.tceRoomAtr.toFixed(3) : '-'}\nTCE ER fast/slow: ${Number.isFinite(tce.tceErFast) ? tce.tceErFast.toFixed(3) : '-'} / ${Number.isFinite(tce.tceErSlow) ? tce.tceErSlow.toFixed(3) : '-'}`;
-    const exitDebug = result.atrUsedForExit != null ? `\n[DEBUG] ATR: ${result.atrUsedForExit.toFixed(6)}, SL_mult: ${result.slMultiplierUsed?.toFixed(2) ?? '-'}, TP_mult: ${result.tpMultiplierUsed?.toFixed(2) ?? '-'}` : '';
-    await sendTelegramMessage(`📊 ${symbol} ${direction} [${result.regime}]\n━━━━━━━━━━━━━━━━━━━━━━\nПричина: ${result.indicators.signalReason ?? '-'}\nЦена: ${result.price}\nTP: ${result.takeProfitPrice ?? '-'}\nSL: ${result.stopLossPrice ?? '-'}\nРазмер: ${result.positionSize ?? '-'}\n━━━━━━━━━━━━━━━━━━━━━━\n${diagnostics}\n━━━━━━━━━━━━━━━━━━━━━━\n${tceText}${tceDetails}\nРежим: ${result.regime}${exitDebug}`);
+
+    const tceDetails =
+      tce == null
+        ? ''
+        : [
+            `TCE room ATR: ${
+              Number.isFinite(tce.tceRoomAtr)
+                ? tce.tceRoomAtr.toFixed(3)
+                : '-'
+            }`,
+            `TCE ER fast/slow: ${
+              Number.isFinite(tce.tceErFast)
+                ? tce.tceErFast.toFixed(3)
+                : '-'
+            } / ${
+              Number.isFinite(tce.tceErSlow)
+                ? tce.tceErSlow.toFixed(3)
+                : '-'
+            }`
+          ].join('\n');
+
+    const exitDebug =
+      result.atrUsedForExit != null
+        ? [
+            `[DEBUG] ATR: ${
+              result.atrUsedForExit.toFixed(6)
+            }`,
+            `SL_mult: ${
+              result.slMultiplierUsed?.toFixed(2) ?? '-'
+            }`,
+            `TP_mult: ${
+              result.tpMultiplierUsed?.toFixed(2) ?? '-'
+            }`
+          ].join(', ')
+        : '';
+
+    await sendTelegramMessage(
+      `📊 ${symbol} ${direction} [${result.regime}]\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Причина: ${
+        indicators.signalReason ?? '-'
+      }\n` +
+      `Цена: ${result.price}\n` +
+      `TP: ${result.takeProfitPrice ?? '-'}\n` +
+      `SL: ${result.stopLossPrice ?? '-'}\n` +
+      `Размер: ${result.positionSize ?? '-'}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `${diagnostics}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `${tceText}` +
+      (tceDetails ? `\n${tceDetails}` : '') +
+      (exitDebug ? `\n${exitDebug}` : '')
+    );
   }
 }
