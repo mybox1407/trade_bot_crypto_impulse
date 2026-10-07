@@ -23,17 +23,17 @@ const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> 
 //export const MIN_ENTRY_RSI_LONG = 48;
 //export const MAX_ENTRY_RSI_LONG = 68;
 // === Pullback / reclaim ===
-export const MIN_ENTRY_RSI_LONG = 50;
-export const MAX_ENTRY_RSI_LONG = 65;
-export const MIN_ENTRY_RSI_SHORT = 35;
+export const MIN_ENTRY_RSI_LONG = 50; //51
+export const MAX_ENTRY_RSI_LONG = 65; //64
+export const MIN_ENTRY_RSI_SHORT = 35; //36
 export const MAX_ENTRY_RSI_SHORT = 49;
 
 //export const MIN_ENTRY_ADX_SHORT = 21;
 //export const MIN_ENTRY_ADX_LONG = 21;
 //export const MAX_ENTRY_ADX = 55;
-export const MIN_ENTRY_ADX_LONG = 25;
-export const MIN_ENTRY_ADX_SHORT = 25;
-export const MAX_ENTRY_ADX = 39;
+export const MIN_ENTRY_ADX_LONG = 25; //26
+export const MIN_ENTRY_ADX_SHORT = 25; //26
+export const MAX_ENTRY_ADX = 39; //38
 
 export const HIGH_ADX_THRESHOLD = 45;
 export const HIGH_ADX_MAX_ENTRY_DISTANCE_ATR = 0.65;
@@ -46,7 +46,7 @@ export const MIN_BB_WIDTH_SHORT = 0.0;
 export const MAX_BB_WIDTH_SHORT = 0.12;
 //export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.8;
 //export const MAX_SIGNAL_CANDLE_ATR = 1.5;
-export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.65;
+export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.65; //0.65
 export const MAX_SIGNAL_CANDLE_ATR = 1.2;
 export const MIN_SIGNAL_BODY_ATR = 0.2;
 export const REQUIRE_ADX_RISING = false;
@@ -77,7 +77,7 @@ const IMPULSE_MIN_BODY_ATR = 0.6;
 const IMPULSE_MAX_BODY_ATR = 1.6;
 const IMPULSE_MIN_CLOSE_POSITION = 0.7;
 const IMPULSE_MAX_CONSOLIDATION_RANGE_ATR = 1.2;
-const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.65;
+const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.65; //0.65
 const IMPULSE_MIN_ADX = 21;
 const IMPULSE_MAX_ADX = 55;
 const IMPULSE_STOP_BUFFER_ATR = 0.4;
