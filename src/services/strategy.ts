@@ -1578,6 +1578,161 @@ let diagnosticFailedFilter: string | null = null;
 
 export type TelegramSender = (message: string) => Promise<void>;
 
+function formatStrategyDiagnostics(
+  result: StrategyResult
+): string {
+  const indicators = result.indicators;
+  const regime = indicators.regimeIndicators;
+
+  const diagnosticPattern =
+    indicators.diagnosticPattern ??
+    indicators.entryPattern ??
+    'pullback_reclaim';
+
+  const isImpulse =
+    diagnosticPattern === 'impulse_continuation';
+
+  const side =
+    result.side === 'short'
+      ? 'short'
+      : 'long';
+
+  const rsiRange = isImpulse
+    ? side === 'short'
+      ? `${IMPULSE_MIN_RSI_SHORT}–${IMPULSE_MAX_RSI_SHORT}`
+      : `${IMPULSE_MIN_RSI_LONG}–${IMPULSE_MAX_RSI_LONG}`
+    : side === 'short'
+      ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}`
+      : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+
+  const adxRange = isImpulse
+    ? `${IMPULSE_MIN_FILTER_ADX}–${IMPULSE_MAX_FILTER_ADX}`
+    : side === 'short'
+      ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}`
+      : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+
+  const maxAtrPct =
+    side === 'short'
+      ? MAX_LAST_ATR_PCT_SHORT
+      : MAX_LAST_ATR_PCT_LONG;
+
+  const maxDistanceAtr = isImpulse
+    ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR
+    : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+
+  const maxCandleAtr = isImpulse
+    ? IMPULSE_MAX_SIGNAL_CANDLE_ATR
+    : MAX_SIGNAL_CANDLE_ATR;
+
+  const pullbackLongZone =
+    indicators.pullbackLongZone;
+
+  const pullbackShortZone =
+    indicators.pullbackShortZone;
+
+  const longContext =
+    indicators.pullbackLongContext;
+
+  const shortContext =
+    indicators.pullbackShortContext;
+
+  const ema20Rising =
+    indicators.pullbackEma20Rising;
+
+  const ema20Falling =
+    indicators.pullbackEma20Falling;
+
+  const bullishReclaim =
+    indicators.bullishReclaim;
+
+  const bearishReclaim =
+    indicators.bearishReclaim;
+
+  const pullbackValidCandle =
+    indicators.pullbackValidCandle;
+
+  const pullbackNotExtended =
+    indicators.pullbackNotExtended;
+
+  const pullbackVolumeOk =
+    indicators.pullbackVolumeOk;
+
+  const pullbackCandleRangeAtr =
+    indicators.pullbackCandleRangeAtr;
+
+  const pullbackBodyAtr =
+    indicators.pullbackBodyAtr;
+
+  const pullbackVolumeRatio =
+    indicators.pullbackVolumeRatio;
+
+  const pullbackEntryDistanceAtr =
+    indicators.pullbackEntryDistanceAtr;
+
+  const ema20Direction =
+    result.side === 'long'
+      ? regime.lastClose > regime.ema20
+        ? 'OK'
+        : 'wrong side'
+      : result.side === 'short'
+        ? regime.lastClose < regime.ema20
+          ? 'OK'
+          : 'wrong side'
+        : '-';
+
+  return [
+    `Signal: ${indicators.signalReason ?? '-'}`,
+    `Entry pattern: ${diagnosticPattern}`,
+    `Filter failed: ${indicators.diagnosticFailedFilter ?? '-'}`,
+
+    '--- Pullback + Reclaim checks ---',
+
+    `Pullback detected: ${indicators.pullbackDetected}`,
+    `Long pullback zone: ${pullbackLongZone ? 'OK' : 'FAILED'}`,
+    `Short pullback zone: ${pullbackShortZone ? 'OK' : 'FAILED'}`,
+    `Long context: ${longContext ? 'OK' : 'FAILED'}`,
+    `Short context: ${shortContext ? 'OK' : 'FAILED'}`,
+    `EMA20 rising: ${ema20Rising ? 'OK' : 'FAILED'}`,
+    `EMA20 falling: ${ema20Falling ? 'OK' : 'FAILED'}`,
+    `Bullish reclaim: ${bullishReclaim ? 'OK' : 'FAILED'}`,
+    `Bearish reclaim: ${bearishReclaim ? 'OK' : 'FAILED'}`,
+    `Reclaim detected: ${indicators.reclaimDetected}`,
+    `Candle filter: ${pullbackValidCandle ? 'OK' : 'FAILED'}`,
+    `Candle ATR: ${pullbackCandleRangeAtr.toFixed(2)} [max ${MAX_SIGNAL_CANDLE_ATR}]`,
+    `Body ATR: ${pullbackBodyAtr.toFixed(2)} [min ${MIN_SIGNAL_BODY_ATR}]`,
+    `Volume ratio: ${pullbackVolumeRatio.toFixed(2)} [min 1.20]`,
+    `Volume filter: ${pullbackVolumeOk ? 'OK' : 'FAILED'}`,
+    `Distance EMA20 ATR: ${
+      Number.isFinite(pullbackEntryDistanceAtr)
+        ? pullbackEntryDistanceAtr.toFixed(3)
+        : '-'
+    } [max ${MAX_ENTRY_DISTANCE_FROM_EMA20_ATR}]`,
+    `Extension filter: ${pullbackNotExtended ? 'OK' : 'FAILED'}`,
+
+    '--- General filters ---',
+
+    `Impulse: ${indicators.impulseDetected}`,
+    `Consolidation: ${indicators.consolidationDetected}`,
+    `Impulse breakout: ${indicators.impulseBreakoutDetected}`,
+    `RSI: ${indicators.lastRsi.toFixed(2)} [${rsiRange}]`,
+    `ADX: ${indicators.adx.toFixed(2)} [${adxRange}]`,
+    `ADX rising: ${indicators.adxRising}`,
+    `+DI/-DI: ${indicators.plusDi.toFixed(2)}/${indicators.minusDi.toFixed(2)}`,
+    `ATR%: ${(indicators.atrPct * 100).toFixed(3)} [${
+      (MIN_LAST_ATR_PCT * 100).toFixed(1)
+    }–${(maxAtrPct * 100).toFixed(1)}]`,
+    `BB Width: ${indicators.bbWidth.toFixed(5)}`,
+    `BB rising: ${indicators.bbWidthRising}`,
+    `Candle ATR: ${indicators.candleRangeAtr.toFixed(2)} [max ${maxCandleAtr}]`,
+    `EMA20 direction: ${ema20Direction}`,
+    `Dist EMA20 ATR: ${
+      indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'
+    } [0–${maxDistanceAtr}]`,
+    `Too Extended: ${indicators.entryTooExtended}`,
+    `MACD: Up=${indicators.macdCrossUp}, Down=${indicators.macdCrossDown}`
+  ].join('\n');
+}
+
 export async function notifyStrategyResult(
   result: StrategyResult,
   symbol: string,
