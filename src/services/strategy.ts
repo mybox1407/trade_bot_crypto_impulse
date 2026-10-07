@@ -1068,17 +1068,8 @@ let diagnosticFailedFilter: string | null = null;
     sell = true;
     entryPattern = 'pullback_reclaim';
   } else {
-    diagnosticPattern = 'pullback_reclaim';
-
-    const pullbackReason =
-      trigger.reason ?? 'no_pullback_reclaim_signal';
-
-    const impulseReason =
-      impulseTrigger.reason ?? 'no_impulse_continuation_signal';
-
     skipReason =
-      `No pullback/reclaim or impulse continuation signal: ` +
-      `pullback=${pullbackReason}, impulse=${impulseReason}`;
+      'No pullback/reclaim or impulse continuation signal';
   }
   
   let atrUsedForExit: number | undefined;
