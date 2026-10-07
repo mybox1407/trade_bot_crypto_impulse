@@ -182,6 +182,21 @@ export type StrategyIndicators = {
   candleRangeAtr: number; ema20: number; ema200: number; priceVsEma200: number | null;
   entryDistanceFromEma20: number | null; entryDistanceFromEma20Atr: number | null; isCandleClosed: boolean;
   pullbackDetected: boolean; reclaimDetected: boolean; signalReason: string | null;
+  pullbackLongContext: boolean;
+  pullbackShortContext: boolean;
+  pullbackEma20Rising: boolean;
+  pullbackEma20Falling: boolean;
+  pullbackLongZone: boolean;
+  pullbackShortZone: boolean;
+  bullishReclaim: boolean;
+  bearishReclaim: boolean;
+  pullbackValidCandle: boolean;
+  pullbackNotExtended: boolean;
+  pullbackVolumeOk: boolean;
+  pullbackCandleRangeAtr: number;
+  pullbackBodyAtr: number;
+  pullbackVolumeRatio: number;
+  pullbackEntryDistanceAtr: number;
   entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
   diagnosticPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
   diagnosticFailedFilter: string | null;
@@ -204,7 +219,34 @@ const BREAKOUT_MIN_BB_WIDTH = 0.03; const BREAKOUT_MAX_BB_WIDTH = 0.08;
 type SignalState = { buy: boolean; sell: boolean; side: 'long' | 'short' | 'none'; takeProfitPrice: number | null; stopLossPrice: number | null; positionSize: number | null };
 function resetSignalState(state: SignalState): SignalState { return { ...state, buy: false, sell: false, side: 'none', takeProfitPrice: null, stopLossPrice: null, positionSize: null }; }
 
-type PullbackSignal = { long: boolean; short: boolean; pullbackDetected: boolean; reclaimDetected: boolean; reason: string | null };
+type PullbackSignal = {
+  long: boolean;
+  short: boolean;
+  pullbackDetected: boolean;
+  reclaimDetected: boolean;
+  reason: string | null;
+
+  longContext: boolean;
+  shortContext: boolean;
+
+  ema20Rising: boolean;
+  ema20Falling: boolean;
+
+  longPullbackZone: boolean;
+  shortPullbackZone: boolean;
+
+  bullishReclaim: boolean;
+  bearishReclaim: boolean;
+
+  validCandle: boolean;
+  notExtended: boolean;
+  volumeOk: boolean;
+
+  candleRangeAtr: number;
+  bodyAtr: number;
+  volumeRatio: number;
+  entryDistanceAtr: number;
+};
 
 function detectPullbackReclaimSignal(params: {
   candles: Candle[];
@@ -216,13 +258,35 @@ function detectPullbackReclaimSignal(params: {
 }): PullbackSignal {
   const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
 
-  if (candles.length < 21 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1 || atr.length < 3) {
+  if (
+    candles.length < 21 ||
+    ema20.length < 3 ||
+    ema50.length < 3 ||
+    ema200.length < 1 ||
+    atr.length < 3
+  ) {
     return {
       long: false,
       short: false,
       pullbackDetected: false,
       reclaimDetected: false,
-      reason: 'not_enough_trigger_data'
+      reason: 'not_enough_trigger_data',
+  
+      longContext: false,
+      shortContext: false,
+      ema20Rising: false,
+      ema20Falling: false,
+      longPullbackZone: false,
+      shortPullbackZone: false,
+      bullishReclaim: false,
+      bearishReclaim: false,
+      validCandle: false,
+      notExtended: false,
+      volumeOk: false,
+      candleRangeAtr: 0,
+      bodyAtr: 0,
+      volumeRatio: 0,
+      entryDistanceAtr: Number.POSITIVE_INFINITY
     };
   }
 
@@ -242,7 +306,23 @@ function detectPullbackReclaimSignal(params: {
       short: false,
       pullbackDetected: false,
       reclaimDetected: false,
-      reason: 'invalid_trigger_atr'
+      reason: 'invalid_trigger_atr',
+  
+      longContext: false,
+      shortContext: false,
+      ema20Rising: false,
+      ema20Falling: false,
+      longPullbackZone: false,
+      shortPullbackZone: false,
+      bullishReclaim: false,
+      bearishReclaim: false,
+      validCandle: false,
+      notExtended: false,
+      volumeOk: false,
+      candleRangeAtr: 0,
+      bodyAtr: 0,
+      volumeRatio: 0,
+      entryDistanceAtr: Number.POSITIVE_INFINITY
     };
   }
 
@@ -337,7 +417,23 @@ function detectPullbackReclaimSignal(params: {
       short: false,
       pullbackDetected: true,
       reclaimDetected: true,
-      reason: 'long_pullback_reclaim'
+      reason: 'long_pullback_reclaim',
+  
+      longContext,
+      shortContext,
+      ema20Rising,
+      ema20Falling,
+      longPullbackZone: previousTouchedLongZone,
+      shortPullbackZone: previousTouchedShortZone,
+      bullishReclaim,
+      bearishReclaim,
+      validCandle,
+      notExtended,
+      volumeOk: volumeRatio >= 1.2,
+      candleRangeAtr,
+      bodyAtr,
+      volumeRatio,
+      entryDistanceAtr
     };
   }
 
@@ -347,16 +443,59 @@ function detectPullbackReclaimSignal(params: {
       short: true,
       pullbackDetected: true,
       reclaimDetected: true,
-      reason: 'short_pullback_reclaim'
+      reason: 'short_pullback_reclaim',
+  
+      longContext,
+      shortContext,
+      ema20Rising,
+      ema20Falling,
+      longPullbackZone: previousTouchedLongZone,
+      shortPullbackZone: previousTouchedShortZone,
+      bullishReclaim,
+      bearishReclaim,
+      validCandle,
+      notExtended,
+      volumeOk: volumeRatio >= 1.2,
+      candleRangeAtr,
+      bodyAtr,
+      volumeRatio,
+      entryDistanceAtr
     };
   }
 
   return {
     long: false,
     short: false,
-    pullbackDetected: previousTouchedLongZone || previousTouchedShortZone,
-    reclaimDetected: bullishReclaim || bearishReclaim,
-    reason: null
+  
+    pullbackDetected:
+      previousTouchedLongZone ||
+      previousTouchedShortZone,
+  
+    reclaimDetected:
+      bullishReclaim ||
+      bearishReclaim,
+  
+    reason: null,
+  
+    longContext,
+    shortContext,
+    ema20Rising,
+    ema20Falling,
+  
+    longPullbackZone: previousTouchedLongZone,
+    shortPullbackZone: previousTouchedShortZone,
+  
+    bullishReclaim,
+    bearishReclaim,
+  
+    validCandle,
+    notExtended,
+    volumeOk: volumeRatio >= 1.2,
+  
+    candleRangeAtr,
+    bodyAtr,
+    volumeRatio,
+    entryDistanceAtr
   };
 }
 
@@ -762,9 +901,31 @@ export async function analyzeMarket(
     reclaimDetected: false,
     signalReason: null,
     entryPattern: null,
+
+    pullbackLongContext: false,
+    pullbackShortContext: false,
+
+    pullbackEma20Rising: false,
+    pullbackEma20Falling: false,
+
+    pullbackLongZone: false,
+    pullbackShortZone: false,
+
+    bullishReclaim: false,
+    bearishReclaim: false,
+
+    pullbackValidCandle: false,
+    pullbackNotExtended: false,
+    pullbackVolumeOk: false,
+
+    pullbackCandleRangeAtr: 0,
+    pullbackBodyAtr: 0,
+    pullbackVolumeRatio: 0,
+    pullbackEntryDistanceAtr: Number.POSITIVE_INFINITY,
+
+    impulseDetected: false,
     diagnosticPattern: null,
     diagnosticFailedFilter: null,
-    impulseDetected: false,
     consolidationDetected: false,
     impulseBreakoutDetected: false,
     tce: null
@@ -1380,15 +1541,38 @@ let diagnosticFailedFilter: string | null = null;
       isCandleClosed: closedCandles.length > 0,
       pullbackDetected: trigger.pullbackDetected,
       reclaimDetected: trigger.reclaimDetected,
+
+      pullbackLongContext: trigger.longContext,
+      pullbackShortContext: trigger.shortContext,
+
+      pullbackEma20Rising: trigger.ema20Rising,
+      pullbackEma20Falling: trigger.ema20Falling,
+
+      pullbackLongZone: trigger.longPullbackZone,
+      pullbackShortZone: trigger.shortPullbackZone,
+
+      bullishReclaim: trigger.bullishReclaim,
+      bearishReclaim: trigger.bearishReclaim,
+
+      pullbackValidCandle: trigger.validCandle,
+      pullbackNotExtended: trigger.notExtended,
+      pullbackVolumeOk: trigger.volumeOk,
+
+      pullbackCandleRangeAtr: trigger.candleRangeAtr,
+      pullbackBodyAtr: trigger.bodyAtr,
+      pullbackVolumeRatio: trigger.volumeRatio,
+      pullbackEntryDistanceAtr: trigger.entryDistanceAtr,
+
       signalReason: entryPattern === 'impulse_continuation'
         ? impulseTrigger.reason
         : trigger.reason,
 
       entryPattern,
+      impulseDetected,
+      
       diagnosticPattern,
       diagnosticFailedFilter,
 
-      impulseDetected,
       consolidationDetected,
       impulseBreakoutDetected,
       tce
@@ -1470,31 +1654,199 @@ export async function notifyStrategyResult(
         : 'no_signal'
     );
 
+  const pullbackLongZone =
+    indicators.pullbackLongZone;
+
+  const pullbackShortZone =
+    indicators.pullbackShortZone;
+
+  const longContext =
+    indicators.pullbackLongContext;
+
+  const shortContext =
+    indicators.pullbackShortContext;
+
+  const ema20Rising =
+    indicators.pullbackEma20Rising;
+
+  const ema20Falling =
+    indicators.pullbackEma20Falling;
+
+  const bullishReclaim =
+    indicators.bullishReclaim;
+
+  const bearishReclaim =
+    indicators.bearishReclaim;
+
+  const pullbackValidCandle =
+    indicators.pullbackValidCandle;
+
+  const pullbackNotExtended =
+    indicators.pullbackNotExtended;
+
+  const pullbackVolumeOk =
+    indicators.pullbackVolumeOk;
+
+  const pullbackCandleRangeAtr =
+    indicators.pullbackCandleRangeAtr;
+
+  const pullbackBodyAtr =
+    indicators.pullbackBodyAtr;
+
+  const pullbackVolumeRatio =
+    indicators.pullbackVolumeRatio;
+
+  const pullbackEntryDistanceAtr =
+    indicators.pullbackEntryDistanceAtr;
+
   const diagnostics = [
     `Signal: ${signalReason}`,
     `Entry pattern: ${diagnosticPattern}`,
-    `Filter failed: ${indicators.diagnosticFailedFilter ?? '-'}`,
-    `Pullback: ${indicators.pullbackDetected}`,
-    `Reclaim: ${indicators.reclaimDetected}`,
-    `Impulse: ${indicators.impulseDetected}`,
-    `Consolidation: ${indicators.consolidationDetected}`,
-    `Impulse breakout: ${indicators.impulseBreakoutDetected}`,
-    `RSI: ${indicators.lastRsi.toFixed(2)} [${rsiRange}]`,
-    `ADX: ${indicators.adx.toFixed(2)} [${adxRange}]`,
-    `ADX rising: ${indicators.adxRising}`,
-    `+DI/-DI: ${indicators.plusDi.toFixed(2)}/${indicators.minusDi.toFixed(2)}`,
-    `ATR%: ${(indicators.atrPct * 100).toFixed(3)} [` +
-      `${(MIN_LAST_ATR_PCT * 100).toFixed(1)}–` +
-      `${(maxAtrPct * 100).toFixed(1)}]`,
-    `BB Width: ${indicators.bbWidth.toFixed(5)}`,
-    `BB rising: ${indicators.bbWidthRising}`,
-    `Candle ATR: ${indicators.candleRangeAtr.toFixed(2)} [max ${maxCandleAtr}]`,
-    `EMA20 direction: ${ema20Direction}`,
+    `Filter failed: ${
+      indicators.diagnosticFailedFilter ?? '-'
+    }`,
+
+    '',
+    '--- Pullback + Reclaim checks ---',
+
+    `Pullback detected: ${
+      indicators.pullbackDetected
+    }`,
+
+    `Long pullback zone: ${
+      pullbackLongZone ? 'OK' : 'FAILED'
+    }`,
+
+    `Short pullback zone: ${
+      pullbackShortZone ? 'OK' : 'FAILED'
+    }`,
+
+    `Long context: ${
+      longContext ? 'OK' : 'FAILED'
+    }`,
+
+    `Short context: ${
+      shortContext ? 'OK' : 'FAILED'
+    }`,
+
+    `EMA20 rising: ${
+      ema20Rising ? 'OK' : 'FAILED'
+    }`,
+
+    `EMA20 falling: ${
+      ema20Falling ? 'OK' : 'FAILED'
+    }`,
+
+    `Bullish reclaim: ${
+      bullishReclaim ? 'OK' : 'FAILED'
+    }`,
+
+    `Bearish reclaim: ${
+      bearishReclaim ? 'OK' : 'FAILED'
+    }`,
+
+    `Reclaim detected: ${
+      indicators.reclaimDetected
+    }`,
+
+    `Candle filter: ${
+      pullbackValidCandle ? 'OK' : 'FAILED'
+    }`,
+
+    `Candle ATR: ${
+      pullbackCandleRangeAtr.toFixed(2)
+    } [max ${MAX_SIGNAL_CANDLE_ATR}]`,
+
+    `Body ATR: ${
+      pullbackBodyAtr.toFixed(2)
+    } [min ${MIN_SIGNAL_BODY_ATR}]`,
+
+    `Volume ratio: ${
+      pullbackVolumeRatio.toFixed(2)
+    } [min 1.20]`,
+
+    `Volume filter: ${
+      pullbackVolumeOk ? 'OK' : 'FAILED'
+    }`,
+
+    `Distance EMA20 ATR: ${
+      Number.isFinite(pullbackEntryDistanceAtr)
+        ? pullbackEntryDistanceAtr.toFixed(3)
+        : '-'
+    } [max ${MAX_ENTRY_DISTANCE_FROM_EMA20_ATR}]`,
+
+    `Extension filter: ${
+      pullbackNotExtended ? 'OK' : 'FAILED'
+    }`,
+
+    '',
+    '--- General filters ---',
+
+    `Impulse: ${
+      indicators.impulseDetected
+    }`,
+
+    `Consolidation: ${
+      indicators.consolidationDetected
+    }`,
+
+    `Impulse breakout: ${
+      indicators.impulseBreakoutDetected
+    }`,
+
+    `RSI: ${
+      indicators.lastRsi.toFixed(2)
+    } [${rsiRange}]`,
+
+    `ADX: ${
+      indicators.adx.toFixed(2)
+    } [${adxRange}]`,
+
+    `ADX rising: ${
+      indicators.adxRising
+    }`,
+
+    `+DI/-DI: ${
+      indicators.plusDi.toFixed(2)
+    }/${indicators.minusDi.toFixed(2)}`,
+
+    `ATR%: ${
+      (indicators.atrPct * 100).toFixed(3)
+    } [${
+      (MIN_LAST_ATR_PCT * 100).toFixed(1)
+    }–${
+      (maxAtrPct * 100).toFixed(1)
+    }]`,
+
+    `BB Width: ${
+      indicators.bbWidth.toFixed(5)
+    }`,
+
+    `BB rising: ${
+      indicators.bbWidthRising
+    }`,
+
+    `Candle ATR: ${
+      indicators.candleRangeAtr.toFixed(2)
+    } [max ${maxCandleAtr}]`,
+
+    `EMA20 direction: ${
+      ema20Direction
+    }`,
+
     `Dist EMA20 ATR: ${
       indicators.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'
     } [0–${maxDistanceAtr}]`,
-    `Too Extended: ${indicators.entryTooExtended}`,
-    `MACD: Up=${indicators.macdCrossUp}, Down=${indicators.macdCrossDown}`
+
+    `Too Extended: ${
+      indicators.entryTooExtended
+    }`,
+
+    `MACD: Up=${
+      indicators.macdCrossUp
+    }, Down=${
+      indicators.macdCrossDown
+    }`
   ].join('\n');
 
   const tce = indicators.tce;
@@ -1508,8 +1860,12 @@ export async function notifyStrategyResult(
               ? tce.tceScore
               : '-'
           }`,
-          `TCE regime: ${tce.tceRegime}`,
-          `TCE reason: ${tce.tceReason}`
+          `TCE regime: ${
+            tce.tceRegime
+          }`,
+          `TCE reason: ${
+            tce.tceReason
+          }`
         ].join('\n');
 
   if (result.skipReason != null) {
@@ -1527,7 +1883,10 @@ export async function notifyStrategyResult(
   }
 
   if (result.buy || result.sell) {
-    const direction = result.buy ? 'LONG' : 'SHORT';
+    const direction =
+      result.buy
+        ? 'LONG'
+        : 'SHORT';
 
     const tceDetails =
       tce == null
@@ -1570,10 +1929,18 @@ export async function notifyStrategyResult(
       `Причина: ${
         indicators.signalReason ?? '-'
       }\n` +
-      `Цена: ${result.price}\n` +
-      `TP: ${result.takeProfitPrice ?? '-'}\n` +
-      `SL: ${result.stopLossPrice ?? '-'}\n` +
-      `Размер: ${result.positionSize ?? '-'}\n` +
+      `Цена: ${
+        result.price
+      }\n` +
+      `TP: ${
+        result.takeProfitPrice ?? '-'
+      }\n` +
+      `SL: ${
+        result.stopLossPrice ?? '-'
+      }\n` +
+      `Размер: ${
+        result.positionSize ?? '-'
+      }\n` +
       `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `${diagnostics}\n` +
       `━━━━━━━━━━━━━━━━━━━━━━\n` +
