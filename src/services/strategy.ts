@@ -1578,7 +1578,7 @@ let diagnosticFailedFilter: string | null = null;
 
 export type TelegramSender = (message: string) => Promise<void>;
 
-function formatStrategyDiagnostics(
+export function formatStrategyDiagnostics(
   result: StrategyResult
 ): string {
   const indicators = result.indicators;
