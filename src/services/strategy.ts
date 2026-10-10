@@ -68,7 +68,7 @@ export const REJECT_ENTRY_TOO_EXTENDED = true;
 export const LONG_BLACKLIST = [''];
 
 export const STOP_LOSS_ATR_MULTIPLIER = 2.8;
-export const TAKE_PROFIT_ATR_MULTIPLIER = 3.8;
+export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 export const ENABLE_TRAILING_STOP = false;
 
 const symbolCooldowns = new Map<string, number>();
