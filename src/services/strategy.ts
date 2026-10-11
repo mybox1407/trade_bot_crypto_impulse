@@ -259,8 +259,13 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
 
   const lowestLow = Math.min(...recent.map(c => c.low));
   const highestHigh = Math.max(...recent.map(c => c.high));
-  const longDepthAtr = (currentEma20 - lowestLow) / currentAtr;
-  const shortDepthAtr = (highestHigh - currentEma20) / currentAtr;
+
+  // ИСПРАВЛЕНО: глубина от min/max EMA20 за окно отката, а не от текущей EMA20
+  const minRecentEma20 = Math.min(...recentEma20);
+  const maxRecentEma20 = Math.max(...recentEma20);
+  const longDepthAtr = (minRecentEma20 - lowestLow) / currentAtr;
+  const shortDepthAtr = (highestHigh - maxRecentEma20) / currentAtr;
+
   const longDepthOk = touchedEma20Long ? longDepthAtr <= PULLBACK_MAX_DEPTH_EMA20_ATR : longDepthAtr <= PULLBACK_MAX_DEPTH_EMA50_ATR;
   const shortDepthOk = touchedEma20Short ? shortDepthAtr <= PULLBACK_MAX_DEPTH_EMA20_ATR : shortDepthAtr <= PULLBACK_MAX_DEPTH_EMA50_ATR;
   const depthOk = longDepthOk || shortDepthOk;
@@ -758,9 +763,10 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
   const maxAtrPct = side === 'short' ? MAX_LAST_ATR_PCT_SHORT : MAX_LAST_ATR_PCT_LONG;
   const maxDistanceAtr = isImpulse ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
   const maxCandleAtr = isImpulse ? IMPULSE_MAX_SIGNAL_CANDLE_ATR : MAX_SIGNAL_CANDLE_ATR;
-  const ema20Direction = result.side === 'long'
-    ? r.lastClose > r.ema20 ? 'OK' : 'wrong side'
-    : result.side === 'short' ? (r.lastClose < r.ema20 ? 'OK' : 'wrong side') : '-';
+
+  // ИСПРАВЛЕНО: нейтральный расчёт, всегда заполнен
+  const ema20Direction = r.lastClose > r.ema20 ? 'above EMA20' : 'below EMA20';
+  const distEma20Atr = r.lastAtr > 0 ? (Math.abs(r.lastClose - r.ema20) / r.lastAtr).toFixed(3) : '-';
 
   return [
     `Signal: ${i.signalReason ?? '-'}`, `Entry pattern: ${pattern}`, `Filter failed: ${i.diagnosticFailedFilter ?? '-'}`,
@@ -792,7 +798,7 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
     `BB Width: ${i.bbWidth.toFixed(5)}`, `BB rising: ${i.bbWidthRising}`,
     `Candle ATR: ${i.candleRangeAtr.toFixed(2)} [max ${maxCandleAtr}]`,
     `EMA20 direction: ${ema20Direction}`,
-    `Dist EMA20 ATR: ${i.entryDistanceFromEma20Atr?.toFixed(3) ?? '-'} [0–${maxDistanceAtr}]`,
+    `Dist EMA20 ATR: ${distEma20Atr} [0–${maxDistanceAtr}]`,
     `Too Extended: ${i.entryTooExtended}`,
     `MACD: Up=${i.macdCrossUp}, Down=${i.macdCrossDown}`
   ].join('\n');
