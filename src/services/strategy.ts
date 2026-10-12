@@ -466,6 +466,18 @@ export function analyzeTradeFlow(
   };
 }
 
+export function detectMarketRegime(_candles: unknown[]): {
+  regime: 'unknown';
+  ready: false;
+  indicators: null;
+} {
+  return {
+    regime: 'unknown',
+    ready: false,
+    indicators: null
+  };
+}
+
 /**
  * Старые export-имена намеренно не оставлены:
  * новая стратегия не использует свечной режим и индикаторы.
