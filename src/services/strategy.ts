@@ -6,6 +6,7 @@ export const MAX_RISK_PER_TRADE = 0.01;
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_TREND_DOWN_TRADES = true;
 export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
+export const TRADE_FEE_RATE = 0.0
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [[0, 24]];
 
