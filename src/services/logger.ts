@@ -9,12 +9,11 @@ type EntryPattern = 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | n
 const FILE_HEADERS: Record<string, string[]> = {
   'signal_log.csv': [
     'timestamp', 'symbol', 'timeframe', 'side', 'price', 'regime',
-    'takeProfitPrice', 'stopLossPrice', 'positionSize', 'macdCrossUp',
-    'macdCrossDown', 'lastRsi', 'lastAtr', 'rsiBull', 'rsiBear', 'bbUpper',
-    'bbMiddle', 'bbLower', 'adx', 'adxRising', 'ema20', 'ema50', 'ema200',
-    'bbWidth', 'atrPct', 'signalTriggered', 'positionOpened',
-    'openPositionError', 'pullbackDetected', 'reclaimDetected', 'signalReason',
-    'entryPattern', 'impulseDetected', 'consolidationDetected',
+    'takeProfitPrice', 'stopLossPrice', 'positionSize', 'lastRsi', 'lastAtr',
+    'rsiBull', 'rsiBear', 'bbUpper', 'bbMiddle', 'bbLower', 'adx', 'adxRising',
+    'ema20', 'ema50', 'ema200', 'bbWidth', 'atrPct', 'signalTriggered',
+    'positionOpened', 'openPositionError', 'pullbackDetected', 'reclaimDetected',
+    'signalReason', 'entryPattern', 'impulseDetected', 'consolidationDetected',
     'impulseBreakoutDetected', 'entryDistanceFromEma20',
     'entryDistanceFromEma20Atr', 'entryTooExtended', 'signalTimeIso',
     'isTradingWindow', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
@@ -29,13 +28,13 @@ const FILE_HEADERS: Record<string, string[]> = {
     'balanceAfter', 'riskCapital', 'maxNotionalByPercent', 'stopDistance',
     'totalRiskPerUnit', 'calculatedQuantity', 'regime', 'entryPattern',
     'impulseDetected', 'consolidationDetected', 'impulseBreakoutDetected',
-    'macdCrossUp', 'macdCrossDown', 'lastRsi', 'lastAtr', 'adx', 'bbWidth',
-    'atrPct', 'ema20', 'ema50', 'ema200', 'entryDistanceFromEma20',
-    'entryDistanceFromEma20Percent', 'entryDistanceFromEma20Atr',
-    'entryTooExtended', 'mlProbability', 'mlThreshold', 'mlPassed', 'mlTrainedAt',
-    'signalTime', 'signalTimeIso', 'tceScore', 'tceRegime', 'tceReason',
-    'tceTrendAligned', 'tceErFast', 'tceErSlow', 'tceRoomAtr',
-    'tceEntryExtensionAtr', 'tceCandleRangeAtr', 'tceBodyRatio'
+    'lastRsi', 'lastAtr', 'adx', 'bbWidth', 'atrPct', 'ema20', 'ema50',
+    'ema200', 'entryDistanceFromEma20', 'entryDistanceFromEma20Percent',
+    'entryDistanceFromEma20Atr', 'entryTooExtended', 'mlProbability',
+    'mlThreshold', 'mlPassed', 'mlTrainedAt', 'signalTime', 'signalTimeIso',
+    'tceScore', 'tceRegime', 'tceReason', 'tceTrendAligned', 'tceErFast',
+    'tceErSlow', 'tceRoomAtr', 'tceEntryExtensionAtr', 'tceCandleRangeAtr',
+    'tceBodyRatio'
   ],
 
   'position_check_log.csv': [
@@ -121,8 +120,6 @@ export function logSignalCheck(row: {
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
   positionSize: number | null;
-  macdCrossUp: boolean;
-  macdCrossDown: boolean;
   lastRsi: number;
   lastAtr: number;
   rsiBull: boolean;
@@ -193,8 +190,6 @@ export function logPositionOpen(row: {
   impulseDetected?: boolean;
   consolidationDetected?: boolean;
   impulseBreakoutDetected?: boolean;
-  macdCrossUp: boolean;
-  macdCrossDown: boolean;
   lastRsi: number;
   lastAtr: number;
   adx: number;
