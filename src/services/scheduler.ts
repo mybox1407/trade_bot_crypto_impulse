@@ -393,7 +393,7 @@ function stopBalanceSyncLoop(): void {
   balanceSyncInterval = null;
 }
 
-async function hasPendingRemoteOrder(
+/*async function hasPendingRemoteOrder(
   marketId: number
 ): Promise<boolean> {
   if (PAPER_TRADING || !signerClient) {
@@ -479,7 +479,7 @@ async function hasPendingRemoteOrder(
     );
     throw error;
   }
-}
+}*/
 
 function buildPositionMetadata(
   regime: string,
@@ -816,7 +816,7 @@ async function handleTradeEvent(
       `trade-flow signal ${symbol}`
     );
 
-    if (await hasPendingRemoteOrder(marketId)) {
+    /*if (await hasPendingRemoteOrder(marketId)) {
       tradeLog('TRADE_SIGNAL_BLOCKED_PENDING_ORDER', {
         symbol,
         marketId,
@@ -824,7 +824,7 @@ async function handleTradeEvent(
       });
 
       return;
-    }
+    }*/
 
     const result = runTradeFlowOnce(symbol);
 
