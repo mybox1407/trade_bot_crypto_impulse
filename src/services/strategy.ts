@@ -1,21 +1,11 @@
-import { MACD, RSI, ATR, ADX, BollingerBands, EMA } from 'technicalindicators';
-import { calculateTce, TCE_STRONG_MIN, type TceMetrics } from './tce';
+import { RSI, ATR, ADX, BollingerBands, EMA } from 'technicalindicators';
 import type { Candle } from './lighterWs';
 
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
-export const TRADE_FEE_RATE = 0.0;
 export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_TREND_DOWN_TRADES = true;
-export const ENABLE_BREAKOUT_TRADES = false;
-export const ENABLE_IMPULSE_CONTINUATION_TRADES = false;
-export const IMPULSE_MAX_RISK_PER_TRADE = 0.005;
-export const ENABLE_TCE_FILTER = false;
-export const TCE_REQUIRED_CANDLES = 200;
 export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
-export const SIGNAL_TIMEFRAME_MS = 15 * 60 * 1000;
-export const MAX_SIGNAL_DRIFT_ATR = 0.35;
-export const MAX_ADVERSE_SIGNAL_MOVE_ATR = 0.5;
 
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [[0, 24]];
 
@@ -26,22 +16,15 @@ export const MAX_ENTRY_RSI_SHORT = 60;
 export const MIN_ENTRY_ADX_LONG = 22;
 export const MIN_ENTRY_ADX_SHORT = 22;
 export const MAX_ENTRY_ADX = 45;
-export const HIGH_ADX_THRESHOLD = 45;
-export const HIGH_ADX_MAX_ENTRY_DISTANCE_ATR = 0.65;
 export const MIN_LAST_ATR_PCT = 0.001;
 export const MAX_LAST_ATR_PCT_LONG = 0.04;
 export const MAX_LAST_ATR_PCT_SHORT = 0.05;
-export const MIN_BB_WIDTH_LONG = 0.0;
 export const MAX_BB_WIDTH_LONG = 0.12;
-export const MIN_BB_WIDTH_SHORT = 0.0;
 export const MAX_BB_WIDTH_SHORT = 0.12;
 export const MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 0.85;
 export const MAX_SIGNAL_CANDLE_ATR = 1.2;
 export const MIN_SIGNAL_BODY_ATR = 0.35;
-export const REQUIRE_ADX_RISING = false;
-export const REQUIRE_BB_WIDTH_RISING = false;
 export const REQUIRE_DI_DIRECTION = true;
-export const REJECT_ENTRY_TOO_EXTENDED = true;
 export const LONG_BLACKLIST = [''];
 
 export const PULLBACK_LOOKBACK_CANDLES = 4;
@@ -53,28 +36,6 @@ export const RECLAIM_VOLUME_VS_LAST_PULLBACK = 1.3;
 
 export const STOP_LOSS_ATR_MULTIPLIER = 3.0;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
-export const ENABLE_TRAILING_STOP = false;
-
-export const IMPULSE_MIN_RSI_LONG = 45;
-export const IMPULSE_MAX_RSI_LONG = 72;
-export const IMPULSE_MIN_RSI_SHORT = 22;
-export const IMPULSE_MAX_RSI_SHORT = 55;
-export const IMPULSE_MIN_FILTER_ADX = 22;
-export const IMPULSE_MAX_FILTER_ADX = 39;
-export const IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR = 2.5;
-export const IMPULSE_MAX_SIGNAL_CANDLE_ATR = 1.8;
-export const IMPULSE_MIN_BREAKOUT_ATR = 0.15;
-export const IMPULSE_MIN_BREAKOUT_VOLUME_RATIO = 1.2;
-
-const IMPULSE_MIN_BODY_ATR = 0.6;
-const IMPULSE_MAX_BODY_ATR = 1.6;
-const IMPULSE_MIN_CLOSE_POSITION = 0.7;
-const IMPULSE_MAX_CONSOLIDATION_RANGE_ATR = 1.2;
-const IMPULSE_MAX_BREAKOUT_DRIFT_ATR = 0.65;
-const IMPULSE_MIN_ADX = 21;
-const IMPULSE_MAX_ADX = 55;
-const IMPULSE_STOP_BUFFER_ATR = 0.4;
-const IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER = 2.5;
 
 const symbolCooldowns = new Map<string, number>();
 const lastProcessedSignalCandleBySymbol = new Map<string, number>();
@@ -85,7 +46,6 @@ const normalizeTimestamp = (t: number): number => t < 1e12 ? t * 1000 : t;
 const getClosedCandles = (c: Candle[]): Candle[] => c;
 const last = <T,>(arr: T[]): T => arr[arr.length - 1];
 const mean = (v: number[]): number => v.length === 0 ? 0 : v.reduce((s, x) => s + x, 0) / v.length;
-const getVolumeSpike = (vols: number[], avg: number): boolean => avg > 0 && (vols[vols.length - 1] ?? 0) >= avg * 1.3;
 const getBodySize = (c: Candle): number => Math.abs(c.close - c.open);
 const getBodyAtr = (c: Candle, atr: number): number => atr <= 0 ? 0 : getBodySize(c) / atr;
 const getCandleRangeAtr = (c: Candle, atr: number): number => atr <= 0 ? 0 : (c.high - c.low) / atr;
@@ -93,12 +53,6 @@ const getBbWidth = (bb: { upper: number; middle: number; lower: number }): numbe
 const isPriceOnCorrectSideOfEma20 = (side: 'long' | 'short', price: number, ema20: number): boolean => side === 'long' ? price > ema20 : price < ema20;
 const getEntryDistanceFromEma20 = (price: number, ema20: number): number => Math.abs(price - ema20);
 const getEntryDistanceFromEma20Atr = (price: number, ema20: number, atr: number): number => atr <= 0 ? Number.POSITIVE_INFINITY : Math.abs(price - ema20) / atr;
-
-function findLocalExtremum(candles: Candle[], side: 'long' | 'short', lookback: number): { extremePrice: number } {
-  const slice = candles.slice(-lookback);
-  if (slice.length === 0) return { extremePrice: 0 };
-  return { extremePrice: side === 'long' ? Math.min(...slice.map(c => c.low)) : Math.max(...slice.map(c => c.high)) };
-}
 
 export function shouldProcess15mSignal(symbol: string, candles: Candle[]): boolean {
   const closed = getClosedCandles(candles);
@@ -154,7 +108,7 @@ export function getRemainingCooldownMs(symbol: string, now = new Date()): number
   return Math.max(0, end - now.getTime());
 }
 
-export type MarketRegime = 'trend_up' | 'trend_down' | 'range' | 'breakout_watch' | 'high_volatility' | 'unknown';
+export type MarketRegime = 'trend_up' | 'trend_down' | 'range' | 'high_volatility' | 'unknown';
 
 type RegimeIndicators = {
   lastClose: number; lastAtr: number; atrPct: number; adx: number; previousAdx: number; adxRising: boolean;
@@ -169,9 +123,9 @@ type RegimeIndicators = {
 type FilterCheckResult = { passed: boolean; failedFilter?: string };
 
 export type StrategyIndicators = {
-  macdCrossUp: boolean; macdCrossDown: boolean; lastRsi: number; lastAtr: number;
+  lastRsi: number; lastAtr: number;
   bbUpper: number; bbMiddle: number; bbLower: number; regimeReady: boolean; regimeIndicators: RegimeIndicators;
-  entryExtensionAtr: number | null; maxEntryExtensionAtr: number | null; entryTooExtended: boolean; tradeFeeRate: number; ready: boolean;
+  entryExtensionAtr: number | null; maxEntryExtensionAtr: number | null; entryTooExtended: boolean; ready: boolean;
   atrPct: number; adx: number; adxRising: boolean; plusDi: number; minusDi: number; bbWidth: number; bbWidthRising: boolean;
   candleRangeAtr: number; ema20: number; ema200: number; priceVsEma200: number | null;
   entryDistanceFromEma20: number | null; entryDistanceFromEma20Atr: number | null; isCandleClosed: boolean;
@@ -184,10 +138,10 @@ export type StrategyIndicators = {
   bullishReclaim: boolean; bearishReclaim: boolean;
   pullbackValidCandle: boolean; pullbackNotExtended: boolean; pullbackVolumeOk: boolean;
   pullbackCandleRangeAtr: number; pullbackBodyAtr: number; pullbackVolumeRatio: number; pullbackEntryDistanceAtr: number;
-  entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
-  diagnosticPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null;
+  entryPattern: 'pullback_reclaim' | null;
+  diagnosticPattern: 'pullback_reclaim' | null;
   diagnosticFailedFilter: string | null;
-  impulseDetected: boolean; consolidationDetected: boolean; impulseBreakoutDetected: boolean; tce: TceMetrics | null;
+
 };
 
 export type StrategyResult = {
@@ -198,10 +152,7 @@ export type StrategyResult = {
   atrUsedForExit?: number; slMultiplierUsed?: number; tpMultiplierUsed?: number;
 };
 
-const MIN_ADX_TREND = 21, MIN_ADX_RANGE = 20, BB_SQUEEZE_THRESHOLD = 0.05;
-const BREAKOUT_ATR_BUFFER_K = 0.2, BREAKOUT_BODY_ATR_MIN = 0.6, MAX_EXTREMUM_DISTANCE_ATR = 2.5;
-const EXTREMUM_LOOKBACK = 30, BREAKOUT_MIN_ATR_PCT = 0.015, BREAKOUT_MAX_ATR_PCT = 0.035;
-const BREAKOUT_MIN_BB_WIDTH = 0.03, BREAKOUT_MAX_BB_WIDTH = 0.08;
+const MIN_ADX_TREND = 21, MIN_ADX_RANGE = 20;
 
 const TREND_SWING_LOOKBACK = 20;
 const ER_PERIOD = 20;
@@ -316,48 +267,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   };
 }
 
-type ImpulseContinuationSignal = { long: boolean; short: boolean; reason: string | null; impulseDetected: boolean; consolidationDetected: boolean; breakoutDetected: boolean; breakoutLevel: number | null; consolidationLow: number | null; consolidationHigh: number | null };
-const noImpulseSignal = (reason: string | null = null): ImpulseContinuationSignal => ({ long: false, short: false, reason, impulseDetected: false, consolidationDetected: false, breakoutDetected: false, breakoutLevel: null, consolidationLow: null, consolidationHigh: null });
-
-function detectImpulseContinuationSignal(params: { candles: Candle[]; ema20: number[]; ema50: number[]; ema200: number[]; atr: number[]; regimeIndicators: RegimeIndicators }): ImpulseContinuationSignal {
-  const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
-  if (candles.length < 5 || ema20.length < 2 || ema50.length < 1 || ema200.length < 1 || atr.length < 4) return noImpulseSignal('not_enough_impulse_data');
-
-  const impulse = candles[candles.length - 4], pauseOne = candles[candles.length - 3], pauseTwo = candles[candles.length - 2], current = candles[candles.length - 1];
-  const currentAtr = last(atr), currentEma20 = last(ema20), currentEma50 = last(ema50), currentEma200 = last(ema200);
-  if (!Number.isFinite(currentAtr) || currentAtr <= 0) return noImpulseSignal('invalid_impulse_atr');
-
-  const impulseRange = impulse.high - impulse.low;
-  const impulseBodyAtr = getBodySize(impulse) / currentAtr;
-  const impulseClosePosition = impulseRange > 0 ? (impulse.close - impulse.low) / impulseRange : 0.5;
-
-  const bullishImpulse = impulse.close > impulse.open && impulseBodyAtr >= IMPULSE_MIN_BODY_ATR && impulseBodyAtr <= IMPULSE_MAX_BODY_ATR && impulseClosePosition >= IMPULSE_MIN_CLOSE_POSITION;
-  const bearishImpulse = impulse.close < impulse.open && impulseBodyAtr >= IMPULSE_MIN_BODY_ATR && impulseBodyAtr <= IMPULSE_MAX_BODY_ATR && impulseClosePosition <= 1 - IMPULSE_MIN_CLOSE_POSITION;
-
-  const consolidationHigh = Math.max(pauseOne.high, pauseTwo.high);
-  const consolidationLow = Math.min(pauseOne.low, pauseTwo.low);
-  const consolidationDetected = consolidationHigh - consolidationLow <= currentAtr * IMPULSE_MAX_CONSOLIDATION_RANGE_ATR;
-
-  const longContext = current.close > currentEma200 && currentEma20 > currentEma50 && currentEma50 > currentEma200 && regimeIndicators.plusDi > regimeIndicators.minusDi && regimeIndicators.adx >= IMPULSE_MIN_ADX && regimeIndicators.adx <= IMPULSE_MAX_ADX && pauseOne.close >= currentEma20 && pauseTwo.close >= currentEma20;
-  const shortContext = current.close < currentEma200 && currentEma20 < currentEma50 && currentEma50 < currentEma200 && regimeIndicators.minusDi > regimeIndicators.plusDi && regimeIndicators.adx >= IMPULSE_MIN_ADX && regimeIndicators.adx <= IMPULSE_MAX_ADX && pauseOne.close <= currentEma20 && pauseTwo.close <= currentEma20;
-
-  const volumes = candles.map(c => Number(c.volume) || 0);
-  const avgVolume20 = mean(volumes.slice(-21, -1));
-  const volumeRatio = avgVolume20 > 0 ? (Number(current.volume) || 0) / avgVolume20 : 0;
-
-  const breakoutUpDistanceAtr = (current.close - consolidationHigh) / currentAtr;
-  const breakoutDownDistanceAtr = (consolidationLow - current.close) / currentAtr;
-  const breakoutUp = current.close > consolidationHigh && current.close > current.open && breakoutUpDistanceAtr >= IMPULSE_MIN_BREAKOUT_ATR && breakoutUpDistanceAtr <= IMPULSE_MAX_BREAKOUT_DRIFT_ATR && volumeRatio >= IMPULSE_MIN_BREAKOUT_VOLUME_RATIO;
-  const breakoutDown = current.close < consolidationLow && current.close < current.open && breakoutDownDistanceAtr >= IMPULSE_MIN_BREAKOUT_ATR && breakoutDownDistanceAtr <= IMPULSE_MAX_BREAKOUT_DRIFT_ATR && volumeRatio >= IMPULSE_MIN_BREAKOUT_VOLUME_RATIO;
-
-  const long = bullishImpulse && consolidationDetected && longContext && breakoutUp;
-  const short = bearishImpulse && consolidationDetected && shortContext && breakoutDown;
-
-  if (long) return { long: true, short: false, reason: 'long_impulse_continuation', impulseDetected: true, consolidationDetected: true, breakoutDetected: true, breakoutLevel: consolidationHigh, consolidationLow, consolidationHigh };
-  if (short) return { long: false, short: true, reason: 'short_impulse_continuation', impulseDetected: true, consolidationDetected: true, breakoutDetected: true, breakoutLevel: consolidationLow, consolidationLow, consolidationHigh };
-  return { long: false, short: false, reason: null, impulseDetected: bullishImpulse || bearishImpulse, consolidationDetected, breakoutDetected: breakoutUp || breakoutDown, breakoutLevel: null, consolidationLow, consolidationHigh };
-}
-
 
 function detectSwingStructure(candles: Candle[], lookback: number): { swingHigh: number; swingLow: number; prevSwingHigh: number; prevSwingLow: number; higherHigh: boolean; higherLow: boolean; lowerHigh: boolean; lowerLow: boolean } {
   const empty = { swingHigh: 0, swingLow: 0, prevSwingHigh: 0, prevSwingLow: 0, higherHigh: false, higherLow: false, lowerHigh: false, lowerLow: false };
@@ -407,7 +316,6 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   const adxRising = adxValue > previousAdxValue, bbWidthRising = bbWidth > previousBbWidth;
   const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
   const candleRangeAtr = candles.length > 0 ? getCandleRangeAtr(candles[candles.length - 1], lastAtr) : 0;
-  const compression = bbWidth <= BB_SQUEEZE_THRESHOLD;
   const swing = detectSwingStructure(candles, TREND_SWING_LOOKBACK);
   const er = calculateEfficiencyRatio(closes, ER_PERIOD);
   // Смягчённая структура: достаточно HH или HL для long, LH или LL для short, при ER >= 0.25.
@@ -416,14 +324,12 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   const strongTrendUp = lastClose > lastEma200 && lastEma20 > lastEma50 && lastEma50 > lastEma200 && lastEma20 > previousEma20 && trendStructureUp && adxValue >= MIN_ADX_TREND && plusDi > minusDi;
   const strongTrendDown = lastClose < lastEma200 && lastEma20 < lastEma50 && lastEma50 < lastEma200 && lastEma20 < previousEma20 && trendStructureDown && adxValue >= MIN_ADX_TREND && minusDi > plusDi;
   const range = adxValue < MIN_ADX_RANGE && bbWidth < 0.08;
-  const breakoutWatch = compression && adxValue >= 15 && adxValue <= 28 && getVolumeSpike(volumes, avgVol20);
   const highVolatility = atrPct > 0.025 || bbWidth > 0.12;
 
   let regime: MarketRegime = 'unknown';
   if (highVolatility) regime = 'high_volatility';
   else if (strongTrendUp) regime = 'trend_up';
   else if (strongTrendDown) regime = 'trend_down';
-  else if (breakoutWatch) regime = 'breakout_watch';
   else if (range) regime = 'range';
 
   return { regime, ready: true, indicators: { lastClose, lastAtr, atrPct, adx: adxValue, previousAdx: previousAdxValue, adxRising, plusDi, minusDi, ema20: lastEma20, ema50: lastEma50, ema200: lastEma200, previousEma20, previousEma50, bbWidth, previousBbWidth, bbWidthRising, avgVol20, candleRangeAtr,
@@ -437,12 +343,11 @@ export function canOpenTrade(params: {
   adxRising?: boolean; plusDi?: number; minusDi?: number; bbWidth: number; bbWidthRising?: boolean; candleRangeAtr?: number;
   entryDistanceFromEma20: number; entryDistanceFromEma20Atr: number; entryTooExtended: boolean;
   pullbackDetected: boolean; reclaimDetected: boolean;
-  entryPattern?: 'pullback_reclaim' | 'impulse_continuation' | 'breakout'; now?: Date;
+  entryPattern?: 'pullback_reclaim'; now?: Date;
 }): FilterCheckResult {
-  const { symbol, side, price, ema20, lastRsi, atrPct, adx, adxRising = true, plusDi = 0, minusDi = 0, bbWidth, bbWidthRising = true, candleRangeAtr = 0, entryDistanceFromEma20Atr, entryTooExtended, pullbackDetected, reclaimDetected, entryPattern = 'pullback_reclaim', now = new Date() } = params;
+  const { symbol, side, price, ema20, lastRsi, atrPct, adx, adxRising = true, plusDi = 0, minusDi = 0, bbWidth, bbWidthRising = true, candleRangeAtr = 0, entryDistanceFromEma20Atr, entryTooExtended, pullbackDetected, reclaimDetected, now = new Date() } = params;
 
-  const isImpulse = entryPattern === 'impulse_continuation';
-  const isPullback = entryPattern === 'pullback_reclaim';
+  const isPullback = true;
 
   if (!isTradingTimeUtcPlus4(now)) return { passed: false, failedFilter: 'trading_window' };
   if (isSymbolOnCooldown(symbol, now)) return { passed: false, failedFilter: 'cooldown' };
@@ -462,19 +367,13 @@ export function canOpenTrade(params: {
     if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) return { passed: false, failedFilter: 'rsi' };
   }
 
-  if (isImpulse) {
-    if (side === 'long' && (lastRsi < IMPULSE_MIN_RSI_LONG || lastRsi > IMPULSE_MAX_RSI_LONG)) return { passed: false, failedFilter: 'impulse_rsi' };
-    if (side === 'short' && (lastRsi < IMPULSE_MIN_RSI_SHORT || lastRsi > IMPULSE_MAX_RSI_SHORT)) return { passed: false, failedFilter: 'impulse_rsi' };
-  }
 
   const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
   if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return { passed: false, failedFilter: 'atr_pct' };
 
-  const minAdx = isImpulse ? IMPULSE_MIN_FILTER_ADX : side === 'long' ? MIN_ENTRY_ADX_LONG : MIN_ENTRY_ADX_SHORT;
-  const maxAdx = isImpulse ? IMPULSE_MAX_FILTER_ADX : MAX_ENTRY_ADX;
-  if (adx < minAdx || adx > maxAdx) return { passed: false, failedFilter: isImpulse ? 'impulse_adx' : 'adx' };
+  const minAdx = side === 'long' ? MIN_ENTRY_ADX_LONG : MIN_ENTRY_ADX_SHORT;
+  if (adx < minAdx || adx > MAX_ENTRY_ADX) return { passed: false, failedFilter: 'adx' };
 
-  if (REQUIRE_ADX_RISING && !adxRising) return { passed: false, failedFilter: 'adx_not_rising' };
 
   if (REQUIRE_DI_DIRECTION) {
     if (side === 'long' && plusDi <= minusDi) return { passed: false, failedFilter: 'di_direction' };
@@ -484,16 +383,13 @@ export function canOpenTrade(params: {
   const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT;
   const maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
   if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return { passed: false, failedFilter: 'bb_width' };
-  if (REQUIRE_BB_WIDTH_RISING && !bbWidthRising) return { passed: false, failedFilter: 'bb_width_not_rising' };
 
-  const maxSignalCandleAtr = isImpulse ? IMPULSE_MAX_SIGNAL_CANDLE_ATR : MAX_SIGNAL_CANDLE_ATR;
-  if (candleRangeAtr > 0 && candleRangeAtr > maxSignalCandleAtr) return { passed: false, failedFilter: isImpulse ? 'impulse_signal_candle_too_large' : 'signal_candle_too_large' };
+  if (candleRangeAtr > 0 && candleRangeAtr > MAX_SIGNAL_CANDLE_ATR) return { passed: false, failedFilter: 'signal_candle_too_large' };
 
   if (!Number.isFinite(entryDistanceFromEma20Atr)) return { passed: false, failedFilter: 'entry_distance_atr_invalid' };
-  const maxDistanceAtr = isImpulse ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-  if (entryDistanceFromEma20Atr > maxDistanceAtr) return { passed: false, failedFilter: isImpulse ? 'impulse_entry_distance_atr_high' : 'entry_distance_atr_high' };
+  if (entryDistanceFromEma20Atr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR) return { passed: false, failedFilter: 'entry_distance_atr_high' };
 
-  if (isPullback && REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) return { passed: false, failedFilter: 'entry_too_extended' };
+  if (entryTooExtended) return { passed: false, failedFilter: 'entry_too_extended' };
   return { passed: true };
 }
 
@@ -503,7 +399,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   const regimeInfo = detectMarketRegime(closedCandles);
   const tradingWindow = getTradingWindowCheck(now);
 
-  const macd = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
   const rsi = RSI.calculate({ period: 14, values: closes });
   const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
   const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
@@ -516,11 +411,11 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   const signalTimeIso = new Date(normalizeTimestamp(signalTime)).toISOString();
 
   const emptyIndicators = (): StrategyIndicators => ({
-    macdCrossUp: false, macdCrossDown: false, lastRsi: 0, lastAtr: 0,
+    lastRsi: 0, lastAtr: 0,
     bbUpper: 0, bbMiddle: 0, bbLower: 0, regimeReady: false,
     regimeIndicators: regimeInfo.indicators ?? ({} as RegimeIndicators),
     entryExtensionAtr: null, maxEntryExtensionAtr: MAX_ENTRY_DISTANCE_FROM_EMA20_ATR,
-    entryTooExtended: false, tradeFeeRate: TRADE_FEE_RATE, ready: false,
+    entryTooExtended: false, ready: false,
     atrPct: 0, adx: 0, adxRising: false, plusDi: 0, minusDi: 0,
     bbWidth: 0, bbWidthRising: false, candleRangeAtr: 0,
     ema20: 0, ema200: 0, priceVsEma200: null,
@@ -534,28 +429,22 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     pullbackValidCandle: false, pullbackNotExtended: false, pullbackVolumeOk: false,
     pullbackCandleRangeAtr: 0, pullbackBodyAtr: 0, pullbackVolumeRatio: 0,
     pullbackEntryDistanceAtr: Number.POSITIVE_INFINITY,
-    impulseDetected: false, diagnosticPattern: null, diagnosticFailedFilter: null,
-    consolidationDetected: false, impulseBreakoutDetected: false, tce: null
+    diagnosticPattern: null, diagnosticFailedFilter: null
   });
 
-  if (closedCandles.length < TCE_REQUIRED_CANDLES || !regimeInfo.ready || !regimeInfo.indicators || macd.length < 2 || rsi.length < 1 || atr.length < 1 || bb.length < 1 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1) {
+  if (closedCandles.length < 200 || !regimeInfo.ready || !regimeInfo.indicators || rsi.length < 1 || atr.length < 1 || bb.length < 1 || ema20.length < 3 || ema50.length < 3 || ema200.length < 1) {
     return { price: closes[closes.length - 1] ?? 0, buy: false, sell: false, side: 'none', takeProfitPrice: null, stopLossPrice: null, positionSize: null, regime: 'unknown', skipReason: 'Indicators not ready', signalTime, signalTimeIso, indicators: emptyIndicators() };
   }
 
   const price = last(closes);
-  const lastMacd = last(macd), previousMacd = macd[macd.length - 2];
-  const macdCrossUp = previousMacd.MACD != null && previousMacd.signal != null && lastMacd.MACD != null && lastMacd.signal != null && previousMacd.MACD < previousMacd.signal && lastMacd.MACD > lastMacd.signal;
-  const macdCrossDown = previousMacd.MACD != null && previousMacd.signal != null && lastMacd.MACD != null && lastMacd.signal != null && previousMacd.MACD > previousMacd.signal && lastMacd.MACD < lastMacd.signal;
 
   const lastRsi = last(rsi), lastAtr = last(atr), lastBb = last(bb);
   const regime = regimeInfo.regime;
   const regimeIndicators = regimeInfo.indicators!;
 
   const trigger = detectPullbackReclaimSignal({ candles: closedCandles, ema20, ema50, ema200, atr, regimeIndicators });
-  const impulseTrigger = detectImpulseContinuationSignal({ candles: closedCandles, ema20, ema50, ema200, atr, regimeIndicators });
 
   const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
-  const impulseRiskCapital = STARTING_BALANCE * IMPULSE_MAX_RISK_PER_TRADE;
 
   let side: 'long' | 'short' | 'none' = 'none';
   let buy = false, sell = false;
@@ -566,22 +455,16 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   let entryExtensionAtr: number | null = null;
   const maxEntryExtensionAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
   let entryTooExtended = false;
-  let tce: TceMetrics | null = null;
-  let entryPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null = null;
-  let diagnosticPattern: 'pullback_reclaim' | 'impulse_continuation' | 'breakout' | null = null;
+  let entryPattern: 'pullback_reclaim' | null = null;
+  let diagnosticPattern: 'pullback_reclaim' | null = null;
   let diagnosticFailedFilter: string | null = null;
 
-  const impulseDetected = impulseTrigger.impulseDetected;
-  const consolidationDetected = impulseTrigger.consolidationDetected;
-  const impulseBreakoutDetected = impulseTrigger.breakoutDetected;
 
   if (!tradingWindow.allowed) skipReason = tradingWindow.message;
   else if (regime === 'high_volatility' || regime === 'range') skipReason = `Trading disabled for regime: ${regime}`;
-  else if (ENABLE_IMPULSE_CONTINUATION_TRADES && regime === 'trend_up' && impulseTrigger.long) { side = 'long'; buy = true; entryPattern = 'impulse_continuation'; }
-  else if (ENABLE_IMPULSE_CONTINUATION_TRADES && regime === 'trend_down' && impulseTrigger.short) { side = 'short'; sell = true; entryPattern = 'impulse_continuation'; }
   else if (ENABLE_TREND_UP_TRADES && regime === 'trend_up' && trigger.long) { side = 'long'; buy = true; entryPattern = 'pullback_reclaim'; }
   else if (ENABLE_TREND_DOWN_TRADES && regime === 'trend_down' && trigger.short) { side = 'short'; sell = true; entryPattern = 'pullback_reclaim'; }
-  else { diagnosticPattern = 'pullback_reclaim'; skipReason = 'No pullback/reclaim or impulse continuation signal'; }
+  else { diagnosticPattern = 'pullback_reclaim'; skipReason = 'No pullback/reclaim signal'; }
 
   let atrUsedForExit: number | undefined;
   let slMultiplierUsed: number | undefined;
@@ -591,75 +474,13 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     entryExtensionAtr = getEntryDistanceFromEma20Atr(price, regimeIndicators.ema20, lastAtr);
     entryTooExtended = entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
 
-    const cLow = impulseTrigger.consolidationLow;
-    const cHigh = impulseTrigger.consolidationHigh;
-    const useImpulseExits = entryPattern === 'impulse_continuation' && cLow != null && cHigh != null;
-
-    if (useImpulseExits) {
-      stopLossPrice = side === 'long' ? cLow! - lastAtr * IMPULSE_STOP_BUFFER_ATR : cHigh! + lastAtr * IMPULSE_STOP_BUFFER_ATR;
-      takeProfitPrice = side === 'long' ? price + lastAtr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER : price - lastAtr * IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER;
-      slMultiplierUsed = IMPULSE_STOP_BUFFER_ATR;
-      tpMultiplierUsed = IMPULSE_TAKE_PROFIT_ATR_MULTIPLIER;
-    } else {
-      stopLossPrice = side === 'long' ? price - lastAtr * STOP_LOSS_ATR_MULTIPLIER : price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
-      takeProfitPrice = side === 'long' ? price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER : price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
-      slMultiplierUsed = STOP_LOSS_ATR_MULTIPLIER;
-      tpMultiplierUsed = TAKE_PROFIT_ATR_MULTIPLIER;
-    }
-
+    stopLossPrice = side === 'long' ? price - lastAtr * STOP_LOSS_ATR_MULTIPLIER : price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
+    takeProfitPrice = side === 'long' ? price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER : price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
+    slMultiplierUsed = STOP_LOSS_ATR_MULTIPLIER;
+    tpMultiplierUsed = TAKE_PROFIT_ATR_MULTIPLIER;
     atrUsedForExit = lastAtr;
-
-    if (entryPattern === 'impulse_continuation' && (cLow == null || cHigh == null)) {
-      const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
-      buy = r.buy; sell = r.sell; side = r.side;
-      takeProfitPrice = r.takeProfitPrice; stopLossPrice = r.stopLossPrice; positionSize = r.positionSize;
-      entryPattern = null;
-      skipReason = 'Impulse continuation rejected: consolidation boundaries unavailable';
-    }
   }
 
-  if (ENABLE_BREAKOUT_TRADES && tradingWindow.allowed && regime === 'breakout_watch') {
-    const lastSignalCandle = closedCandles[closedCandles.length - 1];
-    if (lastSignalCandle == null) skipReason = 'No closed candle for breakout';
-    else {
-      const candleBody = Math.abs(lastSignalCandle.close - lastSignalCandle.open);
-      const atrBuffer = lastAtr * BREAKOUT_ATR_BUFFER_K;
-      const minBody = lastAtr * BREAKOUT_BODY_ATR_MIN;
-      const breakoutUp = lastSignalCandle.close > lastBb.upper + atrBuffer && candleBody >= minBody && lastRsi > 45 && lastRsi < 75;
-      const breakoutDown = lastSignalCandle.close < lastBb.lower - atrBuffer && candleBody >= minBody && lastRsi < 55 && lastRsi > 25;
-      const atrPct = price > 0 ? lastAtr / price : 0;
-      const bbWidth = getBbWidth(lastBb);
-      const volatilityOk = atrPct >= BREAKOUT_MIN_ATR_PCT && atrPct <= BREAKOUT_MAX_ATR_PCT && bbWidth >= BREAKOUT_MIN_BB_WIDTH && bbWidth <= BREAKOUT_MAX_BB_WIDTH;
-
-      let extremumOk = true;
-      if (breakoutUp || breakoutDown) {
-        const s = breakoutUp ? 'long' : 'short';
-        const { extremePrice } = findLocalExtremum(closedCandles, s, EXTREMUM_LOOKBACK);
-        if (extremePrice !== 0 && lastAtr > 0) {
-          const dist = s === 'long' ? price - extremePrice : extremePrice - price;
-          if (Math.abs(dist) / lastAtr > MAX_EXTREMUM_DISTANCE_ATR) extremumOk = false;
-        }
-      }
-
-      if (volatilityOk && extremumOk) {
-        if (breakoutUp) { side = 'long'; buy = true; sell = false; entryPattern = 'breakout'; stopLossPrice = price - lastAtr * 1.5; takeProfitPrice = price + lastAtr * 2.2; atrUsedForExit = lastAtr; slMultiplierUsed = 1.5; tpMultiplierUsed = 2.2; }
-        else if (breakoutDown) { side = 'short'; sell = true; buy = false; entryPattern = 'breakout'; stopLossPrice = price + lastAtr * 1.5; takeProfitPrice = price - lastAtr * 2.2; atrUsedForExit = lastAtr; slMultiplierUsed = 1.5; tpMultiplierUsed = 2.2; }
-      }
-    }
-  }
-
-  if ((buy || sell) && signalPrice != null && lastAtr > 0) {
-    const favorableMoveAtr = (side === 'long' ? price - signalPrice : signalPrice - price) / lastAtr;
-    const adverseMoveAtr = (side === 'long' ? signalPrice - price : price - signalPrice) / lastAtr;
-
-    if (adverseMoveAtr > MAX_ADVERSE_SIGNAL_MOVE_ATR || favorableMoveAtr > MAX_SIGNAL_DRIFT_ATR) {
-      const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
-      buy = r.buy; sell = r.sell; side = r.side;
-      takeProfitPrice = r.takeProfitPrice; stopLossPrice = r.stopLossPrice; positionSize = r.positionSize;
-      entryPattern = null;
-      skipReason = adverseMoveAtr > MAX_ADVERSE_SIGNAL_MOVE_ATR ? `Price moved ${adverseMoveAtr.toFixed(2)} ATR against signal` : `Entry too late: price moved ${favorableMoveAtr.toFixed(2)} ATR in signal direction`;
-    }
-  }
 
   let entryDistanceFromEma20ForTrade: number | null = null;
   let entryDistanceFromEma20AtrForTrade: number | null = null;
@@ -678,14 +499,13 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
       candleRangeAtr: regimeIndicators.candleRangeAtr,
       entryDistanceFromEma20, entryDistanceFromEma20Atr, entryTooExtended,
       pullbackDetected: trigger.pullbackDetected, reclaimDetected: trigger.reclaimDetected,
-      entryPattern: entryPattern ?? 'pullback_reclaim', now
+      now
     });
 
     if (!filterResult.passed) {
       diagnosticPattern = entryPattern ?? diagnosticPattern ?? 'pullback_reclaim';
       diagnosticFailedFilter = filterResult.failedFilter ?? 'unknown';
       const rejectedSide = side, rejectedPattern = entryPattern;
-      const isRejectedImpulse = rejectedPattern === 'impulse_continuation';
 
       const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
       buy = r.buy; sell = r.sell; side = r.side;
@@ -695,22 +515,15 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
       if (skipReason == null) {
         const failedFilter = filterResult.failedFilter ?? 'unknown';
         const isShortSide = rejectedSide === 'short';
-        const rsiRange = isRejectedImpulse
-          ? isShortSide ? `${IMPULSE_MIN_RSI_SHORT}–${IMPULSE_MAX_RSI_SHORT}` : `${IMPULSE_MIN_RSI_LONG}–${IMPULSE_MAX_RSI_LONG}`
-          : isShortSide ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
-        const adxRange = isRejectedImpulse
-          ? `${IMPULSE_MIN_FILTER_ADX}–${IMPULSE_MAX_FILTER_ADX}`
-          : isShortSide ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+        const rsiRange = isShortSide ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+        const adxRange = isShortSide ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
         const atrRange = isShortSide ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}` : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
-        const maxDistanceAtr = isRejectedImpulse ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-        const maxCandleAtr = isRejectedImpulse ? IMPULSE_MAX_SIGNAL_CANDLE_ATR : MAX_SIGNAL_CANDLE_ATR;
-        const signalReason = isRejectedImpulse ? impulseTrigger.reason ?? '-' : trigger.reason ?? '-';
+        const signalReason = trigger.reason ?? '-';
 
         skipReason = [
           `Filter failed: ${failedFilter}`, `Signal: ${signalReason}`, `Entry pattern: ${rejectedPattern ?? '-'}`,
           `Pullback: ${trigger.pullbackDetected}`, `Reclaim: ${trigger.reclaimDetected}`,
           `Touched EMA: ${trigger.touchedEma}`, `Pullback depth ATR: ${trigger.pullbackDepthAtr.toFixed(2)}`, `Depth OK: ${trigger.depthOk}`,
-          `Impulse: ${impulseTrigger.impulseDetected}`, `Consolidation: ${impulseTrigger.consolidationDetected}`, `Impulse breakout: ${impulseTrigger.breakoutDetected}`,
           `RSI: ${lastRsi.toFixed(2)} [${rsiRange}]`, `ADX: ${regimeIndicators.adx.toFixed(2)} [${adxRange}]`,
           `ADX rising: ${regimeIndicators.adxRising}`, `+DI/-DI: ${regimeIndicators.plusDi.toFixed(2)}/${regimeIndicators.minusDi.toFixed(2)}`,
           `ATR%: ${(regimeIndicators.atrPct * 100).toFixed(3)} [${atrRange}]`,
@@ -724,31 +537,10 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     }
   }
 
-  if (ENABLE_TCE_FILTER && side !== 'none' && stopLossPrice != null) {
-    const sideBeforeTce = side;
-    try {
-      tce = calculateTce(closedCandles, sideBeforeTce, price, regimeIndicators.ema20, regimeIndicators.ema50, regimeIndicators.ema200);
-      const tcePassed = tce.tceRegime === 'strong' && Number.isFinite(tce.tceScore) && tce.tceScore >= TCE_STRONG_MIN;
-      if (!tcePassed) {
-        const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
-        buy = r.buy; sell = r.sell; side = r.side;
-        takeProfitPrice = r.takeProfitPrice; stopLossPrice = r.stopLossPrice; positionSize = r.positionSize;
-        entryPattern = null;
-        skipReason = `TCE filter rejected ${sideBeforeTce}: score=${Number.isFinite(tce.tceScore) ? tce.tceScore : '-'}, regime=${tce.tceRegime}, reason=${tce.tceReason}`;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
-      buy = r.buy; sell = r.sell; side = r.side;
-      takeProfitPrice = r.takeProfitPrice; stopLossPrice = r.stopLossPrice; positionSize = r.positionSize;
-      entryPattern = null;
-      skipReason = `TCE filter failed: ${message}`;
-    }
-  }
 
   if (side !== 'none' && stopLossPrice != null) {
     const riskPerUnit = Math.abs(price - stopLossPrice);
-    const capitalForTrade = entryPattern === 'impulse_continuation' ? impulseRiskCapital : riskCapital;
+    const capitalForTrade = riskCapital;
     positionSize = riskPerUnit > 0 ? capitalForTrade / riskPerUnit : null;
   }
 
@@ -759,10 +551,10 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     price, buy, sell, side, takeProfitPrice, stopLossPrice, positionSize,
     regime, skipReason, signalTime, signalTimeIso,
     indicators: {
-      macdCrossUp, macdCrossDown, lastRsi, lastAtr,
+      lastRsi, lastAtr,
       bbUpper: lastBb.upper, bbMiddle: lastBb.middle, bbLower: lastBb.lower,
       regimeReady: regimeInfo.ready, regimeIndicators,
-      entryExtensionAtr, maxEntryExtensionAtr, entryTooExtended, tradeFeeRate: TRADE_FEE_RATE, ready: regimeInfo.ready,
+      entryExtensionAtr, maxEntryExtensionAtr, entryTooExtended, ready: regimeInfo.ready,
       atrPct: regimeIndicators.atrPct, adx: regimeIndicators.adx, adxRising: regimeIndicators.adxRising,
       plusDi: regimeIndicators.plusDi, minusDi: regimeIndicators.minusDi,
       bbWidth: regimeIndicators.bbWidth, bbWidthRising: regimeIndicators.bbWidthRising,
@@ -781,9 +573,8 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
       pullbackValidCandle: trigger.validCandle, pullbackNotExtended: trigger.notExtended, pullbackVolumeOk: trigger.volumeOk,
       pullbackCandleRangeAtr: trigger.candleRangeAtr, pullbackBodyAtr: trigger.bodyAtr,
       pullbackVolumeRatio: trigger.volumeRatio, pullbackEntryDistanceAtr: trigger.entryDistanceAtr,
-      signalReason: entryPattern === 'impulse_continuation' ? impulseTrigger.reason : trigger.reason,
-      entryPattern, impulseDetected, diagnosticPattern, diagnosticFailedFilter,
-      consolidationDetected, impulseBreakoutDetected, tce
+      signalReason: trigger.reason,
+      entryPattern, diagnosticPattern, diagnosticFailedFilter
     },
     atrUsedForExit, slMultiplierUsed, tpMultiplierUsed
   };
@@ -795,18 +586,14 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
   const i = result.indicators;
   const r = i.regimeIndicators;
   const pattern = i.diagnosticPattern ?? i.entryPattern ?? 'pullback_reclaim';
-  const isImpulse = pattern === 'impulse_continuation';
+
   const side = result.side === 'short' ? 'short' : 'long';
 
-  const rsiRange = isImpulse
-    ? side === 'short' ? `${IMPULSE_MIN_RSI_SHORT}–${IMPULSE_MAX_RSI_SHORT}` : `${IMPULSE_MIN_RSI_LONG}–${IMPULSE_MAX_RSI_LONG}`
-    : side === 'short' ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
-  const adxRange = isImpulse
-    ? `${IMPULSE_MIN_FILTER_ADX}–${IMPULSE_MAX_FILTER_ADX}`
-    : side === 'short' ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
+  const rsiRange = side === 'short' ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
+  const adxRange = side === 'short' ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
   const maxAtrPct = side === 'short' ? MAX_LAST_ATR_PCT_SHORT : MAX_LAST_ATR_PCT_LONG;
-  const maxDistanceAtr = isImpulse ? IMPULSE_MAX_ENTRY_DISTANCE_FROM_EMA20_ATR : MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-  const maxCandleAtr = isImpulse ? IMPULSE_MAX_SIGNAL_CANDLE_ATR : MAX_SIGNAL_CANDLE_ATR;
+  const maxDistanceAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+  const maxCandleAtr = MAX_SIGNAL_CANDLE_ATR;
 
   // ИСПРАВЛЕНО: нейтральный расчёт, всегда заполнен
   const ema20Direction = r.lastClose > r.ema20 ? 'above EMA20' : 'below EMA20';
@@ -835,7 +622,6 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
     `Distance EMA20 ATR: ${Number.isFinite(i.pullbackEntryDistanceAtr) ? i.pullbackEntryDistanceAtr.toFixed(3) : '-'} [max ${MAX_ENTRY_DISTANCE_FROM_EMA20_ATR}]`,
     `Extension filter: ${i.pullbackNotExtended ? 'OK' : 'FAILED'}`,
     '', '--- General filters ---',
-    `Impulse: ${i.impulseDetected}`, `Consolidation: ${i.consolidationDetected}`, `Impulse breakout: ${i.impulseBreakoutDetected}`,
     `RSI: ${i.lastRsi.toFixed(2)} [${rsiRange}]`, `ADX: ${i.adx.toFixed(2)} [${adxRange}]`,
     `ADX rising: ${i.adxRising}`, `+DI/-DI: ${i.plusDi.toFixed(2)}/${i.minusDi.toFixed(2)}`,
     `ATR%: ${(i.atrPct * 100).toFixed(3)} [${(MIN_LAST_ATR_PCT * 100).toFixed(1)}–${(maxAtrPct * 100).toFixed(1)}]`,
@@ -844,30 +630,31 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
     `EMA20 direction: ${ema20Direction}`,
     `Dist EMA20 ATR: ${distEma20Atr} [0–${maxDistanceAtr}]`,
     `Too Extended: ${i.entryTooExtended}`,
-    `MACD: Up=${i.macdCrossUp}, Down=${i.macdCrossDown}`
   ].join('\n');
 }
 
 export async function notifyStrategyResult(result: StrategyResult, symbol: string, sendTelegramMessage: TelegramSender): Promise<void> {
   const diagnostics = formatStrategyDiagnostics(result);
-  const tce = result.indicators.tce;
-  const tceText = tce == null ? 'TCE: -' : [`TCE score: ${Number.isFinite(tce.tceScore) ? tce.tceScore : '-'}`, `TCE regime: ${tce.tceRegime}`, `TCE reason: ${tce.tceReason}`].join('\n');
-
   if (result.skipReason != null) {
-    await sendTelegramMessage(`${symbol} [${result.regime}]: No signal\n━━━━━━━━━━━━━━━━━━━━━━\n${diagnostics}\n━━━━━━━━━━━━━━━━━━━━━━\nReason: ${result.skipReason}\n━━━━━━━━━━━━━━━━━━━━━━\n${tceText}`);
+    await sendTelegramMessage(`${symbol} [${result.regime}]: No signal
+━━━━━━━━━━━━━━━━━━━━━━
+${diagnostics}
+━━━━━━━━━━━━━━━━━━━━━━
+Reason: ${result.skipReason}`);
     return;
   }
-
   if (result.buy || result.sell) {
     const direction = result.buy ? 'LONG' : 'SHORT';
-    const tceDetails = tce == null ? '' : [`TCE room ATR: ${Number.isFinite(tce.tceRoomAtr) ? tce.tceRoomAtr.toFixed(3) : '-'}`, `TCE ER fast/slow: ${Number.isFinite(tce.tceErFast) ? tce.tceErFast.toFixed(3) : '-'} / ${Number.isFinite(tce.tceErSlow) ? tce.tceErSlow.toFixed(3) : '-'}`].join('\n');
-    const exitDebug = result.atrUsedForExit != null ? [`[DEBUG] ATR: ${result.atrUsedForExit.toFixed(6)}`, `SL_mult: ${result.slMultiplierUsed?.toFixed(2) ?? '-'}`, `TP_mult: ${result.tpMultiplierUsed?.toFixed(2) ?? '-'}`].join(', ') : '';
-
-    await sendTelegramMessage(
-      `📊 ${symbol} ${direction} [${result.regime}]\n━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `Причина: ${result.indicators.signalReason ?? '-'}\nЦена: ${result.price}\nTP: ${result.takeProfitPrice ?? '-'}\nSL: ${result.stopLossPrice ?? '-'}\nРазмер: ${result.positionSize ?? '-'}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n${diagnostics}\n━━━━━━━━━━━━━━━━━━━━━━\n${tceText}` +
-      (tceDetails ? `\n${tceDetails}` : '') + (exitDebug ? `\n${exitDebug}` : '')
-    );
+    const exitDebug = result.atrUsedForExit != null ? `[DEBUG] ATR: ${result.atrUsedForExit.toFixed(6)}, SL_mult: ${result.slMultiplierUsed?.toFixed(2) ?? '-'}, TP_mult: ${result.tpMultiplierUsed?.toFixed(2) ?? '-'}` : '';
+    await sendTelegramMessage(`📊 ${symbol} ${direction} [${result.regime}]
+━━━━━━━━━━━━━━━━━━━━━━
+Причина: ${result.indicators.signalReason ?? '-'}
+Цена: ${result.price}
+TP: ${result.takeProfitPrice ?? '-'}
+SL: ${result.stopLossPrice ?? '-'}
+Размер: ${result.positionSize ?? '-'}
+━━━━━━━━━━━━━━━━━━━━━━
+${diagnostics}${exitDebug ? `
+${exitDebug}` : ''}`);
   }
 }
