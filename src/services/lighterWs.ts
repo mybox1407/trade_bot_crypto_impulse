@@ -200,12 +200,12 @@ export class LighterWsClient {
           | MarketStatsMessage
           | TradeMessage;
 
-        if (message.type === 'update/trade') {
+/*        if (message.type === 'update/trade') {
           console.log(
             `[${new Date().toISOString()}] RAW LIGHTER TRADE`,
             raw.toString()
           );
-        }
+        }*/
 
         if (
           message.type === 'subscribed/candle' ||
