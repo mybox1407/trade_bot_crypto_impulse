@@ -26,6 +26,8 @@ export interface LighterTrade {
   tradeId: string;
   marketId: number;
   time: number;
+  receivedAt: number;
+  transactionTime: number | null;
   price: number;
   size: number;
   usdAmount: number | null;
@@ -43,18 +45,6 @@ interface LighterCandle {
   v: number;
   V?: number;
   i?: number;
-}
-
-interface LighterTradeMessageItem {
-  trade_id?: number;
-  trade_id_str?: string;
-  market_id?: number;
-  timestamp?: number;
-  price?: string | number;
-  size?: string | number;
-  usd_amount?: string | number;
-  is_maker_ask?: boolean;
-  type?: string;
 }
 
 interface CandleMessage {
@@ -76,6 +66,19 @@ interface MarketStatsMessage {
   };
 }
 
+interface LighterTradeMessageItem {
+  trade_id?: number | string;
+  trade_id_str?: string;
+  market_id?: number | string;
+  timestamp?: number | string;
+  transaction_time?: number | string;
+  price?: string | number;
+  size?: string | number;
+  usd_amount?: string | number;
+  is_maker_ask?: boolean;
+  type?: string;
+}
+
 interface TradeMessage {
   type: string;
   channel?: string;
@@ -89,6 +92,7 @@ function toFiniteNumber(value: unknown): number | null {
   }
 
   const number = Number(value);
+
   return Number.isFinite(number) ? number : null;
 }
 
@@ -252,10 +256,7 @@ export class LighterWsClient {
           return;
         }
 
-        if (
-          message.type === 'subscribed/trade' ||
-          message.type === 'update/trade'
-        ) {
+        if (message.type === 'update/trade') {
           const tradeMessage = message as TradeMessage;
 
           for (const trade of tradeMessage.trades ?? []) {
@@ -328,14 +329,34 @@ export class LighterWsClient {
       return;
     }
 
+    const tradeId =
+      raw.trade_id_str ??
+      (raw.trade_id !== undefined
+        ? String(raw.trade_id)
+        : '');
+
+    if (!tradeId) {
+      console.error(
+        `[${new Date().toISOString()}] Lighter trade has no trade ID`,
+        raw
+      );
+      return;
+    }
+
     this.onTrade({
-      tradeId: raw.trade_id_str ?? String(raw.trade_id ?? ''),
+      tradeId,
       marketId,
       time,
+      receivedAt: Date.now(),
+      transactionTime: toFiniteNumber(raw.transaction_time),
       price,
       size,
       usdAmount: toFiniteNumber(raw.usd_amount),
-      aggressorSide: raw.is_maker_ask ? 'sell' : 'buy',
+
+      // is_maker_ask describes the passive maker.
+      // If maker is ask, the taker/initiator bought.
+      aggressorSide: raw.is_maker_ask ? 'buy' : 'sell',
+
       type: raw.type ?? (isLiquidation ? 'liquidation' : 'trade'),
       isLiquidation
     });
@@ -353,7 +374,8 @@ export class LighterWsClient {
       if (timeSinceLastMessage > staleThreshold) {
         console.warn(
           `[${new Date().toISOString()}] Lighter WebSocket stale data detected ` +
-            `market=${this.marketId}, last message ${Math.floor(timeSinceLastMessage / 1000)}s ago`
+            `market=${this.marketId}, last message ` +
+            `${Math.floor(timeSinceLastMessage / 1000)}s ago`
         );
 
         this.ws?.close();
