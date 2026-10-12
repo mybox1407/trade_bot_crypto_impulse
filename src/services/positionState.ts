@@ -67,8 +67,6 @@ export interface VirtualPosition {
     impulseDetected?: boolean;
     consolidationDetected?: boolean;
     impulseBreakoutDetected?: boolean;
-    macdCrossUp: boolean;
-    macdCrossDown: boolean;
     lastRsi: number;
     lastAtr: number;
     adx: number;
@@ -487,8 +485,6 @@ export function openPosition(data: {
     impulseDetected: data.metadata?.impulseDetected ?? false,
     consolidationDetected: data.metadata?.consolidationDetected ?? false,
     impulseBreakoutDetected: data.metadata?.impulseBreakoutDetected ?? false,
-    macdCrossUp: data.metadata?.macdCrossUp ?? false,
-    macdCrossDown: data.metadata?.macdCrossDown ?? false,
     lastRsi: data.metadata?.lastRsi ?? 0,
     lastAtr: data.metadata?.lastAtr ?? 0,
     adx: data.metadata?.adx ?? 0,
@@ -759,8 +755,6 @@ export function partialClosePosition(
       consolidationDetected: position.metadata?.consolidationDetected ?? false,
       impulseBreakoutDetected:
         position.metadata?.impulseBreakoutDetected ?? false,
-      macdCrossUp: position.metadata?.macdCrossUp ?? false,
-      macdCrossDown: position.metadata?.macdCrossDown ?? false,
       lastRsi: position.metadata?.lastRsi ?? 0,
       lastAtr: position.metadata?.lastAtr ?? 0,
       adx: position.metadata?.adx ?? 0,
