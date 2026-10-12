@@ -970,6 +970,36 @@ async function handleTradeEvent(
           : 0
       };
 
+      const averageFillPrice =
+        executionResult.averageFillPrice;
+      
+      if (
+        executionResult.filledQuantity <= 0 ||
+        averageFillPrice == null ||
+        !Number.isFinite(averageFillPrice)
+      ) {
+        const reason =
+          executionResult.message ??
+          'Fill price or filled quantity is invalid';
+      
+        tradeError('POSITION_OPEN_FAILED', reason, {
+          symbol,
+          marketId,
+          side: result.side,
+          quantity,
+          status: executionResult.status,
+          orderId: executionResult.orderId ?? null,
+          filledQuantity: executionResult.filledQuantity,
+          averageFillPrice: averageFillPrice ?? null
+        });
+      
+        if (executionResult.status === 'unknown') {
+          markReconciliationPending(symbol);
+        }
+      
+        return;
+      }
+      
       const pending: PendingFilledOpen = {
         symbol,
         marketId,
