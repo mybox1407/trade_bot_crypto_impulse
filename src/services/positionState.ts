@@ -529,10 +529,7 @@ export function openPosition(data: {
     stopLossPrice: position.stopLossPrice,
     positionId: position.id,
     regime: data.metadata?.regime ?? '',
-    balance,
-    tceScore: data.metadata?.tceScore ?? null,
-    tceRegime: data.metadata?.tceRegime ?? null,
-    tceReason: data.metadata?.tceReason ?? null
+    balance
   });
 
   return {
