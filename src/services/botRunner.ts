@@ -1,5 +1,5 @@
 import { getCandles } from './exchange';
-import { Candle } from './lighterWs'; 
+import { Candle } from './lighterWs';
 import {
   analyzeMarket,
   detectMarketRegime,
@@ -51,41 +51,51 @@ export async function runBotOnce(
 
   const lastCandle = closedCandles[closedCandles.length - 1];
   const firstCandle = closedCandles[0];
+
   console.log(`\n[=== BOTRUNNER DEBUG ${symbol} ${timeframe} ===]`);
   console.log(`Candles: total=${candles.length}, closed=${closedCandles.length}`);
   console.log(`First candle: time=${new Date(firstCandle.time).toISOString()}`);
-  console.log(`Last candle: time=${new Date(lastCandle.time).toISOString()}, open=${lastCandle.open}, high=${lastCandle.high}, low=${lastCandle.low}, close=${lastCandle.close}`);
+  console.log(
+    `Last candle: time=${new Date(lastCandle.time).toISOString()}, ` +
+    `open=${lastCandle.open}, high=${lastCandle.high}, ` +
+    `low=${lastCandle.low}, close=${lastCandle.close}`
+  );
   console.log(`Now: ${new Date().toISOString()}`);
   console.log(`[=== END DEBUG ===]\n`);
 
   const result = await analyzeMarket(closedCandles, symbol, undefined, new Date());
-
   const indicators = result.indicators;
+
   console.log(`\n[=== STRATEGY RESULT ${symbol} ===]`);
   console.log(`Side: ${result.side}, Price: ${result.price}`);
   console.log(`SL: ${result.stopLossPrice}, TP: ${result.takeProfitPrice}, Size: ${result.positionSize}`);
   console.log(`Regime: ${result.regime}, Skip: ${result.skipReason ?? 'none'}`);
   console.log(`ATR: ${indicators.lastAtr}, ATR%: ${(indicators.atrPct * 100).toFixed(3)}%`);
   console.log(`RSI: ${indicators.lastRsi.toFixed(2)}, ADX: ${indicators.adx.toFixed(2)}`);
-  console.log(`EMA20: ${indicators.ema20}, EMA50: ${indicators.regimeIndicators.ema50}, EMA200: ${indicators.ema200}`);
-  
+  console.log(
+    `EMA20: ${indicators.ema20}, ` +
+    `EMA50: ${indicators.regimeIndicators.ema50}, ` +
+    `EMA200: ${indicators.ema200}`
+  );
+
   if (result.stopLossPrice != null && result.takeProfitPrice != null && indicators.lastAtr > 0) {
     const slDistance = Math.abs(result.price - result.stopLossPrice);
     const tpDistance = Math.abs(result.takeProfitPrice - result.price);
     const slAtr = slDistance / indicators.lastAtr;
     const tpAtr = tpDistance / indicators.lastAtr;
+
     console.log(`SL distance: ${slDistance.toFixed(4)} (${slAtr.toFixed(3)} ATR)`);
     console.log(`TP distance: ${tpDistance.toFixed(4)} (${tpAtr.toFixed(3)} ATR)`);
-    console.log(`SL/TP ratio: ${(tpAtr/slAtr).toFixed(3)} (should be ~1.0 for symmetric)`);
-    
+    console.log(`SL/TP ratio: ${(tpAtr / slAtr).toFixed(3)} (should be ~1.0 for symmetric)`);
+
     if (Math.abs(slAtr - 3.0) > 0.1 || Math.abs(tpAtr - 3.0) > 0.1) {
-      console.warn(`⚠️ WARNING: SL/TP multipliers deviate from expected 3.0!`);
+      console.warn('⚠️ WARNING: SL/TP multipliers deviate from expected 3.0!');
     }
   }
+
   console.log(`[=== END RESULT ===]\n`);
 
   const hasSignal = result.buy || result.sell;
-  const tce = indicators.tce ?? null;
 
   logSignalCheck({
     timestamp: new Date().toISOString(),
@@ -97,8 +107,6 @@ export async function runBotOnce(
     takeProfitPrice: result.takeProfitPrice,
     stopLossPrice: result.stopLossPrice,
     positionSize: result.positionSize,
-    macdCrossUp: indicators.macdCrossUp,
-    macdCrossDown: indicators.macdCrossDown,
     lastRsi: indicators.lastRsi,
     lastAtr: indicators.lastAtr,
     rsiBull: false,
@@ -122,17 +130,7 @@ export async function runBotOnce(
     reclaimDetected: indicators.reclaimDetected,
     signalReason: indicators.signalReason ?? undefined,
     signalTimeIso: result.signalTimeIso,
-    isTradingWindow: result.skipReason == null,
-    tceScore: tce?.tceScore ?? null,
-    tceRegime: tce?.tceRegime ?? null,
-    tceReason: tce?.tceReason ?? null,
-    tceTrendAligned: tce?.tceTrendAligned ?? null,
-    tceErFast: tce?.tceErFast ?? null,
-    tceErSlow: tce?.tceErSlow ?? null,
-    tceRoomAtr: tce?.tceRoomAtr ?? null,
-    tceEntryExtensionAtr: tce?.tceEntryExtensionAtr ?? null,
-    tceCandleRangeAtr: tce?.tceCandleRangeAtr ?? null,
-    tceBodyRatio: tce?.tceBodyRatio ?? null
+    isTradingWindow: result.skipReason == null
   });
 
   return { symbol, timeframe, ready: true, ...result };
