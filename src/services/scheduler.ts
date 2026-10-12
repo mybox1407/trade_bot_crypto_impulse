@@ -297,36 +297,6 @@ function buildPositionMetadata(
     entryDistanceFromEma20Atr:
       indicators?.entryDistanceFromEma20Atr ?? 0,
 
-    tceScore:
-      indicators?.tce?.tceScore ?? null,
-
-    tceRegime:
-      indicators?.tce?.tceRegime ?? null,
-
-    tceReason:
-      indicators?.tce?.tceReason ?? null,
-
-    tceTrendAligned:
-      indicators?.tce?.tceTrendAligned ?? null,
-
-    tceErFast:
-      indicators?.tce?.tceErFast ?? null,
-
-    tceErSlow:
-      indicators?.tce?.tceErSlow ?? null,
-
-    tceRoomAtr:
-      indicators?.tce?.tceRoomAtr ?? null,
-
-    tceEntryExtensionAtr:
-      indicators?.tce?.tceEntryExtensionAtr ?? null,
-
-    tceCandleRangeAtr:
-      indicators?.tce?.tceCandleRangeAtr ?? null,
-
-    tceBodyRatio:
-      indicators?.tce?.tceBodyRatio ?? null,
-
     signalTime:
       signalTime ?? Date.now(),
 
@@ -528,19 +498,7 @@ async function checkSignals(): Promise<void> {
         const signalTimeIso = (result as any).signalTimeIso as string | undefined;
         const indicators =
           (result as any).indicators as any;
-        
-        const tce =
-          indicators?.tce ?? null;
-        
-        const tceScore =
-          tce?.tceScore ?? null;
-        
-        const tceRegime =
-          tce?.tceRegime ?? null;
-        
-        const tceReason =
-          tce?.tceReason ?? null;
-        
+               
         const entryPattern =
           indicators?.entryPattern ?? null;
         
@@ -617,10 +575,7 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
-            tceScore,
-            tceRegime,
-            tceReason
-          });
+           });
         
           continue;
         }
@@ -638,9 +593,6 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
-            tceScore,
-            tceRegime,
-            tceReason
           });
           continue;
         }
@@ -669,10 +621,7 @@ async function checkSignals(): Promise<void> {
             impulseDetected,
             consolidationDetected,
             impulseBreakoutDetected,
-            tceScore,
-            tceRegime,
-            tceReason
-          });
+           });
           continue;
         }
 
@@ -691,7 +640,7 @@ async function checkSignals(): Promise<void> {
               status: executionResult.status === 'unknown'
                 ? 'not-ready'
                 : 'signal',
-              regime, hasSignal: true, side, price: expectedPrice, reason, tceScore, tceRegime, tceReason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, });
+              regime, hasSignal: true, side, price: expectedPrice, reason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, });
             continue;
           }
 
@@ -772,10 +721,7 @@ async function checkSignals(): Promise<void> {
                 entryPattern,
                 impulseDetected,
                 consolidationDetected,
-                impulseBreakoutDetected,
-                tceScore,
-                tceRegime,
-                tceReason
+                impulseBreakoutDetected
               });
               continue;
             }
@@ -800,10 +746,7 @@ async function checkSignals(): Promise<void> {
             entryPattern,
             impulseDetected,
             consolidationDetected,
-            impulseBreakoutDetected,
-            tceScore,
-            tceRegime,
-            tceReason
+            impulseBreakoutDetected
           });   
           if (!PAPER_TRADING && signerClient) {
             await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol }));
