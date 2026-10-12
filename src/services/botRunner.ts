@@ -51,3 +51,15 @@ export function runTradeFlowOnce(
     atr
   });
 }
+
+/**
+ * Совместимость с прежним route /bot.
+ * Параметр timeframe оставлен для старого API, но стратегия
+ * теперь проверяет поток сделок, а свечи использует только для ATR.
+ */
+export function runBotOnce(
+  symbol = 'BTC/USDT',
+  _timeframe = '15m'
+) {
+  return runTradeFlowOnce(symbol);
+}
