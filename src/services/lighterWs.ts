@@ -22,6 +22,18 @@ export interface MarketPrice {
   bestAsk: number | null;
 }
 
+export interface LighterTrade {
+  tradeId: string;
+  marketId: number;
+  time: number;
+  price: number;
+  size: number;
+  usdAmount: number | null;
+  aggressorSide: 'buy' | 'sell';
+  type: string;
+  isLiquidation: boolean;
+}
+
 interface LighterCandle {
   t: number;
   o: number;
@@ -31,6 +43,18 @@ interface LighterCandle {
   v: number;
   V?: number;
   i?: number;
+}
+
+interface LighterTradeMessageItem {
+  trade_id?: number;
+  trade_id_str?: string;
+  market_id?: number;
+  timestamp?: number;
+  price?: string | number;
+  size?: string | number;
+  usd_amount?: string | number;
+  is_maker_ask?: boolean;
+  type?: string;
 }
 
 interface CandleMessage {
@@ -52,9 +76,19 @@ interface MarketStatsMessage {
   };
 }
 
-function toFiniteNumber(value: unknown): number | null {
-  const number = Number(value);
+interface TradeMessage {
+  type: string;
+  channel?: string;
+  trades?: LighterTradeMessageItem[];
+  liquidation_trades?: LighterTradeMessageItem[];
+}
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
@@ -70,7 +104,8 @@ export class LighterWsClient {
     private readonly marketId: number,
     private readonly resolution: string,
     private readonly onCandle: (candle: Candle) => void,
-    private readonly onPrice: (price: MarketPrice) => void
+    private readonly onPrice: (price: MarketPrice) => void,
+    private readonly onTrade: (trade: LighterTrade) => void
   ) {}
 
   connect(): void {
@@ -136,6 +171,13 @@ export class LighterWsClient {
         })
       );
 
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `trade/${this.marketId}`
+        })
+      );
+
       this.pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -149,9 +191,10 @@ export class LighterWsClient {
       try {
         this.lastMessageTime = Date.now();
 
-        const message = JSON.parse(
-          raw.toString()
-        ) as CandleMessage | MarketStatsMessage;
+        const message = JSON.parse(raw.toString()) as
+          | CandleMessage
+          | MarketStatsMessage
+          | TradeMessage;
 
         if (
           message.type === 'subscribed/candle' ||
@@ -181,7 +224,6 @@ export class LighterWsClient {
                 `[${new Date().toISOString()}] Invalid Lighter candle`,
                 candle
               );
-
               continue;
             }
 
@@ -199,15 +241,30 @@ export class LighterWsClient {
           const stats = statsMessage.market_stats;
 
           this.onPrice({
-            lastTradePrice: toFiniteNumber(
-              stats?.last_trade_price
-            ),
+            lastTradePrice: toFiniteNumber(stats?.last_trade_price),
             markPrice: toFiniteNumber(stats?.mark_price),
             indexPrice: toFiniteNumber(stats?.index_price),
             midPrice: toFiniteNumber(stats?.mid_price),
             bestBid: toFiniteNumber(stats?.best_bid_price),
             bestAsk: toFiniteNumber(stats?.best_ask_price)
           });
+
+          return;
+        }
+
+        if (
+          message.type === 'subscribed/trade' ||
+          message.type === 'update/trade'
+        ) {
+          const tradeMessage = message as TradeMessage;
+
+          for (const trade of tradeMessage.trades ?? []) {
+            this.handleTrade(trade, false);
+          }
+
+          for (const trade of tradeMessage.liquidation_trades ?? []) {
+            this.handleTrade(trade, true);
+          }
         }
       } catch (error) {
         console.error(
@@ -245,6 +302,42 @@ export class LighterWsClient {
           this.open();
         }, 3_000);
       }
+    });
+  }
+
+  private handleTrade(
+    raw: LighterTradeMessageItem,
+    isLiquidation: boolean
+  ): void {
+    const price = toFiniteNumber(raw.price);
+    const size = toFiniteNumber(raw.size);
+    const time = toFiniteNumber(raw.timestamp);
+    const marketId = toFiniteNumber(raw.market_id);
+
+    if (
+      price === null ||
+      size === null ||
+      time === null ||
+      marketId !== this.marketId ||
+      typeof raw.is_maker_ask !== 'boolean'
+    ) {
+      console.error(
+        `[${new Date().toISOString()}] Invalid Lighter trade`,
+        raw
+      );
+      return;
+    }
+
+    this.onTrade({
+      tradeId: raw.trade_id_str ?? String(raw.trade_id ?? ''),
+      marketId,
+      time,
+      price,
+      size,
+      usdAmount: toFiniteNumber(raw.usd_amount),
+      aggressorSide: raw.is_maker_ask ? 'sell' : 'buy',
+      type: raw.type ?? (isLiquidation ? 'liquidation' : 'trade'),
+      isLiquidation
     });
   }
 
