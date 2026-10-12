@@ -72,7 +72,6 @@ export function reset15mSignalState(symbol?: string): void {
 }
 
 export type TradingWindowCheck = { allowed: boolean; utcHour: number; utcPlus4Hour: number; message: string | null };
-
 export function isTradingTimeUtcPlus4(date = new Date()): boolean {
   const h = getUtcPlus4(date);
   return TRADING_HOUR_WINDOWS_UTC_PLUS_4.some(([s, e]) => h >= s && h < e);
@@ -87,7 +86,6 @@ export function getTradingWindowCheck(date = new Date()): TradingWindowCheck {
 }
 
 export const getTradingTimeSkipReason = (date = new Date()): string | null => getTradingWindowCheck(date).message;
-
 export function getCooldownRemainingMs(lastTradeAt: Date | number | string | null | undefined, now = new Date()): number {
   if (lastTradeAt == null) return 0;
   const ms = lastTradeAt instanceof Date ? lastTradeAt.getTime() : typeof lastTradeAt === 'number' ? lastTradeAt : new Date(lastTradeAt).getTime();
@@ -102,7 +100,6 @@ export function isSymbolOnCooldown(symbol: string, now = new Date()): boolean {
 
 export function setSymbolCooldown(symbol: string, now = new Date()): void { symbolCooldowns.set(symbol.toUpperCase(), now.getTime() + SYMBOL_COOLDOWN_MS); }
 export function clearSymbolCooldown(symbol: string): void { symbolCooldowns.delete(symbol.toUpperCase()); }
-
 export function getRemainingCooldownMs(symbol: string, now = new Date()): number {
   const end = symbolCooldowns.get(symbol.toUpperCase());
   if (end == null) return 0;
@@ -154,7 +151,6 @@ export type StrategyResult = {
 };
 
 const MIN_ADX_TREND = 21, MIN_ADX_RANGE = 20;
-
 const TREND_SWING_LOOKBACK = 20;
 const ER_PERIOD = 20;
 const MIN_EFFICIENCY_RATIO = 0.25;
@@ -191,10 +187,8 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const currentEma200 = last(ema200);
   const currentAtr = last(atr);
   if (!Number.isFinite(currentAtr) || currentAtr <= 0) return noPullbackSignal('invalid_trigger_atr');
-
   const ema20Rising = currentEma20 > previousEma20;
   const ema20Falling = currentEma20 < previousEma20;
-
   const lookback = PULLBACK_LOOKBACK_CANDLES;
   const recent = candles.slice(-1 - lookback, -1);
   const recentEma20 = ema20.slice(-1 - lookback, -1);
@@ -211,12 +205,10 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
 
   const longPullbackZone = touchedEma20Long || touchedEma50Long;
   const shortPullbackZone = touchedEma20Short || touchedEma50Short;
-
   let touchedEma: 'ema20' | 'ema50' | 'both' | 'none' = 'none';
   if (touchedEma20Long && touchedEma50Long) touchedEma = 'both';
   else if (touchedEma20Long) touchedEma = 'ema20';
   else if (touchedEma50Long) touchedEma = 'ema50';
-
   const lowestLow = Math.min(...recent.map(c => c.low));
   const highestHigh = Math.max(...recent.map(c => c.high));
 
@@ -225,40 +217,33 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const maxRecentEma20 = Math.max(...recentEma20);
   const longDepthAtr = (minRecentEma20 - lowestLow) / currentAtr;
   const shortDepthAtr = (highestHigh - maxRecentEma20) / currentAtr;
-
   const longDepthOk = touchedEma20Long ? longDepthAtr <= PULLBACK_MAX_DEPTH_EMA20_ATR : longDepthAtr <= PULLBACK_MAX_DEPTH_EMA50_ATR;
   const shortDepthOk = touchedEma20Short ? shortDepthAtr <= PULLBACK_MAX_DEPTH_EMA20_ATR : shortDepthAtr <= PULLBACK_MAX_DEPTH_EMA50_ATR;
   const depthOk = longDepthOk || shortDepthOk;
   const pullbackDepthAtr = longDepthOk ? longDepthAtr : shortDepthAtr;
-
   const candleRange = current.high - current.low;
   const candleRangeAtr = getCandleRangeAtr(current, currentAtr);
   const bodyAtr = getBodyAtr(current, currentAtr);
   const closePosition = candleRange > 0 ? (current.close - current.low) / candleRange : 0.5;
-
   const volumes = candles.map(c => Number(c.volume) || 0);
   const avgVolume20 = mean(volumes.slice(-21, -1));
   const currentVolume = Number(current.volume) || 0;
   const volumeRatio = avgVolume20 > 0 ? currentVolume / avgVolume20 : 0;
   const lastPullbackVolume = recent.length > 0 ? Number(recent[recent.length - 1].volume) || 0 : 0;
   const volumeVsLastPullback = lastPullbackVolume > 0 ? currentVolume / lastPullbackVolume : volumeRatio;
-
   const bullishReclaim = current.close > current.open && current.close > currentEma20 && longPullbackZone && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition >= RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
   const bearishReclaim = current.close < current.open && current.close < currentEma20 && shortPullbackZone && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition <= 1 - RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
   const validCandle = candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR && bodyAtr >= MIN_SIGNAL_BODY_ATR;
   const entryDistanceAtr = getEntryDistanceFromEma20Atr(current.close, currentEma20, currentAtr);
   const notExtended = entryDistanceAtr <= MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-
   const longContext = current.close > currentEma200 && currentEma20 > currentEma50 && currentEma50 > currentEma200 && ema20Rising && regimeIndicators.plusDi > regimeIndicators.minusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_LONG && regimeIndicators.adx <= MAX_ENTRY_ADX;
   const shortContext = current.close < currentEma200 && currentEma20 < currentEma50 && currentEma50 < currentEma200 && ema20Falling && regimeIndicators.minusDi > regimeIndicators.plusDi && regimeIndicators.adx >= MIN_ENTRY_ADX_SHORT && regimeIndicators.adx <= MAX_ENTRY_ADX;
-
   const long = longContext && longPullbackZone && longDepthOk && bullishReclaim && validCandle && notExtended;
   const short = shortContext && shortPullbackZone && shortDepthOk && bearishReclaim && validCandle && notExtended;
   const reason = long ? `long_pullback_reclaim_${touchedEma}` : short ? `short_pullback_reclaim_${touchedEma}` : null;
 
   return {
-    long, short,
-    pullbackDetected: longPullbackZone || shortPullbackZone,
+    long, short, pullbackDetected: longPullbackZone || shortPullbackZone,
     reclaimDetected: bullishReclaim || bearishReclaim,
     reason, longContext, shortContext, ema20Rising, ema20Falling,
     longPullbackZone, shortPullbackZone, touchedEma, depthOk, pullbackDepthAtr,
@@ -267,7 +252,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
     candleRangeAtr, bodyAtr, volumeRatio, entryDistanceAtr
   };
 }
-
 
 function detectSwingStructure(candles: Candle[], lookback: number): { swingHigh: number; swingLow: number; prevSwingHigh: number; prevSwingLow: number; higherHigh: boolean; higherLow: boolean; lowerHigh: boolean; lowerLow: boolean } {
   const empty = { swingHigh: 0, swingLow: 0, prevSwingHigh: 0, prevSwingLow: 0, higherHigh: false, higherLow: false, lowerHigh: false, lowerLow: false };
@@ -353,16 +337,13 @@ export function canOpenTrade(params: {
   if (!isTradingTimeUtcPlus4(now)) return { passed: false, failedFilter: 'trading_window' };
   if (isSymbolOnCooldown(symbol, now)) return { passed: false, failedFilter: 'cooldown' };
   if (side !== 'long' && side !== 'short') return { passed: false, failedFilter: 'invalid_side' };
-
   if (side === 'long') {
     const base = symbol.split('/')[0].toUpperCase();
     if (LONG_BLACKLIST.includes(base)) return { passed: false, failedFilter: 'blacklist' };
   }
-
   if (isPullback && !pullbackDetected) return { passed: false, failedFilter: 'pullback_not_detected' };
   if (isPullback && !reclaimDetected) return { passed: false, failedFilter: 'reclaim_not_detected' };
   if (!isPriceOnCorrectSideOfEma20(side, price, ema20)) return { passed: false, failedFilter: 'ema20_direction' };
-
   if (isPullback) {
     if (side === 'long' && (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG)) return { passed: false, failedFilter: 'rsi' };
     if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) return { passed: false, failedFilter: 'rsi' };
@@ -371,11 +352,8 @@ export function canOpenTrade(params: {
 
   const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
   if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return { passed: false, failedFilter: 'atr_pct' };
-
   const minAdx = side === 'long' ? MIN_ENTRY_ADX_LONG : MIN_ENTRY_ADX_SHORT;
   if (adx < minAdx || adx > MAX_ENTRY_ADX) return { passed: false, failedFilter: 'adx' };
-
-
   if (REQUIRE_DI_DIRECTION) {
     if (side === 'long' && plusDi <= minusDi) return { passed: false, failedFilter: 'di_direction' };
     if (side === 'short' && minusDi <= plusDi) return { passed: false, failedFilter: 'di_direction' };
@@ -387,12 +365,9 @@ export function canOpenTrade(params: {
   if (bbWidth > maxBbWidth) {
     return { passed: false, failedFilter: 'bb_width' };
   }
-
   if (candleRangeAtr > 0 && candleRangeAtr > MAX_SIGNAL_CANDLE_ATR) return { passed: false, failedFilter: 'signal_candle_too_large' };
-
   if (!Number.isFinite(entryDistanceFromEma20Atr)) return { passed: false, failedFilter: 'entry_distance_atr_invalid' };
   if (entryDistanceFromEma20Atr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR) return { passed: false, failedFilter: 'entry_distance_atr_high' };
-
   if (entryTooExtended) return { passed: false, failedFilter: 'entry_too_extended' };
   return { passed: true };
 }
@@ -402,18 +377,15 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   const closes = closedCandles.map(c => c.close), highs = closedCandles.map(c => c.high), lows = closedCandles.map(c => c.low);
   const regimeInfo = detectMarketRegime(closedCandles);
   const tradingWindow = getTradingWindowCheck(now);
-
   const rsi = RSI.calculate({ period: 14, values: closes });
   const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
   const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
   const ema20 = EMA.calculate({ period: 20, values: closes });
   const ema50 = EMA.calculate({ period: 50, values: closes });
   const ema200 = EMA.calculate({ period: 200, values: closes });
-
   const lastCandle = closedCandles[closedCandles.length - 1];
   const signalTime = lastCandle?.time ?? Date.now();
   const signalTimeIso = new Date(normalizeTimestamp(signalTime)).toISOString();
-
   const emptyIndicators = (): StrategyIndicators => ({
     lastRsi: 0, lastAtr: 0,
     bbUpper: 0, bbMiddle: 0, bbLower: 0, regimeReady: false,
@@ -441,13 +413,10 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   }
 
   const price = last(closes);
-
   const lastRsi = last(rsi), lastAtr = last(atr), lastBb = last(bb);
   const regime = regimeInfo.regime;
   const regimeIndicators = regimeInfo.indicators!;
-
   const trigger = detectPullbackReclaimSignal({ candles: closedCandles, ema20, ema50, ema200, atr, regimeIndicators });
-
   const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
 
   let side: 'long' | 'short' | 'none' = 'none';
@@ -463,7 +432,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   let diagnosticPattern: 'pullback_reclaim' | null = null;
   let diagnosticFailedFilter: string | null = null;
 
-
   if (!tradingWindow.allowed) skipReason = tradingWindow.message;
   else if (regime === 'high_volatility' || regime === 'range') skipReason = `Trading disabled for regime: ${regime}`;
   else if (ENABLE_TREND_UP_TRADES && regime === 'trend_up' && trigger.long) { side = 'long'; buy = true; entryPattern = 'pullback_reclaim'; }
@@ -477,7 +445,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   if (side !== 'none' && lastAtr > 0) {
     entryExtensionAtr = getEntryDistanceFromEma20Atr(price, regimeIndicators.ema20, lastAtr);
     entryTooExtended = entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-
     stopLossPrice = side === 'long' ? price - lastAtr * STOP_LOSS_ATR_MULTIPLIER : price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
     takeProfitPrice = side === 'long' ? price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER : price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
     slMultiplierUsed = STOP_LOSS_ATR_MULTIPLIER;
@@ -494,7 +461,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     const entryDistanceFromEma20Atr = getEntryDistanceFromEma20Atr(price, regimeIndicators.ema20, lastAtr);
     entryDistanceFromEma20ForTrade = entryDistanceFromEma20;
     entryDistanceFromEma20AtrForTrade = entryDistanceFromEma20Atr;
-
     const filterResult = canOpenTrade({
       symbol, side, price, ema20: regimeIndicators.ema20, lastRsi,
       atrPct: regimeIndicators.atrPct, adx: regimeIndicators.adx,
@@ -510,12 +476,10 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
       diagnosticPattern = entryPattern ?? diagnosticPattern ?? 'pullback_reclaim';
       diagnosticFailedFilter = filterResult.failedFilter ?? 'unknown';
       const rejectedSide = side, rejectedPattern = entryPattern;
-
       const r = resetSignalState({ buy, sell, side, takeProfitPrice, stopLossPrice, positionSize });
       buy = r.buy; sell = r.sell; side = r.side;
       takeProfitPrice = r.takeProfitPrice; stopLossPrice = r.stopLossPrice; positionSize = r.positionSize;
       entryPattern = null;
-
       if (skipReason == null) {
         const failedFilter = filterResult.failedFilter ?? 'unknown';
         const isShortSide = rejectedSide === 'short';
@@ -525,7 +489,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
         const maxCandleAtr = MAX_SIGNAL_CANDLE_ATR;
         const maxDistanceAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
         const signalReason = trigger.reason ?? '-';
-
         skipReason = [
           `Filter failed: ${failedFilter}`, `Signal: ${signalReason}`, `Entry pattern: ${rejectedPattern ?? '-'}`,
           `Pullback: ${trigger.pullbackDetected}`, `Reclaim: ${trigger.reclaimDetected}`,
@@ -552,7 +515,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
 
   const entryDistanceFromEma20ForLog = side !== 'none' ? getEntryDistanceFromEma20(price, regimeIndicators.ema20) : entryDistanceFromEma20ForTrade;
   const entryDistanceFromEma20AtrForLog = side !== 'none' && lastAtr > 0 && entryDistanceFromEma20ForLog != null ? entryDistanceFromEma20ForLog / lastAtr : entryDistanceFromEma20AtrForTrade;
-
   return {
     price, buy, sell, side, takeProfitPrice, stopLossPrice, positionSize,
     regime, skipReason, signalTime, signalTimeIso,
@@ -587,14 +549,11 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
 }
 
 export type TelegramSender = (message: string) => Promise<void>;
-
 export function formatStrategyDiagnostics(result: StrategyResult): string {
   const i = result.indicators;
   const r = i.regimeIndicators;
   const pattern = i.diagnosticPattern ?? i.entryPattern ?? 'pullback_reclaim';
-
   const side = result.side === 'short' ? 'short' : 'long';
-
   const rsiRange = side === 'short' ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
   const adxRange = side === 'short' ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
   const maxAtrPct = side === 'short' ? MAX_LAST_ATR_PCT_SHORT : MAX_LAST_ATR_PCT_LONG;
@@ -604,7 +563,6 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
   // ИСПРАВЛЕНО: нейтральный расчёт, всегда заполнен
   const ema20Direction = r.lastClose > r.ema20 ? 'above EMA20' : 'below EMA20';
   const distEma20Atr = r.lastAtr > 0 ? (Math.abs(r.lastClose - r.ema20) / r.lastAtr).toFixed(3) : '-';
-
   return [
     `Signal: ${i.signalReason ?? '-'}`, `Entry pattern: ${pattern}`, `Filter failed: ${i.diagnosticFailedFilter ?? '-'}`,
     '', '--- Pullback + Reclaim checks ---',
