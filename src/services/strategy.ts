@@ -33,6 +33,7 @@ export interface TradeFlowIndicators {
   referencePrice: number | null;
   priceMoveAtr: number | null;
   excludedLiquidationCount: number;
+  baselineNonEmptyBuckets: number;
 }
 
 export interface TradeFlowResult {
@@ -82,6 +83,142 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS
 };
 
+export interface TradeFlowBaseline {
+  ready: boolean;
+  nonEmptyBuckets: number;
+  volumePerWindow: number | null;
+  reason: string | null;
+}
+
+/**
+ * Накапливает USD-объём в секундных buckets.
+ * Создавать отдельный экземпляр на каждый рынок и обновлять
+ * на каждом новом WS trade event.
+ */
+export class TradeFlowBaselineTracker {
+  private readonly secondBuckets = new Map<number, number>();
+
+  constructor(
+    private readonly config: TradeFlowConfig =
+      DEFAULT_TRADE_FLOW_CONFIG
+  ) {}
+
+  addTrade(trade: LighterTrade): void {
+    if (
+      !isValidTrade(trade) ||
+      (
+        this.config.excludeLiquidations &&
+        trade.isLiquidation
+      )
+    ) {
+      return;
+    }
+
+    const notional = getNotional(trade);
+
+    if (!Number.isFinite(notional) || notional <= 0) {
+      return;
+    }
+
+    const bucketTimestamp =
+      Math.floor(trade.receivedAt / 1_000) * 1_000;
+
+    this.secondBuckets.set(
+      bucketTimestamp,
+      (this.secondBuckets.get(bucketTimestamp) ?? 0) + notional
+    );
+
+    this.prune(trade.receivedAt);
+  }
+
+  getBaseline(now = Date.now()): TradeFlowBaseline {
+    this.prune(now);
+
+    const baselineStart =
+      now - this.config.windowMs - this.config.baselineMs;
+    const baselineEnd =
+      now - this.config.windowMs;
+    const bucketDuration =
+      this.config.baselineMs / this.config.baselineBuckets;
+
+    const bucketVolumes =
+      Array<number>(this.config.baselineBuckets).fill(0);
+
+    for (const [timestamp, volume] of this.secondBuckets) {
+      if (
+        timestamp < baselineStart ||
+        timestamp >= baselineEnd
+      ) {
+        continue;
+      }
+
+      const bucketIndex = Math.min(
+        this.config.baselineBuckets - 1,
+        Math.floor(
+          (timestamp - baselineStart) / bucketDuration
+        )
+      );
+
+      if (bucketIndex >= 0) {
+        bucketVolumes[bucketIndex] += volume;
+      }
+    }
+
+    const nonEmptyBuckets =
+      bucketVolumes.filter(volume => volume > 0).length;
+
+    if (nonEmptyBuckets < this.config.minBaselineBuckets) {
+      return {
+        ready: false,
+        nonEmptyBuckets,
+        volumePerWindow: null,
+        reason:
+          `Warming trade-flow baseline: ` +
+          `${nonEmptyBuckets}/${this.config.minBaselineBuckets} ` +
+          `active buckets`
+      };
+    }
+
+    const volumePerWindow =
+      bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
+      this.config.baselineBuckets;
+
+    if (!Number.isFinite(volumePerWindow) || volumePerWindow <= 0) {
+      return {
+        ready: false,
+        nonEmptyBuckets,
+        volumePerWindow: null,
+        reason: 'Baseline volume is zero'
+      };
+    }
+
+    return {
+      ready: true,
+      nonEmptyBuckets,
+      volumePerWindow,
+      reason: null
+    };
+  }
+
+  reset(): void {
+    this.secondBuckets.clear();
+  }
+
+  private prune(now: number): void {
+    const oldestKeptTimestamp =
+      now -
+      this.config.windowMs -
+      this.config.baselineMs -
+      2_000;
+
+    for (const timestamp of this.secondBuckets.keys()) {
+      if (timestamp < oldestKeptTimestamp) {
+        this.secondBuckets.delete(timestamp);
+      }
+    }
+  }
+}
+
 interface Aggregate {
   buyVolume: number;
   sellVolume: number;
@@ -99,8 +236,10 @@ function isValidTrade(trade: LighterTrade): boolean {
     trade.price > 0 &&
     Number.isFinite(trade.size) &&
     trade.size > 0 &&
-    (trade.aggressorSide === 'buy' ||
-      trade.aggressorSide === 'sell')
+    (
+      trade.aggressorSide === 'buy' ||
+      trade.aggressorSide === 'sell'
+    )
   );
 }
 
@@ -157,6 +296,7 @@ function aggregate(
     if (firstPrice == null) {
       firstPrice = trade.price;
     }
+
     lastPrice = trade.price;
   }
 
@@ -196,9 +336,10 @@ function emptyResult(
 }
 
 /**
- * Анализирует поток сделок, используя receivedAt для оконной агрегации.
- * ATR передаётся из вызывающего слоя; функция не читает свечи и не хранит
- * состояние между вызовами.
+ * Анализирует поток сделок.
+ *
+ * baselineTracker обязателен для рабочего rolling-baseline:
+ * его нужно отдельно обновлять через addTrade() при каждом WS-событии.
  */
 export function analyzeTradeFlow(
   symbol: string,
@@ -207,18 +348,24 @@ export function analyzeTradeFlow(
     now?: number;
     atr?: number | null;
     config?: Partial<TradeFlowConfig>;
+    baselineTracker?: TradeFlowBaselineTracker;
   }
 ): TradeFlowResult {
   const config: TradeFlowConfig = {
     ...DEFAULT_TRADE_FLOW_CONFIG,
     ...options?.config
   };
+
   const now = options?.now ?? Date.now();
 
   const valid = trades
     .filter(isValidTrade)
     .filter(trade => trade.receivedAt <= now)
-    .filter(trade => now - trade.receivedAt <= config.baselineMs + config.windowMs)
+    .filter(
+      trade =>
+        now - trade.receivedAt <=
+        config.baselineMs + config.windowMs
+    )
     .sort((a, b) => a.receivedAt - b.receivedAt);
 
   const current = aggregate(
@@ -228,45 +375,65 @@ export function analyzeTradeFlow(
     config.excludeLiquidations
   );
 
-  const previousStart = now - config.windowMs - config.baselineMs;
-  const previousEnd = now - config.windowMs;
+  const trackerBaseline =
+    options?.baselineTracker?.getBaseline(now);
 
-  const bucketMs =
-    config.baselineMs / config.baselineBuckets;
+  let baselineVolumePerWindow =
+    trackerBaseline?.volumePerWindow ?? null;
 
-  const bucketVolumes: number[] = [];
+  let nonEmptyBaselineBuckets =
+    trackerBaseline?.nonEmptyBuckets ?? 0;
+
   let excludedLiquidationCount =
     current.excludedLiquidationCount;
 
-  for (let i = 0; i < config.baselineBuckets; i += 1) {
-    const bucketStart = previousStart + i * bucketMs;
-    const bucketEnd =
-      i === config.baselineBuckets - 1
-        ? previousEnd
-        : bucketStart + bucketMs;
+  // Fallback позволяет работать без tracker, если передан полный
+  // исторический буфер достаточной длины.
+  if (!options?.baselineTracker) {
+    const baselineStart =
+      now - config.windowMs - config.baselineMs;
+    const baselineEnd =
+      now - config.windowMs;
+    const bucketDuration =
+      config.baselineMs / config.baselineBuckets;
 
-    const bucket = aggregate(
-      valid,
-      bucketStart,
-      bucketEnd,
-      config.excludeLiquidations
-    );
+    const bucketVolumes =
+      Array<number>(config.baselineBuckets).fill(0);
 
-    bucketVolumes.push(
-      bucket.buyVolume + bucket.sellVolume
-    );
-    excludedLiquidationCount +=
-      bucket.excludedLiquidationCount;
+    for (let i = 0; i < config.baselineBuckets; i += 1) {
+      const bucketStart =
+        baselineStart + i * bucketDuration;
+      const bucketEnd =
+        i === config.baselineBuckets - 1
+          ? baselineEnd
+          : bucketStart + bucketDuration;
+
+      const bucket = aggregate(
+        valid,
+        bucketStart,
+        bucketEnd,
+        config.excludeLiquidations
+      );
+
+      bucketVolumes[i] =
+        bucket.buyVolume + bucket.sellVolume;
+
+      excludedLiquidationCount +=
+        bucket.excludedLiquidationCount;
+    }
+
+    nonEmptyBaselineBuckets =
+      bucketVolumes.filter(volume => volume > 0).length;
+
+    if (nonEmptyBaselineBuckets >= config.minBaselineBuckets) {
+      const value =
+        bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
+        config.baselineBuckets;
+
+      baselineVolumePerWindow =
+        value > 0 ? value : null;
+    }
   }
-
-  const nonEmptyBaselineBuckets =
-    bucketVolumes.filter(volume => volume > 0).length;
-
-  const baselineVolumePerWindow =
-    nonEmptyBaselineBuckets >= config.minBaselineBuckets
-      ? bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
-        config.baselineBuckets
-      : null;
 
   const totalVolume =
     current.buyVolume + current.sellVolume;
@@ -284,6 +451,7 @@ export function analyzeTradeFlow(
 
   const latestTrade = valid[valid.length - 1];
   const price = latestTrade?.price ?? 0;
+
   const atr =
     options?.atr != null &&
     Number.isFinite(options.atr) &&
@@ -292,8 +460,10 @@ export function analyzeTradeFlow(
       : null;
 
   const referencePrice = current.firstPrice;
+
   const priceMove =
-    current.lastPrice != null && referencePrice != null
+    current.lastPrice != null &&
+    referencePrice != null
       ? current.lastPrice - referencePrice
       : null;
 
@@ -313,7 +483,8 @@ export function analyzeTradeFlow(
     imbalance,
     referencePrice,
     priceMoveAtr,
-    excludedLiquidationCount
+    excludedLiquidationCount,
+    baselineNonEmptyBuckets: nonEmptyBaselineBuckets
   };
 
   if (!latestTrade || price <= 0) {
@@ -336,15 +507,13 @@ export function analyzeTradeFlow(
     );
   }
 
-  if (
-    baselineVolumePerWindow == null ||
-    nonEmptyBaselineBuckets < config.minBaselineBuckets
-  ) {
+  if (baselineVolumePerWindow == null) {
     return emptyResult(
       symbol,
       price,
       now,
-      'Insufficient trade-flow baseline',
+      trackerBaseline?.reason ??
+        'Insufficient trade-flow baseline',
       indicators
     );
   }
@@ -431,8 +600,11 @@ export function analyzeTradeFlow(
     );
   }
 
-  const stopDistance = atr * config.stopAtrMultiplier;
-  const targetDistance = atr * config.takeProfitAtrMultiplier;
+  const stopDistance =
+    atr * config.stopAtrMultiplier;
+
+  const targetDistance =
+    atr * config.takeProfitAtrMultiplier;
 
   const stopLossPrice =
     side === 'long'
@@ -445,8 +617,6 @@ export function analyzeTradeFlow(
       : price - targetDistance;
 
   const signalTime = latestTrade.time;
-  const signalTimeIso =
-    new Date(signalTime).toISOString();
 
   return {
     symbol,
@@ -461,7 +631,7 @@ export function analyzeTradeFlow(
     regime: 'aggressive_trade_flow_spike',
     skipReason: null,
     signalTime,
-    signalTimeIso,
+    signalTimeIso: new Date(signalTime).toISOString(),
     indicators
   };
 }
@@ -477,8 +647,3 @@ export function detectMarketRegime(_candles: unknown[]): {
     indicators: null
   };
 }
-
-/**
- * Старые export-имена намеренно не оставлены:
- * новая стратегия не использует свечной режим и индикаторы.
- */
