@@ -135,7 +135,7 @@ type PendingFilledOpen = {
   requestedQuantity: number;
   filledQuantity: number;
   expectedPrice: number;
-  averageFillPrice: number;
+  : number;
   takeProfitPrice: number;
   stopLossPrice: number;
   exchangeStopLossPrice: number;
@@ -552,7 +552,7 @@ function savePendingFilledOpen(
     marketId: input.marketId,
     side: input.side,
     filledQuantity: input.filledQuantity,
-    averageFillPrice: input.averageFillPrice,
+    : input.,
     orderId: input.orderId ?? null
   });
 }
@@ -566,7 +566,7 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     symbol: input.symbol,
     marketId: input.marketId,
     side: input.side,
-    entryPrice: input.averageFillPrice,
+    entryPrice: input.,
     quantity: input.filledQuantity,
     takeProfitPrice: input.takeProfitPrice,
     stopLossPrice: input.stopLossPrice,
@@ -933,8 +933,8 @@ async function handleTradeEvent(
 
       const fillConfirmed =
         executionResult.filledQuantity > 0 &&
-        executionResult.averageFillPrice != null &&
-        Number.isFinite(executionResult.averageFillPrice);
+        executionResult. != null &&
+        Number.isFinite(executionResult.);
 
       if (!fillConfirmed) {
         const reason =
@@ -970,13 +970,13 @@ async function handleTradeEvent(
           : 0
       };
 
-      const averageFillPrice =
-        executionResult.averageFillPrice;
+      const  =
+        executionResult.;
       
       if (
         executionResult.filledQuantity <= 0 ||
-        averageFillPrice == null ||
-        !Number.isFinite(averageFillPrice)
+         == null ||
+        !Number.isFinite()
       ) {
         const reason =
           executionResult.message ??
@@ -1007,8 +1007,7 @@ async function handleTradeEvent(
         requestedQuantity: quantity,
         filledQuantity: executionResult.filledQuantity,
         expectedPrice,
-        averageFillPrice:
-          executionResult.averageFillPrice,
+        averageFillPrice, 
         takeProfitPrice: result.takeProfitPrice,
         stopLossPrice: result.stopLossPrice,
         exchangeStopLossPrice: result.stopLossPrice,
