@@ -2,7 +2,9 @@ import { ATR } from 'technicalindicators';
 
 import {
   getCandles,
-  getTrades
+  getMarketTimeframe,
+  getTrades,
+  getTradeFlowBaselineTracker
 } from './exchange';
 
 import {
@@ -43,23 +45,27 @@ export function runTradeFlowOnce(
   now = Date.now()
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
-  const candles: Candle[] = getCandles(symbol, '1m', 250);
+  const timeframe = getMarketTimeframe(symbol) ?? '15m';
+  const candles: Candle[] =
+    getCandles(symbol, timeframe, 250);
   const atr = calculateAtr(candles);
+  const baselineTracker =
+    getTradeFlowBaselineTracker(symbol);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
-    atr
+    atr,
+    baselineTracker
   });
 }
 
 /**
- * Совместимость с прежним route /bot.
- * Параметр timeframe оставлен для старого API, но стратегия
- * теперь проверяет поток сделок, а свечи использует только для ATR.
+ * Совместимость со старым route /bot.
+ * Вход по-прежнему анализируется по потоку сделок.
  */
 export function runBotOnce(
   symbol = 'BTC/USDT',
   _timeframe = '15m'
-) {
+): TradeFlowResult {
   return runTradeFlowOnce(symbol);
 }
