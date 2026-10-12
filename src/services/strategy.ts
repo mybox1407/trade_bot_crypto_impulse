@@ -160,6 +160,10 @@ type RegimeIndicators = {
   lastClose: number; lastAtr: number; atrPct: number; adx: number; previousAdx: number; adxRising: boolean;
   plusDi: number; minusDi: number; ema20: number; ema50: number; ema200: number; previousEma20: number;
   previousEma50: number; bbWidth: number; previousBbWidth: number; bbWidthRising: boolean; avgVol20: number; candleRangeAtr: number;
+  swingHigh: number; swingLow: number; prevSwingHigh: number; prevSwingLow: number;
+  higherHigh: boolean; higherLow: boolean; lowerHigh: boolean; lowerLow: boolean;
+  trendStructureUp: boolean; trendStructureDown: boolean;
+  efficiencyRatio: number; netChange: number; sumAbsChanges: number;
 };
 
 type FilterCheckResult = { passed: boolean; failedFilter?: string };
@@ -198,6 +202,10 @@ const MIN_ADX_TREND = 21, MIN_ADX_RANGE = 20, BB_SQUEEZE_THRESHOLD = 0.05;
 const BREAKOUT_ATR_BUFFER_K = 0.2, BREAKOUT_BODY_ATR_MIN = 0.6, MAX_EXTREMUM_DISTANCE_ATR = 2.5;
 const EXTREMUM_LOOKBACK = 30, BREAKOUT_MIN_ATR_PCT = 0.015, BREAKOUT_MAX_ATR_PCT = 0.035;
 const BREAKOUT_MIN_BB_WIDTH = 0.03, BREAKOUT_MAX_BB_WIDTH = 0.08;
+
+const TREND_SWING_LOOKBACK = 20;
+const ER_PERIOD = 20;
+const MIN_EFFICIENCY_RATIO = 0.25;
 
 type SignalState = { buy: boolean; sell: boolean; side: 'long' | 'short' | 'none'; takeProfitPrice: number | null; stopLossPrice: number | null; positionSize: number | null };
 const resetSignalState = (s: SignalState): SignalState => ({ ...s, buy: false, sell: false, side: 'none', takeProfitPrice: null, stopLossPrice: null, positionSize: null });
@@ -271,8 +279,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const depthOk = longDepthOk || shortDepthOk;
   const pullbackDepthAtr = longDepthOk ? longDepthAtr : shortDepthAtr;
 
-  const recentHigh = Math.max(...recent.map(c => c.high));
-  const recentLow = Math.min(...recent.map(c => c.low));
   const candleRange = current.high - current.low;
   const candleRangeAtr = getCandleRangeAtr(current, currentAtr);
   const bodyAtr = getBodyAtr(current, currentAtr);
@@ -285,8 +291,8 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const lastPullbackVolume = recent.length > 0 ? Number(recent[recent.length - 1].volume) || 0 : 0;
   const volumeVsLastPullback = lastPullbackVolume > 0 ? currentVolume / lastPullbackVolume : volumeRatio;
 
-  const bullishReclaim = current.close > current.open && current.close > currentEma20 && current.close > recentHigh && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition >= RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
-  const bearishReclaim = current.close < current.open && current.close < currentEma20 && current.close < recentLow && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition <= 1 - RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
+  const bullishReclaim = current.close > current.open && current.close > currentEma20 && longPullbackZone && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition >= RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
+  const bearishReclaim = current.close < current.open && current.close < currentEma20 && shortPullbackZone && bodyAtr >= RECLAIM_MIN_BODY_ATR && closePosition <= 1 - RECLAIM_MIN_CLOSE_POSITION && volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
   const validCandle = candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR && bodyAtr >= MIN_SIGNAL_BODY_ATR;
   const entryDistanceAtr = getEntryDistanceFromEma20Atr(current.close, currentEma20, currentAtr);
   const notExtended = entryDistanceAtr <= MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
@@ -352,6 +358,35 @@ function detectImpulseContinuationSignal(params: { candles: Candle[]; ema20: num
   return { long: false, short: false, reason: null, impulseDetected: bullishImpulse || bearishImpulse, consolidationDetected, breakoutDetected: breakoutUp || breakoutDown, breakoutLevel: null, consolidationLow, consolidationHigh };
 }
 
+
+function detectSwingStructure(candles: Candle[], lookback: number): { swingHigh: number; swingLow: number; prevSwingHigh: number; prevSwingLow: number; higherHigh: boolean; higherLow: boolean; lowerHigh: boolean; lowerLow: boolean } {
+  const empty = { swingHigh: 0, swingLow: 0, prevSwingHigh: 0, prevSwingLow: 0, higherHigh: false, higherLow: false, lowerHigh: false, lowerLow: false };
+  if (candles.length < lookback + 5) return empty;
+  const recent = candles.slice(-lookback);
+  const swingHighs: number[] = [], swingLows: number[] = [];
+  for (let i = 2; i < recent.length - 2; i++) {
+    const c = recent[i];
+    if (c.high > recent[i-1].high && c.high > recent[i-2].high && c.high > recent[i+1].high && c.high > recent[i+2].high) swingHighs.push(c.high);
+    if (c.low < recent[i-1].low && c.low < recent[i-2].low && c.low < recent[i+1].low && c.low < recent[i+2].low) swingLows.push(c.low);
+  }
+  const sh = swingHighs.slice(-2), sl = swingLows.slice(-2);
+  return {
+    swingHigh: sh.at(-1) ?? 0, swingLow: sl.at(-1) ?? 0,
+    prevSwingHigh: sh.length > 1 ? sh[0] : 0, prevSwingLow: sl.length > 1 ? sl[0] : 0,
+    higherHigh: sh.length > 1 && sh[1] > sh[0], higherLow: sl.length > 1 && sl[1] > sl[0],
+    lowerHigh: sh.length > 1 && sh[1] < sh[0], lowerLow: sl.length > 1 && sl[1] < sl[0]
+  };
+}
+
+function calculateEfficiencyRatio(closes: number[], period: number): { efficiencyRatio: number; netChange: number; sumAbsChanges: number } {
+  if (closes.length < period + 1) return { efficiencyRatio: 0, netChange: 0, sumAbsChanges: 0 };
+  const recent = closes.slice(-period - 1);
+  const netChange = Math.abs(recent[recent.length - 1] - recent[0]);
+  let sumAbsChanges = 0;
+  for (let i = 1; i < recent.length; i++) sumAbsChanges += Math.abs(recent[i] - recent[i - 1]);
+  return { efficiencyRatio: sumAbsChanges > 0 ? netChange / sumAbsChanges : 0, netChange, sumAbsChanges };
+}
+
 export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; ready: boolean; indicators: RegimeIndicators | null } {
   const closes = candles.map(c => c.close), highs = candles.map(c => c.high), lows = candles.map(c => c.low);
   const volumes = candles.map(c => Number(c.volume) || 0);
@@ -372,8 +407,13 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
   const candleRangeAtr = candles.length > 0 ? getCandleRangeAtr(candles[candles.length - 1], lastAtr) : 0;
   const compression = bbWidth <= BB_SQUEEZE_THRESHOLD;
-  const strongTrendUp = lastClose > lastEma200 && lastEma20 > lastEma50 && lastEma50 > lastEma200 && lastEma20 > previousEma20 && adxValue >= MIN_ADX_TREND && plusDi > minusDi;
-  const strongTrendDown = lastClose < lastEma200 && lastEma20 < lastEma50 && lastEma50 < lastEma200 && lastEma20 < previousEma20 && adxValue >= MIN_ADX_TREND && minusDi > plusDi;
+  const swing = detectSwingStructure(candles, TREND_SWING_LOOKBACK);
+  const er = calculateEfficiencyRatio(closes, ER_PERIOD);
+  // Смягчённая структура: достаточно HH или HL для long, LH или LL для short, при ER >= 0.25.
+  const trendStructureUp = (swing.higherHigh || swing.higherLow) && er.efficiencyRatio >= MIN_EFFICIENCY_RATIO;
+  const trendStructureDown = (swing.lowerHigh || swing.lowerLow) && er.efficiencyRatio >= MIN_EFFICIENCY_RATIO;
+  const strongTrendUp = lastClose > lastEma200 && lastEma20 > lastEma50 && lastEma50 > lastEma200 && lastEma20 > previousEma20 && trendStructureUp && adxValue >= MIN_ADX_TREND && plusDi > minusDi;
+  const strongTrendDown = lastClose < lastEma200 && lastEma20 < lastEma50 && lastEma50 < lastEma200 && lastEma20 < previousEma20 && trendStructureDown && adxValue >= MIN_ADX_TREND && minusDi > plusDi;
   const range = adxValue < MIN_ADX_RANGE && bbWidth < 0.08;
   const breakoutWatch = compression && adxValue >= 15 && adxValue <= 28 && getVolumeSpike(volumes, avgVol20);
   const highVolatility = atrPct > 0.025 || bbWidth > 0.12;
@@ -385,7 +425,10 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   else if (breakoutWatch) regime = 'breakout_watch';
   else if (range) regime = 'range';
 
-  return { regime, ready: true, indicators: { lastClose, lastAtr, atrPct, adx: adxValue, previousAdx: previousAdxValue, adxRising, plusDi, minusDi, ema20: lastEma20, ema50: lastEma50, ema200: lastEma200, previousEma20, previousEma50, bbWidth, previousBbWidth, bbWidthRising, avgVol20, candleRangeAtr } };
+  return { regime, ready: true, indicators: { lastClose, lastAtr, atrPct, adx: adxValue, previousAdx: previousAdxValue, adxRising, plusDi, minusDi, ema20: lastEma20, ema50: lastEma50, ema200: lastEma200, previousEma20, previousEma50, bbWidth, previousBbWidth, bbWidthRising, avgVol20, candleRangeAtr,
+    swingHigh: swing.swingHigh, swingLow: swing.swingLow, prevSwingHigh: swing.prevSwingHigh, prevSwingLow: swing.prevSwingLow,
+    higherHigh: swing.higherHigh, higherLow: swing.higherLow, lowerHigh: swing.lowerHigh, lowerLow: swing.lowerLow,
+    trendStructureUp, trendStructureDown, efficiencyRatio: er.efficiencyRatio, netChange: er.netChange, sumAbsChanges: er.sumAbsChanges } };
 }
 
 export function canOpenTrade(params: {
