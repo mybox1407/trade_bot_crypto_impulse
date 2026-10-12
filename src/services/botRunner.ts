@@ -1,57 +1,114 @@
-import { getCandles } from './exchange';
-import { analyzeMarket, detectMarketRegime, StrategyResult } from './strategy';
-import { logSignalCheck } from './logger';
+import {
+  getCandles,
+  getTrades
+} from './exchange';
 
-export async function runBotOnce(symbol = 'BTC/USDT', timeframe = '15m') {
-  const candles = await getCandles(symbol, timeframe, 250);
+import {
+  analyzeTradeFlow,
+  type TradeFlowResult
+} from './strategy';
 
-  if (candles.length < 200) {
-    return { symbol, timeframe, ready: false, reason: 'not_enough_candles' };
+import {
+  ATR
+} from 'technicalindicators';
+
+export type TradeFlowRunResult =
+  | TradeFlowResult
+  | {
+      symbol: string;
+      ready: false;
+      buy: false;
+      sell: false;
+      side: 'none';
+      price: number;
+      takeProfitPrice: null;
+      stopLossPrice: null;
+      positionSize: null;
+      regime: 'trade_flow';
+      skipReason: string;
+      signalTime: number;
+      signalTimeIso: string;
+      indicators: null;
+    };
+
+function getLatestAtr(symbol: string): number | null {
+  const candles = getCandles(symbol, '1m', 250);
+
+  if (candles.length < 15) {
+    return null;
   }
 
-  const result = analyzeMarket(candles, symbol);
-  
-  if (result.buy || result.sell) {
-    logSignalCheck({
-      timestamp: new Date().toISOString(),
+  const atrValues = ATR.calculate({
+    period: 14,
+    high: candles.map(candle => candle.high),
+    low: candles.map(candle => candle.low),
+    close: candles.map(candle => candle.close)
+  });
+
+  const atr = atrValues[atrValues.length - 1];
+
+  return Number.isFinite(atr) && atr > 0
+    ? atr
+    : null;
+}
+
+/**
+ * Вызывать на событии новой сделки из WebSocket.
+ * Свечи используются только для ATR стопа/цели, не для сигнала входа.
+ */
+export function runTradeFlowOnce(
+  symbol: string,
+  now = Date.now()
+): TradeFlowRunResult {
+  const trades = getTrades(symbol);
+  const latestTrade = trades[trades.length - 1];
+  const atr = getLatestAtr(symbol);
+
+  if (!latestTrade) {
+    return {
       symbol,
-      timeframe,
-      side: result.side,
-      price: result.price,
-      regime: result.regime,
-      takeProfitPrice: result.takeProfitPrice,
-      stopLossPrice: result.stopLossPrice,
-      positionSize: result.positionSize,
-      macdCrossUp: result.indicators.macdCrossUp,
-      macdCrossDown: result.indicators.macdCrossDown,
-      lastRsi: result.indicators.lastRsi,
-      lastAtr: result.indicators.lastAtr,
-      rsiBull: false, // удалено из стратегии
-      rsiBear: false, // удалено из стратегии
-      bbUpper: result.indicators.bbUpper,
-      bbMiddle: result.indicators.bbMiddle,
-      bbLower: result.indicators.bbLower,
-      adx: result.indicators.adx,
-      adxRising: result.indicators.regimeIndicators.adxRising,
-      ema20: result.indicators.ema20,
-      ema50: result.indicators.regimeIndicators.ema50,
-      ema200: result.indicators.ema200,
-      bbWidth: result.indicators.bbWidth,
-      atrPct: result.indicators.atrPct,
-      signalTriggered: true,
-      positionOpened: false
-    });
+      ready: false,
+      buy: false,
+      sell: false,
+      side: 'none',
+      price: 0,
+      takeProfitPrice: null,
+      stopLossPrice: null,
+      positionSize: null,
+      regime: 'trade_flow',
+      skipReason: 'No trades received for market',
+      signalTime: now,
+      signalTimeIso: new Date(now).toISOString(),
+      indicators: null
+    };
   }
 
-  return { symbol, timeframe, ready: true, ...result };
-}
-
-export async function getMarketRegimeOnce(symbol = 'BTC/USDT', timeframe = '15m') {
-  const candles = await getCandles(symbol, timeframe, 250);
-
-  if (candles.length < 200) {
-    return { symbol, timeframe, ready: false, reason: 'not_enough_candles' };
+  if (atr == null) {
+    return {
+      symbol,
+      ready: false,
+      buy: false,
+      sell: false,
+      side: 'none',
+      price: latestTrade.price,
+      takeProfitPrice: null,
+      stopLossPrice: null,
+      positionSize: null,
+      regime: 'trade_flow',
+      skipReason: 'ATR unavailable: insufficient candle history',
+      signalTime: latestTrade.time,
+      signalTimeIso: new Date(latestTrade.time).toISOString(),
+      indicators: null
+    };
   }
 
-  return { symbol, timeframe, ...detectMarketRegime(candles) };
+  return analyzeTradeFlow(symbol, trades, {
+    now,
+    atr
+  });
 }
+
+/**
+ * Старая функция удалена намеренно:
+ * бот больше не сканирует входы по 15m свечам.
+ */
