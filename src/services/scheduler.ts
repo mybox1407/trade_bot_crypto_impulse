@@ -4,7 +4,7 @@ import { stopMarketData, getMarkPrice, resolveMarket, normalizeSymbol } from './
 import { getPositions, openPosition, closePosition, hasOpenPosition, getOpenPositionsCount, MAX_PARALLEL_POSITIONS, getBalance, getRiskCapital, getPositionNotional,
   updatePositionMetadata, flushPositionPersistence, beginPositionOpening, endPositionOpening, isPositionOpening, loadReconciliationPendingSymbols, addReconciliationPendingSymbol,
   removeReconciliationPendingSymbol, isReconciliationPendingSymbol } from './positionState';
-import { TRADE_FEE_RATE, isTradingTimeUtcPlus4, IMPULSE_MAX_RISK_PER_TRADE, getCooldownRemainingMs, formatStrategyDiagnostics } from './strategy';
+import { TRADE_FEE_RATE, isTradingTimeUtcPlus4, getCooldownRemainingMs, formatStrategyDiagnostics } from './strategy';
 import { logPositionCheck, logError, logSignalCheck } from './logger';
 import { notifyStartup, notifyError, sendAggregatedSignalSummary } from './telegram';
 import { refreshTopMarkets, startMarketRefresh, stopMarketRefresh, getActiveTradingPairs, getActiveMarket } from './scheduler.dynamic.parts';
@@ -32,11 +32,7 @@ const symbolLocks = new Map<string, number>();
 // Cooldown после сделки (1 час)
 const symbolCooldowns = new Map<string, number>();
 
-type EntryPattern =
-  | 'pullback_reclaim'
-  | 'impulse_continuation'
-  | 'breakout'
-  | null;
+type EntryPattern = 'pullback_reclaim' | null;
 
 type SignalResult = {
   symbol: string;
@@ -54,12 +50,6 @@ type SignalResult = {
   reason?: string;
   diagnostics?: string;
   entryPattern?: EntryPattern;
-  impulseDetected?: boolean;
-  consolidationDetected?: boolean;
-  impulseBreakoutDetected?: boolean;
-  tceScore?: number | null;
-  tceRegime?: string | null;
-  tceReason?: string | null;
 };
 
 type TradingRegime = 'trend_up' | 'trend_down';
@@ -584,8 +574,6 @@ async function checkSignals(): Promise<void> {
           takeProfitPrice: takeProfitPrice ?? null,
           stopLossPrice: stopLossPrice ?? null,
           positionSize: positionSize ?? null,
-          macdCrossUp: indicators?.macdCrossUp ?? false,
-          macdCrossDown: indicators?.macdCrossDown ?? false,
           lastRsi: indicators?.lastRsi ?? 0,
           lastAtr: indicators?.lastAtr ?? 0,
           rsiBull: false,
@@ -606,24 +594,11 @@ async function checkSignals(): Promise<void> {
           reclaimDetected: indicators?.reclaimDetected ?? false,
           signalReason: indicators?.signalReason ?? null,
           entryPattern,
-          impulseDetected,
-          consolidationDetected,
-          impulseBreakoutDetected,
           entryDistanceFromEma20: indicators?.entryDistanceFromEma20 ?? null,
           entryDistanceFromEma20Atr: indicators?.entryDistanceFromEma20Atr ?? null,
           entryTooExtended: indicators?.entryTooExtended ?? false,
           signalTimeIso: signalTimeIso ?? new Date().toISOString(),
-          isTradingWindow,
-          tceScore,
-          tceRegime,
-          tceReason,
-          tceTrendAligned: tce?.tceTrendAligned ?? null,
-          tceErFast: tce?.tceErFast ?? null,
-          tceErSlow: tce?.tceErSlow ?? null,
-          tceRoomAtr: tce?.tceRoomAtr ?? null,
-          tceEntryExtensionAtr: tce?.tceEntryExtensionAtr ?? null,
-          tceCandleRangeAtr: tce?.tceCandleRangeAtr ?? null,
-          tceBodyRatio: tce?.tceBodyRatio ?? null
+          isTradingWindow
         });
 
         if (skipReason || (!buy && !sell)) {
@@ -677,7 +652,7 @@ async function checkSignals(): Promise<void> {
         const stopDistance = Math.abs(expectedPrice - stopLossPrice);
         const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
         if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) throw new Error(`Invalid total risk per unit: ${totalRiskPerUnit}`);
-        const riskCapital = entryPattern === 'impulse_continuation' ? getBalance() * IMPULSE_MAX_RISK_PER_TRADE : getRiskCapital();
+        const riskCapital = getRiskCapital();
         const rawQuantity = validateQuantity(Math.min(riskCapital / totalRiskPerUnit, getPositionNotional() / expectedPrice ) );
         const quantity = validateQuantity(Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals);
 
