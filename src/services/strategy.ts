@@ -605,6 +605,20 @@ function detectPullbackReclaimSignal(params: {
     ? recentEma20
     : recentEma50;
 
+  const longReclaimEma =
+  touchedEma20Long && touchedEma50Long
+    ? Math.max(currentEma20, currentEma50)
+    : touchedEma20Long
+      ? currentEma20
+      : currentEma50;
+
+  const shortReclaimEma =
+    touchedEma20Short && touchedEma50Short
+      ? Math.min(currentEma20, currentEma50)
+      : touchedEma20Short
+        ? currentEma20
+        : currentEma50;
+
   const longDepthAtr = longPullbackZone
     ? (
         Math.min(...longReferenceEma) - lowestLow
@@ -666,31 +680,32 @@ function detectPullbackReclaimSignal(params: {
       ? currentVolume / avgVolume20
       : 0;
 
-  const lastPullbackVolume =
-    recent.length > 0
-      ? Number(recent[recent.length - 1].volume) || 0
+  const pullbackVolumes = recent
+    .map(candle => Number(candle.volume) || 0)
+    .filter(volume => volume > 0);
+  
+  const avgPullbackVolume = mean(pullbackVolumes);
+  
+  const volumeVsPullbackAverage =
+    avgPullbackVolume > 0
+      ? currentVolume / avgPullbackVolume
       : 0;
-
-  const volumeVsLastPullback =
-    lastPullbackVolume > 0
-      ? currentVolume / lastPullbackVolume
-      : volumeRatio;
 
   const bullishReclaim =
     current.close > current.open &&
-    current.close > currentEma20 &&
+    current.close > longReclaimEma &&
     longPullbackZone &&
     bodyAtr >= RECLAIM_MIN_BODY_ATR &&
     closePosition >= RECLAIM_MIN_CLOSE_POSITION &&
-    volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
+    volumeVsPullbackAverage >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
 
   const bearishReclaim =
     current.close < current.open &&
-    current.close < currentEma20 &&
+    current.close < shortReclaimEma &&
     shortPullbackZone &&
     bodyAtr >= RECLAIM_MIN_BODY_ATR &&
     closePosition <= 1 - RECLAIM_MIN_CLOSE_POSITION &&
-    volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
+    volumeVsPullbackAverage >= RECLAIM_VOLUME_VS_LAST_PULLBACK;
 
   const validCandle =
     candleRangeAtr <= MAX_SIGNAL_CANDLE_ATR &&
@@ -770,7 +785,7 @@ function detectPullbackReclaimSignal(params: {
     validCandle,
     notExtended,
     volumeOk:
-      volumeVsLastPullback >= RECLAIM_VOLUME_VS_LAST_PULLBACK,
+      volumeVsPullbackAverage >= RECLAIM_VOLUME_VS_LAST_PULLBACK,
     candleRangeAtr,
     bodyAtr,
     volumeRatio,
@@ -1803,7 +1818,7 @@ export function formatStrategyDiagnostics(
     `Candle ATR: ${indicators.pullbackCandleRangeAtr.toFixed(2)} [max ${MAX_SIGNAL_CANDLE_ATR}]`,
     `Body ATR: ${indicators.pullbackBodyAtr.toFixed(2)} [min ${MIN_SIGNAL_BODY_ATR}]`,
     `Volume ratio (vs avg20): ${indicators.pullbackVolumeRatio.toFixed(2)}`,
-    `Volume filter (vs last pullback): ${indicators.pullbackVolumeOk ? 'OK' : 'FAILED'}`,
+    `Volume filter (vs avg pullback): ${indicators.pullbackVolumeOk ? 'OK' : 'FAILED'}`,
     `Distance EMA20 ATR: ${
       Number.isFinite(indicators.pullbackEntryDistanceAtr)
         ? indicators.pullbackEntryDistanceAtr.toFixed(3)
