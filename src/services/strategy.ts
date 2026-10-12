@@ -371,7 +371,8 @@ function detectSwingStructure(candles: Candle[], lookback: number): { swingHigh:
   }
   const sh = swingHighs.slice(-2), sl = swingLows.slice(-2);
   return {
-    swingHigh: sh.at(-1) ?? 0, swingLow: sl.at(-1) ?? 0,
+    swingHigh: sh.length > 0 ? sh[sh.length - 1] : 0,
+    swingLow: sl.length > 0 ? sl[sl.length - 1] : 0,
     prevSwingHigh: sh.length > 1 ? sh[0] : 0, prevSwingLow: sl.length > 1 ? sl[0] : 0,
     higherHigh: sh.length > 1 && sh[1] > sh[0], higherLow: sl.length > 1 && sl[1] > sl[0],
     lowerHigh: sh.length > 1 && sh[1] < sh[0], lowerLow: sl.length > 1 && sl[1] < sl[0]
