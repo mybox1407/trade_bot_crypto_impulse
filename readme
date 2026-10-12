@@ -10,6 +10,3 @@ npm install
 npm install https-proxy-agent socks-proxy-agent
 docker compose up -d --build
 docker compose logs -f trade_bot
-
-
-npx tsx xrp-short-test.ts
