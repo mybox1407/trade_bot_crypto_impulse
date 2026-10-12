@@ -1,3 +1,5 @@
+import { ATR } from 'technicalindicators';
+
 import {
   getCandles,
   getTrades
@@ -8,32 +10,12 @@ import {
   type TradeFlowResult
 } from './strategy';
 
-import {
-  ATR
-} from 'technicalindicators';
+import type {
+  Candle,
+  LighterTrade
+} from './lighterWs';
 
-export type TradeFlowRunResult =
-  | TradeFlowResult
-  | {
-      symbol: string;
-      ready: false;
-      buy: false;
-      sell: false;
-      side: 'none';
-      price: number;
-      takeProfitPrice: null;
-      stopLossPrice: null;
-      positionSize: null;
-      regime: 'trade_flow';
-      skipReason: string;
-      signalTime: number;
-      signalTimeIso: string;
-      indicators: null;
-    };
-
-function getLatestAtr(symbol: string): number | null {
-  const candles = getCandles(symbol, '1m', 250);
-
+function calculateAtr(candles: Candle[]): number | null {
   if (candles.length < 15) {
     return null;
   }
@@ -53,62 +35,19 @@ function getLatestAtr(symbol: string): number | null {
 }
 
 /**
- * Вызывать на событии новой сделки из WebSocket.
- * Свечи используются только для ATR стопа/цели, не для сигнала входа.
+ * Анализирует текущий rolling-буфер сделок.
+ * Вызывать из обработчика новой WebSocket-сделки.
  */
 export function runTradeFlowOnce(
   symbol: string,
   now = Date.now()
-): TradeFlowRunResult {
-  const trades = getTrades(symbol);
-  const latestTrade = trades[trades.length - 1];
-  const atr = getLatestAtr(symbol);
-
-  if (!latestTrade) {
-    return {
-      symbol,
-      ready: false,
-      buy: false,
-      sell: false,
-      side: 'none',
-      price: 0,
-      takeProfitPrice: null,
-      stopLossPrice: null,
-      positionSize: null,
-      regime: 'trade_flow',
-      skipReason: 'No trades received for market',
-      signalTime: now,
-      signalTimeIso: new Date(now).toISOString(),
-      indicators: null
-    };
-  }
-
-  if (atr == null) {
-    return {
-      symbol,
-      ready: false,
-      buy: false,
-      sell: false,
-      side: 'none',
-      price: latestTrade.price,
-      takeProfitPrice: null,
-      stopLossPrice: null,
-      positionSize: null,
-      regime: 'trade_flow',
-      skipReason: 'ATR unavailable: insufficient candle history',
-      signalTime: latestTrade.time,
-      signalTimeIso: new Date(latestTrade.time).toISOString(),
-      indicators: null
-    };
-  }
+): TradeFlowResult {
+  const trades: LighterTrade[] = getTrades(symbol);
+  const candles: Candle[] = getCandles(symbol, '1m', 250);
+  const atr = calculateAtr(candles);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
     atr
   });
 }
-
-/**
- * Старая функция удалена намеренно:
- * бот больше не сканирует входы по 15m свечам.
- */
