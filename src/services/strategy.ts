@@ -381,9 +381,12 @@ export function canOpenTrade(params: {
     if (side === 'short' && minusDi <= plusDi) return { passed: false, failedFilter: 'di_direction' };
   }
 
-  const minBbWidth = side === 'long' ? MIN_BB_WIDTH_LONG : MIN_BB_WIDTH_SHORT;
-  const maxBbWidth = side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
-  if (bbWidth < minBbWidth || bbWidth > maxBbWidth) return { passed: false, failedFilter: 'bb_width' };
+  const maxBbWidth =
+    side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
+  
+  if (bbWidth > maxBbWidth) {
+    return { passed: false, failedFilter: 'bb_width' };
+  }
 
   if (candleRangeAtr > 0 && candleRangeAtr > MAX_SIGNAL_CANDLE_ATR) return { passed: false, failedFilter: 'signal_candle_too_large' };
 
@@ -519,6 +522,8 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
         const rsiRange = isShortSide ? `${MIN_ENTRY_RSI_SHORT}–${MAX_ENTRY_RSI_SHORT}` : `${MIN_ENTRY_RSI_LONG}–${MAX_ENTRY_RSI_LONG}`;
         const adxRange = isShortSide ? `${MIN_ENTRY_ADX_SHORT}–${MAX_ENTRY_ADX}` : `${MIN_ENTRY_ADX_LONG}–${MAX_ENTRY_ADX}`;
         const atrRange = isShortSide ? `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_SHORT}` : `${MIN_LAST_ATR_PCT}–${MAX_LAST_ATR_PCT_LONG}`;
+        const maxCandleAtr = MAX_SIGNAL_CANDLE_ATR;
+        const maxDistanceAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
         const signalReason = trigger.reason ?? '-';
 
         skipReason = [
