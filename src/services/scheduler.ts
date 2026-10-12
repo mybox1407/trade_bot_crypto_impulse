@@ -243,15 +243,6 @@ function buildPositionMetadata(
     entryPattern:
       indicators?.entryPattern ?? null,
 
-    impulseDetected:
-      indicators?.impulseDetected ?? false,
-
-    consolidationDetected:
-      indicators?.consolidationDetected ?? false,
-
-    impulseBreakoutDetected:
-      indicators?.impulseBreakoutDetected ?? false,
-
     macdCrossUp:
       indicators?.macdCrossUp ?? false,
 
@@ -502,15 +493,6 @@ async function checkSignals(): Promise<void> {
         const entryPattern =
           indicators?.entryPattern ?? null;
         
-        const impulseDetected =
-          indicators?.impulseDetected ?? false;
-        
-        const consolidationDetected =
-          indicators?.consolidationDetected ?? false;
-        
-        const impulseBreakoutDetected =
-          indicators?.impulseBreakoutDetected ?? false;
-
         if (LOG_ONLY_TRADING_REGIMES && regime !== 'trend_up' && regime !== 'trend_down') {
           tradeLog('SIGNAL_SKIPPED_NON_TRADING_REGIME', {
             symbol,
@@ -571,11 +553,8 @@ async function checkSignals(): Promise<void> {
             price,
             reason,
             diagnostics,
-            entryPattern,
-            impulseDetected,
-            consolidationDetected,
-            impulseBreakoutDetected,
-           });
+            entryPattern
+          });
         
           continue;
         }
@@ -589,10 +568,7 @@ async function checkSignals(): Promise<void> {
             side,
             price,
             reason: 'Outside trading window',
-            entryPattern,
-            impulseDetected,
-            consolidationDetected,
-            impulseBreakoutDetected,
+            entryPattern
           });
           continue;
         }
@@ -617,10 +593,7 @@ async function checkSignals(): Promise<void> {
             side,
             price: expectedPrice,
             reason: 'Opening already in progress',
-            entryPattern,
-            impulseDetected,
-            consolidationDetected,
-            impulseBreakoutDetected,
+            entryPattern
            });
           continue;
         }
@@ -640,7 +613,7 @@ async function checkSignals(): Promise<void> {
               status: executionResult.status === 'unknown'
                 ? 'not-ready'
                 : 'signal',
-              regime, hasSignal: true, side, price: expectedPrice, reason, entryPattern, impulseDetected, consolidationDetected, impulseBreakoutDetected, });
+              regime, hasSignal: true, side, price: expectedPrice, reason, entryPattern });
             continue;
           }
 
@@ -687,10 +660,7 @@ async function checkSignals(): Promise<void> {
             entryPattern,
             indicators: {
               ...indicators,
-              entryPattern,
-              impulseDetected,
-              consolidationDetected,
-              impulseBreakoutDetected
+              entryPattern
             },
             signalTime,
             signalTimeIso,
@@ -718,10 +688,7 @@ async function checkSignals(): Promise<void> {
                 side,
                 price: expectedPrice,
                 reason,
-                entryPattern,
-                impulseDetected,
-                consolidationDetected,
-                impulseBreakoutDetected
+                entryPattern
               });
               continue;
             }
@@ -743,10 +710,7 @@ async function checkSignals(): Promise<void> {
             side,
             price: expectedPrice,
             reason: 'Position opened and protected',
-            entryPattern,
-            impulseDetected,
-            consolidationDetected,
-            impulseBreakoutDetected
+            entryPattern
           });   
           if (!PAPER_TRADING && signerClient) {
             await syncLiveBalance(signerClient, Number(process.env.LIGHTER_ACCOUNT_INDEX ?? 0)).catch(error => tradeError('BALANCE_SYNC_FAILED_AFTER_OPEN', error, { symbol }));
