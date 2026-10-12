@@ -144,17 +144,13 @@ export function notifyPositionClose(data: {
         ? '🛑'
         : data.reason === 'time_stop'
           ? '⏱'
-          : data.reason ===
-            'breakeven_stop'
+          : data.reason === 'breakeven_stop'
             ? '🛡'
-            : data.reason ===
-              'dead_trade_mfe'
+            : data.reason === 'dead_trade_mfe'
               ? '✂️'
-              : data.reason ===
-                'reconciliation_missing_remote'
+              : data.reason === 'reconciliation_missing_remote'
                 ? '🔄'
-                : data.reason ===
-                  'reconciliation_severe_mismatch'
+                : data.reason === 'reconciliation_severe_mismatch'
                   ? '⚠️'
                   : '✋';
 
@@ -169,15 +165,11 @@ export function notifyPositionClose(data: {
       : '';
 
   const hours =
-    Math.floor(
-      data.positionAgeSeconds / 3600
-    );
+    Math.floor(data.positionAgeSeconds / 3600);
 
   const minutes =
     Math.floor(
-      (
-        data.positionAgeSeconds % 3600
-      ) / 60
+      (data.positionAgeSeconds % 3600) / 60
     );
 
   const seconds =
@@ -198,7 +190,7 @@ export function notifyPositionClose(data: {
     `(${pnlSign}${data.netPnLPercent.toFixed(2)}%)\n` +
     `Realized PnL: ${pnlSign}$${data.realizedPnL.toFixed(2)}\n\n` +
     `Reason: ${reasonEmoji} ` +
-    `${data.reason.replace('_', ' ').toUpperCase()}\n` +
+    `${data.reason.replace(/_/g, ' ').toUpperCase()}\n` +
     `Duration: ${duration}\n` +
     `Balance: $${data.balance.toFixed(2)}\n` +
     `Position ID: ${data.positionId}\n\n` +
@@ -231,15 +223,24 @@ export function notifyError(data: {
 export function notifyStartup(data: {
   port: number;
   tradingPairs: string[];
-  signalInterval: number;
+  signalInterval?: number;
+  signalMode?: 'trade-events' | 'interval';
   positionInterval: number;
   balance: number;
 }) {
+  const signalDescription =
+    data.signalMode === 'trade-events'
+      ? 'on each incoming trade event'
+      : data.signalInterval != null &&
+          data.signalInterval > 0
+        ? `every ${data.signalInterval}s`
+        : 'on trade events';
+
   const text =
     `🤖 TRADING BOT STARTED 🤖\n\n` +
     `Port: ${data.port}\n` +
     `Trading Pairs: ${data.tradingPairs.join(', ')}\n` +
-    `Signal Check: every ${data.signalInterval}s\n` +
+    `Signal Check: ${signalDescription}\n` +
     `Position Check: every ${data.positionInterval}s\n\n` +
     `Balance: $${data.balance.toFixed(2)}\n\n` +
     `Bot is running...\n\n` +
@@ -298,31 +299,85 @@ export async function sendAggregatedSignalSummary(data: {
   errorsBySymbol?: Record<string, string>;
   equity?: number;
 }): Promise<void> {
-  const { results, errorsBySymbol, equity } = data;
+  const {
+    results,
+    errorsBySymbol,
+    equity
+  } = data;
 
-  const active = results.filter(result => ['signal', 'no-signal', 'not-ready', 'error'].includes(result.status));
-  const signals = results.filter(result => result.status === 'signal').length;
-  const noSignals = results.filter(result => result.status === 'no-signal' || result.status === 'not-ready').length;
-  const errors = results.filter(result => result.status === 'error').length;
+  const active = results.filter(result =>
+    [
+      'signal',
+      'no-signal',
+      'not-ready',
+      'error'
+    ].includes(result.status)
+  );
 
-  if (!active.length && !signals && !errors && !errorsBySymbol) return;
+  const signals =
+    results.filter(result => result.status === 'signal').length;
+
+  const noSignals =
+    results.filter(result =>
+      result.status === 'no-signal' ||
+      result.status === 'not-ready'
+    ).length;
+
+  const errors =
+    results.filter(result => result.status === 'error').length;
+
+  if (
+    !active.length &&
+    !signals &&
+    !errors &&
+    !errorsBySymbol
+  ) {
+    return;
+  }
 
   const text = active.map(result => {
-    if (result.status === 'error') return `❌ ${result.symbol}: ERROR - ${result.reason}`;
-    if (result.status === 'not-ready') return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
-    if (result.status === 'signal') return `${result.side === 'long' ? '🟢' : '🔴'} ${result.symbol} [${result.regime}]: ${result.side?.toUpperCase()} @ ${result.price?.toFixed(4) ?? 'n/a'} - ${result.reason}`;
-    return `${result.symbol} [${result.regime}]: No signal - ${result.reason}`;
+    if (result.status === 'error') {
+      return `❌ ${result.symbol}: ERROR - ${result.reason}`;
+    }
+
+    if (result.status === 'not-ready') {
+      return `⏳ ${result.symbol}: NOT READY - ${result.reason}`;
+    }
+
+    if (result.status === 'signal') {
+      return (
+        `${result.side === 'long' ? '🟢' : '🔴'} ` +
+        `${result.symbol} [${result.regime}]: ` +
+        `${result.side?.toUpperCase()} @ ` +
+        `${result.price?.toFixed(4) ?? 'n/a'} - ` +
+        `${result.reason}`
+      );
+    }
+
+    return (
+      `${result.symbol} [${result.regime}]: ` +
+      `No signal - ${result.reason}`
+    );
   }).join('\n');
 
   let errorSummary = '';
-  if (errorsBySymbol && Object.keys(errorsBySymbol).length > 0) {
+
+  if (
+    errorsBySymbol &&
+    Object.keys(errorsBySymbol).length > 0
+  ) {
     const errorLines = Object.entries(errorsBySymbol)
       .slice(0, 5)
       .map(([symbol, error]) => `• ${symbol}: ${error}`)
       .join('\n');
 
-    const moreCount = Object.keys(errorsBySymbol).length - 5;
-    errorSummary = `\n\n⚠️ Errors summary:\n${errorLines}${moreCount > 0 ? `\n• ...and ${moreCount} more` : ''}`;
+    const moreCount =
+      Object.keys(errorsBySymbol).length - 5;
+
+    errorSummary =
+      `\n\n⚠️ Errors summary:\n` +
+      `${errorLines}` +
+      `${moreCount > 0 ? `\n• ...and ${moreCount} more` : ''}`;
   }
 
   const equityText =
@@ -332,16 +387,32 @@ export async function sendAggregatedSignalSummary(data: {
 
   const message =
     `📊 Signal Check Summary\n\n` +
-    `📈 Open positions: ${results.filter(r => r.status === 'position-open').length}\n\n` +
+    `📈 Open positions: ` +
+    `${results.filter(r => r.status === 'position-open').length}\n\n` +
     `💰 Equity: ${equityText}\n\n` +
     `🔍 Signal scan:\n${text}${errorSummary}\n\n` +
     `📊 Signals: ${signals} | No signals: ${noSignals}\n` +
     `⚠️ Errors: ${errors}\n\n` +
     `${new Date().toISOString()}`;
 
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return;
+  if (
+    !env.telegramBotToken ||
+    !env.telegramChatId
+  ) {
+    return;
+  }
 
-  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text: message }, { timeout: 5000 });
+  await axios.post(
+    `https://api.telegram.org/bot${env.telegramBotToken}/sendMessage`,
+    {
+      chat_id: env.telegramChatId,
+      text: message
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000
+    }
+  );
 }
