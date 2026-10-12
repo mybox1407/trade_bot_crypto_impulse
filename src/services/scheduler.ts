@@ -931,15 +931,18 @@ async function handleTradeEvent(
           takeProfitPrice: result.takeProfitPrice
         });
 
+      const averageFillPrice =
+        executionResult.averageFillPrice;
+      
       const fillConfirmed =
         executionResult.filledQuantity > 0 &&
-        executionResult. != null &&
-        Number.isFinite(executionResult.);
-
+        averageFillPrice != null &&
+        Number.isFinite(averageFillPrice);
+      
       if (!fillConfirmed) {
         const reason =
           executionResult.message ?? 'Execution failed';
-
+      
         tradeError(
           'POSITION_OPEN_FAILED',
           reason,
@@ -950,56 +953,24 @@ async function handleTradeEvent(
             quantity,
             expectedPrice,
             status: executionResult.status,
-            orderId: executionResult.orderId ?? null
+            orderId: executionResult.orderId ?? null,
+            filledQuantity: executionResult.filledQuantity,
+            averageFillPrice: averageFillPrice ?? null
           }
         );
-
+      
         if (executionResult.status === 'unknown') {
           markReconciliationPending(symbol);
         }
-
+      
         return;
       }
-
+      
       const signalIndicators = {
         ...result.indicators,
-        atr: result.indicators.priceMoveAtr != null
-          ? Math.abs(result.indicators.priceMoveAtr) > 0
-            ? stopDistance
-            : 0
-          : 0
+        atr: stopDistance
       };
 
-      const  =
-        executionResult.;
-      
-      if (
-        executionResult.filledQuantity <= 0 ||
-         == null ||
-        !Number.isFinite()
-      ) {
-        const reason =
-          executionResult.message ??
-          'Fill price or filled quantity is invalid';
-      
-        tradeError('POSITION_OPEN_FAILED', reason, {
-          symbol,
-          marketId,
-          side: result.side,
-          quantity,
-          status: executionResult.status,
-          orderId: executionResult.orderId ?? null,
-          filledQuantity: executionResult.filledQuantity,
-          averageFillPrice: averageFillPrice ?? null
-        });
-      
-        if (executionResult.status === 'unknown') {
-          markReconciliationPending(symbol);
-        }
-      
-        return;
-      }
-      
       const pending: PendingFilledOpen = {
         symbol,
         marketId,
