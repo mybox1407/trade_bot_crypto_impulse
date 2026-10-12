@@ -9,6 +9,11 @@ import {
   getLighterMarket
 } from '../config/lighterMarkets';
 
+import {
+  TradeFlowBaselineTracker,
+  type TradeFlowBaseline
+} from './strategy';
+
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
@@ -40,6 +45,9 @@ const pricesByMarket =
 
 const tradesByMarket =
   new Map<number, LighterTrade[]>();
+
+const baselineTrackersByMarket =
+  new Map<number, TradeFlowBaselineTracker>();
 
 const clients =
   new Map<number, MarketClient>();
@@ -226,6 +234,19 @@ function publishTrade(
 
   tradesByMarket.set(market.marketId, trades);
 
+  let baselineTracker =
+    baselineTrackersByMarket.get(market.marketId);
+
+  if (!baselineTracker) {
+    baselineTracker = new TradeFlowBaselineTracker();
+    baselineTrackersByMarket.set(
+      market.marketId,
+      baselineTracker
+    );
+  }
+
+  baselineTracker.addTrade(trade);
+
   const symbol = normalizeSymbol(market.symbol);
 
   for (const listener of tradeListeners) {
@@ -247,6 +268,42 @@ function publishTrade(
       );
     }
   }
+}
+
+export function getTradeFlowBaseline(
+  symbol: string,
+  now = Date.now()
+): TradeFlowBaseline {
+  const market = resolveMarket(symbol);
+  const tracker =
+    baselineTrackersByMarket.get(market.marketId);
+
+  if (!tracker) {
+    return {
+      ready: false,
+      nonEmptyBuckets: 0,
+      volumePerWindow: null,
+      reason: 'Trade-flow baseline tracker is not initialized'
+    };
+  }
+
+  return tracker.getBaseline(now);
+}
+
+export function getTradeFlowBaselineTracker(
+  symbol: string
+): TradeFlowBaselineTracker {
+  const market = resolveMarket(symbol);
+
+  let tracker =
+    baselineTrackersByMarket.get(market.marketId);
+
+  if (!tracker) {
+    tracker = new TradeFlowBaselineTracker();
+    baselineTrackersByMarket.set(market.marketId, tracker);
+  }
+
+  return tracker;
 }
 
 async function loadHistoricalCandles(
@@ -341,11 +398,19 @@ function attachClient(
     tradesByMarket.set(marketId, []);
   }
 
+  if (!baselineTrackersByMarket.has(marketId)) {
+    baselineTrackersByMarket.set(
+      marketId,
+      new TradeFlowBaselineTracker()
+    );
+  }
+
   const client = new LighterWsClient(
     marketId,
     timeframe,
     candle => {
-      const candles = candlesByMarket.get(marketId) ?? [];
+      const candles =
+        candlesByMarket.get(marketId) ?? [];
 
       const normalizedCandle: Candle = {
         ...candle,
@@ -417,11 +482,12 @@ async function startResolvedMarket(
   startingMarkets.add(marketId);
 
   try {
-    const historicalCandles = await loadHistoricalCandles(
-      marketId,
-      timeframe,
-      MAX_CANDLES
-    );
+    const historicalCandles =
+      await loadHistoricalCandles(
+        marketId,
+        timeframe,
+        MAX_CANDLES
+      );
 
     if (historicalCandles.length === 0) {
       throw new Error(
@@ -429,7 +495,11 @@ async function startResolvedMarket(
       );
     }
 
-    attachClient(market, timeframe, historicalCandles);
+    attachClient(
+      market,
+      timeframe,
+      historicalCandles
+    );
 
     console.log(
       `[${new Date().toISOString()}] ` +
@@ -485,7 +555,8 @@ export function getCandles(
   limit = MAX_CANDLES
 ): Candle[] {
   const market = resolveMarket(symbol);
-  const candles = candlesByMarket.get(market.marketId) ?? [];
+  const candles =
+    candlesByMarket.get(market.marketId) ?? [];
 
   return candles.slice(-limit);
 }
@@ -495,7 +566,8 @@ export function getTrades(
   limit = MAX_TRADES
 ): LighterTrade[] {
   const market = resolveMarket(symbol);
-  const trades = tradesByMarket.get(market.marketId) ?? [];
+  const trades =
+    tradesByMarket.get(market.marketId) ?? [];
 
   return trades.slice(-limit);
 }
@@ -504,7 +576,8 @@ export function getMarkPrice(
   symbol: string
 ): number | null {
   const market = resolveMarket(symbol);
-  const price = pricesByMarket.get(market.marketId);
+  const price =
+    pricesByMarket.get(market.marketId);
 
   return (
     price?.markPrice ??
@@ -519,7 +592,8 @@ export function getExitPrice(
   side: 'long' | 'short'
 ): number | null {
   const market = resolveMarket(symbol);
-  const price = pricesByMarket.get(market.marketId);
+  const price =
+    pricesByMarket.get(market.marketId);
 
   if (side === 'long') {
     return (
@@ -553,7 +627,9 @@ export function getMarketPrice(
 ): MarketPrice | null {
   const market = resolveMarket(symbol);
 
-  return pricesByMarket.get(market.marketId) ?? null;
+  return (
+    pricesByMarket.get(market.marketId) ?? null
+  );
 }
 
 export function stopMarketDataByMarketId(
@@ -565,6 +641,7 @@ export function stopMarketDataByMarketId(
   candlesByMarket.delete(marketId);
   pricesByMarket.delete(marketId);
   tradesByMarket.delete(marketId);
+  baselineTrackersByMarket.delete(marketId);
   seenTradeIdsByMarket.delete(marketId);
 
   unregisterDynamicMarket(marketId);
