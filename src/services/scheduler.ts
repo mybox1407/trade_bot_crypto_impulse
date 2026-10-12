@@ -135,7 +135,7 @@ type PendingFilledOpen = {
   requestedQuantity: number;
   filledQuantity: number;
   expectedPrice: number;
-  : number;
+  averageFillPrice: number;
   takeProfitPrice: number;
   stopLossPrice: number;
   exchangeStopLossPrice: number;
@@ -552,7 +552,7 @@ function savePendingFilledOpen(
     marketId: input.marketId,
     side: input.side,
     filledQuantity: input.filledQuantity,
-    : input.,
+    averageFillPrice: input.averageFillPrice,
     orderId: input.orderId ?? null
   });
 }
@@ -566,7 +566,7 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     symbol: input.symbol,
     marketId: input.marketId,
     side: input.side,
-    entryPrice: input.,
+    entryPrice: input.averageFillPrice,
     quantity: input.filledQuantity,
     takeProfitPrice: input.takeProfitPrice,
     stopLossPrice: input.stopLossPrice,
