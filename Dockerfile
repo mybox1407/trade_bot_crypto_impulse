@@ -46,8 +46,6 @@ RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
-COPY ml ./ml
-
 RUN python3 -m venv /app/.venv
 
 RUN /app/.venv/bin/pip install --upgrade pip \
