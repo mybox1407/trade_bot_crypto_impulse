@@ -403,30 +403,9 @@ async function hasPendingRemoteOrder(
   const accountIndex = Number(
     process.env.LIGHTER_ACCOUNT_INDEX ?? 0
   );
-
   const apiKeyIndex = Number(
     process.env.LIGHTER_API_KEY_INDEX ?? 0
   );
-
-  if (
-    !Number.isInteger(accountIndex) ||
-    accountIndex < 0
-  ) {
-    throw new Error(
-      `Invalid LIGHTER_ACCOUNT_INDEX: ${accountIndex}`
-    );
-  }
-
-  if (
-    !Number.isInteger(apiKeyIndex) ||
-    apiKeyIndex < 0 ||
-    apiKeyIndex > 254
-  ) {
-    throw new Error(
-      `Invalid LIGHTER_API_KEY_INDEX: ${apiKeyIndex}`
-    );
-  }
-
   const authorization =
     signerClient.create_auth_token_with_expiry(
       60 * 60,
@@ -434,128 +413,70 @@ async function hasPendingRemoteOrder(
       apiKeyIndex
     )[0] ?? '';
 
-  if (!authorization) {
-    throw new Error(
-      'Failed to create Lighter API authorization token'
-    );
-  }
-
-  const baseUrl = (
-    process.env.LIGHTER_API_URL ??
-    'https://mainnet.zklighter.elliot.ai'
-  ).replace(/\/+$/, '');
-
-  const activeOrdersUrl =
-    `${baseUrl}/api/v1/accountActiveOrders` +
-    `?account_index=${accountIndex}` +
-    `&market_id=${marketId}`;
-
-  const inactiveOrdersUrl =
-    `${baseUrl}/api/v1/accountInactiveOrders` +
-    `?account_index=${accountIndex}` +
-    `&market_id=${marketId}` +
-    `&limit=100`;
-
   try {
+    const baseUrl =
+      process.env.LIGHTER_API_URL ??
+      'https://mainnet.zklighter.elliot.ai';
+
     const responses = await Promise.all([
-      fetch(activeOrdersUrl, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: authorization
+      fetch(
+        `${baseUrl}/api/v1/accountActiveOrders` +
+          `?account_index=${accountIndex}&limit=100`,
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: authorization
+          }
         }
-      }),
-      fetch(inactiveOrdersUrl, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: authorization
+      ),
+      fetch(
+        `${baseUrl}/api/v1/accountInactiveOrders` +
+          `?account_index=${accountIndex}&limit=100`,
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: authorization
+          }
         }
+      )
+    ]);
+
+    const data = await Promise.all(
+      responses.map(async response => {
+        if (!response.ok) {
+          throw new Error(
+            `Orders request failed: ${response.status}`
+          );
+        }
+
+        return response.json() as Promise<any>;
       })
-    ]);
+    );
 
-    const [activeResponse, inactiveResponse] = responses;
+    const orders = data.flatMap(item =>
+      Array.isArray(item?.orders)
+        ? item.orders
+        : []
+    );
 
-    const activeBody = await activeResponse.text();
-    const inactiveBody = await inactiveResponse.text();
-
-    if (!activeResponse.ok) {
-      throw new Error(
-        `accountActiveOrders HTTP ${activeResponse.status}: ` +
-          activeBody.slice(0, 500)
-      );
-    }
-
-    if (!inactiveResponse.ok) {
-      throw new Error(
-        `accountInactiveOrders HTTP ${inactiveResponse.status}: ` +
-          inactiveBody.slice(0, 500)
-      );
-    }
-
-    let activeData: any;
-    let inactiveData: any;
-
-    try {
-      activeData = JSON.parse(activeBody);
-    } catch {
-      throw new Error(
-        `Invalid JSON from accountActiveOrders: ` +
-          activeBody.slice(0, 300)
-      );
-    }
-
-    try {
-      inactiveData = JSON.parse(inactiveBody);
-    } catch {
-      throw new Error(
-        `Invalid JSON from accountInactiveOrders: ` +
-          inactiveBody.slice(0, 300)
-      );
-    }
-
-    const orders = [
-      ...(Array.isArray(activeData?.orders)
-        ? activeData.orders
-        : []),
-      ...(Array.isArray(inactiveData?.orders)
-        ? inactiveData.orders
-        : [])
-    ];
-
-    const pendingStatuses = new Set([
-      'submitted',
-      'partially_filled',
-      'open',
-      'pending',
-      'in-progress'
-    ]);
-
-    return orders.some((order: any) => {
-      const orderMarketId = Number(
-        order.market_index ??
-        order.market_id
-      );
-
-      const status = String(
-        order.status ?? ''
-      ).toLowerCase();
-
-      return (
-        orderMarketId === marketId &&
-        pendingStatuses.has(status)
-      );
-    });
+    return orders.some((order: any) =>
+      Number(order.market_index) === marketId &&
+      [
+        'submitted',
+        'partially_filled',
+        'open',
+        'pending',
+        'in-progress'
+      ].includes(
+        String(order.status).toLowerCase()
+      )
+    );
   } catch (error) {
     tradeError(
       'REMOTE_ORDER_SYNC_FAILED',
       error,
-      {
-        accountIndex,
-        marketId
-      }
+      { accountIndex, marketId }
     );
-
     throw error;
   }
 }
