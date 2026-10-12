@@ -1,939 +1,472 @@
-import {
-  MACD,
-  RSI,
-  ATR,
-  ADX,
-  BollingerBands,
-  EMA
-} from 'technicalindicators';
+import type { LighterTrade } from './lighterWs';
 
-// ========== БАЗОВАЯ КОНФИГУРАЦИЯ ==========
-
+// Сохранены для совместимости с positionState.ts.
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
-export const ENABLE_TREND_UP_TRADES = true;
-export const ENABLE_BREAKOUT_TRADES = false;
+// Стратегия исследовательская; значения — стартовые параметры.
+export const FLOW_WINDOW_MS = 3_000;
+export const FLOW_BASELINE_MS = 60_000;
+export const FLOW_BASELINE_BUCKETS = 10;
+export const FLOW_SPIKE_MULTIPLIER = 3.0;
+export const FLOW_MIN_IMBALANCE = 0.65;
+export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.15;
+export const FLOW_MAX_CHASE_ATR = 0.8;
+export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
+export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
+export const FLOW_MIN_BASELINE_BUCKETS = 5;
+export const FLOW_MAX_TRADE_AGE_MS = 5_000;
+export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
-// Время: UTC+4.
-// Торговля разрешена с 14:00 до 01:59.
-// В 02:00–13:59 новые позиции не открываются.
-export const TRADING_START_HOUR_UTC_PLUS_4 = 14;
-export const TRADING_END_HOUR_UTC_PLUS_4 = 2;
+export type TradeFlowSide = 'long' | 'short' | 'none';
 
-// RSI
-export const MIN_ENTRY_RSI_SHORT = 39;
-export const MAX_ENTRY_RSI_SHORT = 42;
-export const MIN_ENTRY_RSI_LONG = 51;
-export const MAX_ENTRY_RSI_LONG = 66;
-
-// ADX
-export const MIN_ENTRY_ADX = 25;
-export const MAX_ENTRY_ADX = 40;
-
-// ATR: абсолютное значение для конкретного тикера
-export const MIN_LAST_ATR = 0.005;
-export const MAX_LAST_ATR = 5.0;
-
-// Ширина Bollinger Bands
-export const MIN_BB_WIDTH = 0.04;
-
-// Минимальное расстояние от EMA20.
-// 90% ATR = 0.9 ATR.
-export const MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT = 90;
-export const MIN_ENTRY_DISTANCE_FROM_EMA20_ATR =
-  MIN_ENTRY_DISTANCE_FROM_EMA20_PERCENT / 100;
-
-// Максимальное растяжение входа относительно EMA20
-export const MAX_ENTRY_EXTENSION_TREND_ATR = 1.5;
-
-// Не брать растянутый вход
-export const REJECT_ENTRY_TOO_EXTENDED = true;
-
-// Управление сделкой
-export const STOP_LOSS_ATR_MULTIPLIER = 1.4;
-export const TAKE_PROFIT_ATR_MULTIPLIER = 1.8;
-
-// Trailing не используем в базовой версии
-export const ENABLE_TRAILING_STOP = false;
-
-// ========== ФУНКЦИИ ВРЕМЕНИ ==========
-
-function getUtcPlus4(date = new Date()): number {
-  return (date.getUTCHours() + 4) % 24;
+export interface TradeFlowIndicators {
+  windowMs: number;
+  windowTradeCount: number;
+  buyVolume: number;
+  sellVolume: number;
+  totalVolume: number;
+  baselineVolumePerWindow: number | null;
+  volumeMultiple: number | null;
+  imbalance: number;
+  referencePrice: number | null;
+  priceMoveAtr: number | null;
+  excludedLiquidationCount: number;
 }
 
-export function isTradingTimeUtcPlus4(date = new Date()): boolean {
-  const hour = getUtcPlus4(date);
-
-  // 14:00–23:59 и 00:00–01:59 UTC+4
-  return hour >= 14 || hour < 2;
-}
-
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-
-function last<T>(arr: T[]): T {
-  return arr[arr.length - 1];
-}
-
-function mean(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function getVolumeSpike(
-  volumes: number[],
-  avgVol20: number
-): boolean {
-  const latestVolume = volumes[volumes.length - 1] ?? 0;
-
-  return latestVolume >= avgVol20 * 1.3;
-}
-
-// Поиск локального экстремума за lookback свечей
-function findLocalExtremum(
-  candles: Candle[],
-  side: 'long' | 'short',
-  lookback: number
-): {
-  extremePrice: number;
-} {
-  const slice = candles.slice(-lookback);
-
-  if (slice.length === 0) {
-    return {
-      extremePrice: 0
-    };
-  }
-
-  const extremePrice =
-    side === 'long'
-      ? Math.min(...slice.map(candle => candle.low))
-      : Math.max(...slice.map(candle => candle.high));
-
-  return {
-    extremePrice
-  };
-}
-
-// ========== ТИПЫ ==========
-
-export interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-export type MarketRegime =
-  | 'trend_up'
-  | 'trend_down'
-  | 'range'
-  | 'breakout_watch'
-  | 'high_volatility'
-  | 'unknown';
-
-type RegimeIndicators = {
-  lastClose: number;
-  lastAtr: number;
-  atrPct: number;
-  adx: number;
-  adxRising: boolean;
-  ema20: number;
-  ema50: number;
-  ema200: number;
-  bbWidth: number;
-  avgVol20: number;
-};
-
-export type StrategyIndicators = {
-  macdCrossUp: boolean;
-  macdCrossDown: boolean;
-  lastRsi: number;
-  lastAtr: number;
-  bbUpper: number;
-  bbMiddle: number;
-  bbLower: number;
-  regimeReady: boolean;
-  regimeIndicators: RegimeIndicators;
-  entryExtensionAtr: number | null;
-  maxEntryExtensionAtr: number | null;
-  entryTooExtended: boolean;
-  tradeFeeRate: number;
+export interface TradeFlowResult {
+  symbol: string;
   ready: boolean;
-  atrPct: number;
-  adx: number;
-  bbWidth: number;
-  ema20: number;
-  ema200: number;
-  priceVsEma200: number | null;
-  entryDistanceFromEma20: number | null;
-  entryDistanceFromEma20Atr: number | null;
-  isCandleClosed: boolean;
-};
-
-export type StrategyResult = {
-  price: number;
   buy: boolean;
   sell: boolean;
-  side: 'long' | 'short' | 'none';
+  side: TradeFlowSide;
+  price: number;
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
   positionSize: number | null;
-  regime: MarketRegime;
+  regime: string;
   skipReason: string | null;
   signalTime: number;
   signalTimeIso: string;
-  indicators: StrategyIndicators;
+  indicators: TradeFlowIndicators;
+}
+
+export interface TradeFlowConfig {
+  windowMs: number;
+  baselineMs: number;
+  baselineBuckets: number;
+  spikeMultiplier: number;
+  minImbalance: number;
+  minDirectionalMoveAtr: number;
+  maxChaseAtr: number;
+  stopAtrMultiplier: number;
+  takeProfitAtrMultiplier: number;
+  minBaselineBuckets: number;
+  maxTradeAgeMs: number;
+  excludeLiquidations: boolean;
+}
+
+export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
+  windowMs: FLOW_WINDOW_MS,
+  baselineMs: FLOW_BASELINE_MS,
+  baselineBuckets: FLOW_BASELINE_BUCKETS,
+  spikeMultiplier: FLOW_SPIKE_MULTIPLIER,
+  minImbalance: FLOW_MIN_IMBALANCE,
+  minDirectionalMoveAtr: FLOW_MIN_DIRECTIONAL_MOVE_ATR,
+  maxChaseAtr: FLOW_MAX_CHASE_ATR,
+  stopAtrMultiplier: FLOW_STOP_ATR_MULTIPLIER,
+  takeProfitAtrMultiplier: FLOW_TAKE_PROFIT_ATR_MULTIPLIER,
+  minBaselineBuckets: FLOW_MIN_BASELINE_BUCKETS,
+  maxTradeAgeMs: FLOW_MAX_TRADE_AGE_MS,
+  excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS
 };
 
-// ========== ДЕТЕКЦИЯ РЕЖИМА РЫНКА ==========
+interface Aggregate {
+  buyVolume: number;
+  sellVolume: number;
+  count: number;
+  firstPrice: number | null;
+  lastPrice: number | null;
+  excludedLiquidationCount: number;
+}
 
-const MIN_ADX_TREND = 21;
-const MIN_ADX_RANGE = 20;
-const BB_SQUEEZE_THRESHOLD = 0.05;
+function isValidTrade(trade: LighterTrade): boolean {
+  return (
+    Number.isFinite(trade.time) &&
+    Number.isFinite(trade.receivedAt) &&
+    Number.isFinite(trade.price) &&
+    trade.price > 0 &&
+    Number.isFinite(trade.size) &&
+    trade.size > 0 &&
+    (trade.aggressorSide === 'buy' ||
+      trade.aggressorSide === 'sell')
+  );
+}
 
-// Фильтры breakout_watch
-const BREAKOUT_ATR_BUFFER_K = 0.2;
-const BREAKOUT_BODY_ATR_MIN = 0.6;
-
-// Фильтр расстояния до локального экстремума
-const MAX_EXTREMUM_DISTANCE_ATR = 2.5;
-const EXTREMUM_LOOKBACK = 30;
-
-// Диапазон волатильности для пробоев
-const BREAKOUT_MIN_ATR_PCT = 0.015;
-const BREAKOUT_MAX_ATR_PCT = 0.035;
-const BREAKOUT_MIN_BB_WIDTH = 0.03;
-const BREAKOUT_MAX_BB_WIDTH = 0.08;
-
-export function detectMarketRegime(candles: Candle[]): {
-  regime: MarketRegime;
-  ready: boolean;
-  indicators: RegimeIndicators | null;
-} {
-  const closes = candles.map(candle => candle.close);
-  const highs = candles.map(candle => candle.high);
-  const lows = candles.map(candle => candle.low);
-  const volumes = candles.map(candle => candle.volume);
-
-  const atr = ATR.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const adx = ADX.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const ema20 = EMA.calculate({
-    period: 20,
-    values: closes
-  });
-
-  const ema50 = EMA.calculate({
-    period: 50,
-    values: closes
-  });
-
-  const ema200 = EMA.calculate({
-    period: 200,
-    values: closes
-  });
-
-  const bb = BollingerBands.calculate({
-    period: 20,
-    values: closes,
-    stdDev: 2
-  });
-
+function getNotional(trade: LighterTrade): number {
   if (
-    atr.length < 2 ||
-    adx.length < 2 ||
-    ema20.length < 1 ||
-    ema50.length < 1 ||
-    ema200.length < 1 ||
-    bb.length < 1
+    trade.usdAmount != null &&
+    Number.isFinite(trade.usdAmount) &&
+    trade.usdAmount > 0
   ) {
-    return {
-      regime: 'unknown',
-      ready: false,
-      indicators: null
-    };
+    return trade.usdAmount;
   }
 
-  const lastClose = last(closes);
-  const lastAtr = last(atr);
-  const lastAdx = last(adx);
-  const previousAdx = adx[adx.length - 2];
+  return trade.price * trade.size;
+}
 
-  const lastEma20 = last(ema20);
-  const lastEma50 = last(ema50);
-  const lastEma200 = last(ema200);
+function aggregate(
+  trades: LighterTrade[],
+  fromTime: number,
+  toTime: number,
+  excludeLiquidations: boolean
+): Aggregate {
+  let buyVolume = 0;
+  let sellVolume = 0;
+  let count = 0;
+  let firstPrice: number | null = null;
+  let lastPrice: number | null = null;
+  let excludedLiquidationCount = 0;
 
-  const lastBb = last(bb);
-  const avgVol20 = mean(volumes.slice(-20));
+  const sorted = trades
+    .filter(
+      trade =>
+        isValidTrade(trade) &&
+        trade.receivedAt >= fromTime &&
+        trade.receivedAt < toTime
+    )
+    .sort((a, b) => a.receivedAt - b.receivedAt);
 
-  const bbWidth =
-    lastBb.middle !== 0
-      ? (lastBb.upper - lastBb.lower) / lastBb.middle
-      : 0;
+  for (const trade of sorted) {
+    if (excludeLiquidations && trade.isLiquidation) {
+      excludedLiquidationCount += 1;
+      continue;
+    }
 
-  const adxRising = lastAdx.adx > previousAdx.adx;
-  const atrPct = lastClose > 0 ? lastAtr / lastClose : 0;
-  const compression = bbWidth <= BB_SQUEEZE_THRESHOLD;
+    const volume = getNotional(trade);
 
-  const strongTrendUp =
-    lastClose > lastEma200 &&
-    lastEma20 > lastEma50 &&
-    lastAdx.adx >= MIN_ADX_TREND;
+    if (trade.aggressorSide === 'buy') {
+      buyVolume += volume;
+    } else {
+      sellVolume += volume;
+    }
 
-  const strongTrendDown =
-    lastClose < lastEma200 &&
-    lastEma20 < lastEma50 &&
-    lastAdx.adx >= MIN_ADX_TREND;
+    count += 1;
 
-  const range =
-    lastAdx.adx < MIN_ADX_RANGE &&
-    bbWidth < 0.08;
-
-  const breakoutWatch =
-    compression &&
-    lastAdx.adx >= 15 &&
-    lastAdx.adx <= 28 &&
-    getVolumeSpike(volumes, avgVol20);
-
-  const highVolatility =
-    atrPct > 0.025 ||
-    bbWidth > 0.12;
-
-  let regime: MarketRegime = 'unknown';
-
-  if (highVolatility) {
-    regime = 'high_volatility';
-  } else if (strongTrendUp) {
-    regime = 'trend_up';
-  } else if (strongTrendDown) {
-    regime = 'trend_down';
-  } else if (breakoutWatch) {
-    regime = 'breakout_watch';
-  } else if (range) {
-    regime = 'range';
+    if (firstPrice == null) {
+      firstPrice = trade.price;
+    }
+    lastPrice = trade.price;
   }
 
   return {
-    regime,
-    ready: true,
-    indicators: {
-      lastClose,
-      lastAtr,
-      atrPct,
-      adx: lastAdx.adx,
-      adxRising,
-      ema20: lastEma20,
-      ema50: lastEma50,
-      ema200: lastEma200,
-      bbWidth,
-      avgVol20
-    }
+    buyVolume,
+    sellVolume,
+    count,
+    firstPrice,
+    lastPrice,
+    excludedLiquidationCount
   };
 }
 
-// ========== ФИНАЛЬНАЯ ПРОВЕРКА ВХОДА ==========
-
-export function canOpenTrade(params: {
-  symbol: string;
-  side: 'long' | 'short' | 'none';
-  lastRsi: number;
-  lastAtr: number;
-  adx: number;
-  bbWidth: number;
-  entryDistanceFromEma20: number;
-  entryDistanceFromEma20Atr: number;
-  entryTooExtended: boolean;
-  now?: Date;
-}): boolean {
-  const {
+function emptyResult(
+  symbol: string,
+  price: number,
+  now: number,
+  reason: string,
+  indicators: TradeFlowIndicators
+): TradeFlowResult {
+  return {
     symbol,
-    side,
-    lastRsi,
-    lastAtr,
-    adx,
-    bbWidth,
-    entryDistanceFromEma20Atr,
-    entryTooExtended,
-    now = new Date()
-  } = params;
-
-  // Оставлено для совместимости и будущего symbol-filter.
-  void symbol;
-  void side;
-
-  if (!isTradingTimeUtcPlus4(now)) {
-    return false;
-  }
-
-  // RSI проверка в зависимости от стороны
-  if (side === 'short') {
-    if (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT) {
-      return false;
-    }
-  } else if (side === 'long') {
-    if (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG) {
-      return false;
-    }
-  }
-
-  if (lastAtr < MIN_LAST_ATR || lastAtr > MAX_LAST_ATR) {
-    return false;
-  }
-
-  if (adx < MIN_ENTRY_ADX || adx > MAX_ENTRY_ADX) {
-    return false;
-  }
-
-  if (bbWidth < MIN_BB_WIDTH) {
-    return false;
-  }
-
-  // Минимум 90% ATR расстояния от EMA20
-  if (entryDistanceFromEma20Atr < MIN_ENTRY_DISTANCE_FROM_EMA20_ATR) {
-    return false;
-  }
-
-  if (REJECT_ENTRY_TOO_EXTENDED && entryTooExtended) {
-    return false;
-  }
-
-  return true;
+    ready: false,
+    buy: false,
+    sell: false,
+    side: 'none',
+    price,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    positionSize: null,
+    regime: 'trade_flow',
+    skipReason: reason,
+    signalTime: now,
+    signalTimeIso: new Date(now).toISOString(),
+    indicators
+  };
 }
 
-// ========== АНАЛИЗ РЫНКА ==========
-
-export function analyzeMarket(
-  candles: Candle[],
+/**
+ * Анализирует поток сделок, используя receivedAt для оконной агрегации.
+ * ATR передаётся из вызывающего слоя; функция не читает свечи и не хранит
+ * состояние между вызовами.
+ */
+export function analyzeTradeFlow(
   symbol: string,
-  signalPrice?: number
-): StrategyResult {
-  const closes = candles.map(candle => candle.close);
-  const highs = candles.map(candle => candle.high);
-  const lows = candles.map(candle => candle.low);
-
-  const regimeInfo = detectMarketRegime(candles);
-
-  const macd = MACD.calculate({
-    values: closes,
-    fastPeriod: 12,
-    slowPeriod: 26,
-    signalPeriod: 9,
-    SimpleMAOscillator: false,
-    SimpleMASignal: false
-  });
-
-  const rsi = RSI.calculate({
-    period: 14,
-    values: closes
-  });
-
-  const atr = ATR.calculate({
-    period: 14,
-    high: highs,
-    low: lows,
-    close: closes
-  });
-
-  const bb = BollingerBands.calculate({
-    period: 20,
-    values: closes,
-    stdDev: 2
-  });
-
-  if (
-    !regimeInfo.ready ||
-    !regimeInfo.indicators ||
-    macd.length < 2 ||
-    rsi.length < 1 ||
-    atr.length < 1 ||
-    bb.length < 1
-  ) {
-    const lastCandle = last(candles);
-    const signalTime = lastCandle?.time ?? Date.now();
-
-    const signalTimeIso = new Date(
-      signalTime < 1_000_000_000_000
-        ? signalTime * 1000
-        : signalTime
-    ).toISOString();
-
-    return {
-      price: closes[closes.length - 1] ?? 0,
-      buy: false,
-      sell: false,
-      side: 'none',
-      takeProfitPrice: null,
-      stopLossPrice: null,
-      positionSize: null,
-      regime: 'unknown',
-      skipReason: 'Indicators not ready',
-      signalTime,
-      signalTimeIso,
-      indicators: {
-        macdCrossUp: false,
-        macdCrossDown: false,
-        lastRsi: 0,
-        lastAtr: 0,
-        bbUpper: 0,
-        bbMiddle: 0,
-        bbLower: 0,
-        regimeReady: false,
-        regimeIndicators:
-          regimeInfo.indicators ?? ({} as RegimeIndicators),
-        entryExtensionAtr: null,
-        maxEntryExtensionAtr: null,
-        entryTooExtended: false,
-        tradeFeeRate: TRADE_FEE_RATE,
-        ready: false,
-        atrPct: 0,
-        adx: 0,
-        bbWidth: 0,
-        ema20: 0,
-        ema200: 0,
-        priceVsEma200: null,
-        entryDistanceFromEma20: null,
-        entryDistanceFromEma20Atr: null,
-        isCandleClosed: false
-      }
-    };
+  trades: LighterTrade[],
+  options?: {
+    now?: number;
+    atr?: number | null;
+    config?: Partial<TradeFlowConfig>;
   }
+): TradeFlowResult {
+  const config: TradeFlowConfig = {
+    ...DEFAULT_TRADE_FLOW_CONFIG,
+    ...options?.config
+  };
+  const now = options?.now ?? Date.now();
 
-  const price = last(closes);
-  const lastMacd = last(macd);
-  const previousMacd = macd[macd.length - 2];
+  const valid = trades
+    .filter(isValidTrade)
+    .filter(trade => trade.receivedAt <= now)
+    .filter(trade => now - trade.receivedAt <= config.baselineMs + config.windowMs)
+    .sort((a, b) => a.receivedAt - b.receivedAt);
 
-  const lastRsi = last(rsi);
-  const lastAtr = last(atr);
-  const lastBb = last(bb);
-  const lastCandle = last(candles);
-  const lastClose = last(closes);
+  const current = aggregate(
+    valid,
+    now - config.windowMs,
+    now + 1,
+    config.excludeLiquidations
+  );
 
-  const regime = regimeInfo.regime;
-  const regimeIndicators = regimeInfo.indicators;
+  const previousStart = now - config.windowMs - config.baselineMs;
+  const previousEnd = now - config.windowMs;
 
-  const macdCrossUp =
-    previousMacd.MACD != null &&
-    previousMacd.signal != null &&
-    lastMacd.MACD != null &&
-    lastMacd.signal != null &&
-    previousMacd.MACD < previousMacd.signal &&
-    lastMacd.MACD > lastMacd.signal;
+  const bucketMs =
+    config.baselineMs / config.baselineBuckets;
 
-  const macdCrossDown =
-    previousMacd.MACD != null &&
-    previousMacd.signal != null &&
-    lastMacd.MACD != null &&
-    lastMacd.signal != null &&
-    previousMacd.MACD > previousMacd.signal &&
-    lastMacd.MACD < lastMacd.signal;
+  const bucketVolumes: number[] = [];
+  let excludedLiquidationCount =
+    current.excludedLiquidationCount;
 
-  const riskCapital =
-    STARTING_BALANCE * MAX_RISK_PER_TRADE;
+  for (let i = 0; i < config.baselineBuckets; i += 1) {
+    const bucketStart = previousStart + i * bucketMs;
+    const bucketEnd =
+      i === config.baselineBuckets - 1
+        ? previousEnd
+        : bucketStart + bucketMs;
 
-  let side: 'long' | 'short' | 'none' = 'none';
-  let buy = false;
-  let sell = false;
-
-  let takeProfitPrice: number | null = null;
-  let stopLossPrice: number | null = null;
-  let positionSize: number | null = null;
-
-  let skipReason: string | null = null;
-
-  let entryExtensionAtr: number | null = null;
-  let maxEntryExtensionAtr: number | null = null;
-  let entryTooExtended = false;
-
-  // ========== ЛОНГ: TREND UP ==========
-
-  if (
-    ENABLE_TREND_UP_TRADES &&
-    regime === 'trend_up' &&
-    price > regimeIndicators.ema200 &&
-    regimeIndicators.ema20 > regimeIndicators.ema50 &&
-    regimeIndicators.ema50 > regimeIndicators.ema200
-  ) {
-    side = 'long';
-    buy = true;
-
-    stopLossPrice =
-      price - lastAtr * STOP_LOSS_ATR_MULTIPLIER;
-
-    takeProfitPrice =
-      price + lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
-  }
-
-  // ========== ШОРТ: TREND DOWN ==========
-
-  if (
-    regime === 'trend_down' &&
-    price < regimeIndicators.ema200 &&
-    regimeIndicators.ema20 < regimeIndicators.ema50 &&
-    regimeIndicators.ema50 < regimeIndicators.ema200
-  ) {
-    side = 'short';
-    sell = true;
-
-    stopLossPrice =
-      price + lastAtr * STOP_LOSS_ATR_MULTIPLIER;
-
-    takeProfitPrice =
-      price - lastAtr * TAKE_PROFIT_ATR_MULTIPLIER;
-  }
-
-  // ========== ПРОБОЙ: BREAKOUT WATCH ==========
-
-  if (
-    ENABLE_BREAKOUT_TRADES &&
-    regime === 'breakout_watch'
-  ) {
-    const candleBody = Math.abs(
-      lastCandle.close - lastCandle.open
+    const bucket = aggregate(
+      valid,
+      bucketStart,
+      bucketEnd,
+      config.excludeLiquidations
     );
 
-    const atrBuffer =
-      lastAtr * BREAKOUT_ATR_BUFFER_K;
-
-    const minBody =
-      lastAtr * BREAKOUT_BODY_ATR_MIN;
-
-    const breakoutUp =
-      lastCandle.close > lastBb.upper + atrBuffer &&
-      candleBody >= minBody &&
-      lastRsi > 45 &&
-      lastRsi < 75;
-
-    const breakoutDown =
-      lastCandle.close < lastBb.lower - atrBuffer &&
-      candleBody >= minBody &&
-      lastRsi < 55 &&
-      lastRsi > 25;
-
-    const atrPct =
-      lastClose > 0
-        ? lastAtr / lastClose
-        : 0;
-
-    const bbWidth =
-      lastBb.middle !== 0
-        ? (lastBb.upper - lastBb.lower) / lastBb.middle
-        : 0;
-
-    const volatilityOkForBreakout =
-      atrPct >= BREAKOUT_MIN_ATR_PCT &&
-      atrPct <= BREAKOUT_MAX_ATR_PCT &&
-      bbWidth >= BREAKOUT_MIN_BB_WIDTH &&
-      bbWidth <= BREAKOUT_MAX_BB_WIDTH;
-
-    let extremumOk = true;
-
-    if (breakoutUp || breakoutDown) {
-      const sideForExtremum =
-        breakoutUp ? 'long' : 'short';
-
-      const { extremePrice } =
-        findLocalExtremum(
-          candles,
-          sideForExtremum,
-          EXTREMUM_LOOKBACK
-        );
-
-      if (extremePrice !== 0 && lastAtr > 0) {
-        const distanceFromExtremum =
-          sideForExtremum === 'long'
-            ? lastClose - extremePrice
-            : extremePrice - lastClose;
-
-        const distanceAtr =
-          Math.abs(distanceFromExtremum) / lastAtr;
-
-        if (
-          distanceAtr > MAX_EXTREMUM_DISTANCE_ATR
-        ) {
-          extremumOk = false;
-        }
-      }
-    }
-
-    if (
-      volatilityOkForBreakout &&
-      extremumOk
-    ) {
-      if (breakoutUp) {
-        side = 'long';
-        buy = true;
-        sell = false;
-
-        stopLossPrice =
-          price - lastAtr * 1.5;
-
-        takeProfitPrice =
-          price + lastAtr * 2.2;
-      } else if (breakoutDown) {
-        side = 'short';
-        sell = true;
-        buy = false;
-
-        stopLossPrice =
-          price + lastAtr * 1.5;
-
-        takeProfitPrice =
-          price - lastAtr * 2.2;
-      }
-    }
+    bucketVolumes.push(
+      bucket.buyVolume + bucket.sellVolume
+    );
+    excludedLiquidationCount +=
+      bucket.excludedLiquidationCount;
   }
 
-  // ========== БЛОКИРОВКА: HIGH VOLATILITY / RANGE ==========
+  const nonEmptyBaselineBuckets =
+    bucketVolumes.filter(volume => volume > 0).length;
 
-  if (
-    regime === 'high_volatility' ||
-    regime === 'range'
-  ) {
-    buy = false;
-    sell = false;
-    side = 'none';
-    takeProfitPrice = null;
-    stopLossPrice = null;
-    positionSize = null;
+  const baselineVolumePerWindow =
+    nonEmptyBaselineBuckets >= config.minBaselineBuckets
+      ? bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
+        config.baselineBuckets
+      : null;
 
-    if (skipReason == null) {
-      skipReason = `Trading disabled for regime: ${regime}`;
-    }
-  }
+  const totalVolume =
+    current.buyVolume + current.sellVolume;
 
-  // ========== ПРОВЕРКА СЛИППЕЙДЖА ОТ СИГНАЛА ==========
+  const imbalance =
+    totalVolume > 0
+      ? (current.buyVolume - current.sellVolume) / totalVolume
+      : 0;
 
-  if (
-    (buy || sell) &&
-    signalPrice != null &&
-    lastAtr > 0
-  ) {
-    const distanceFromSignal =
-      Math.abs(price - signalPrice);
+  const volumeMultiple =
+    baselineVolumePerWindow != null &&
+    baselineVolumePerWindow > 0
+      ? totalVolume / baselineVolumePerWindow
+      : null;
 
-    const signalDistanceAtr =
-      distanceFromSignal / lastAtr;
+  const latestTrade = valid[valid.length - 1];
+  const price = latestTrade?.price ?? 0;
+  const atr =
+    options?.atr != null &&
+    Number.isFinite(options.atr) &&
+    options.atr > 0
+      ? options.atr
+      : null;
 
-    if (signalDistanceAtr > 1.0) {
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
+  const referencePrice = current.firstPrice;
+  const priceMove =
+    current.lastPrice != null && referencePrice != null
+      ? current.lastPrice - referencePrice
+      : null;
 
-      skipReason =
-        `Price moved ${signalDistanceAtr.toFixed(2)} ATR ` +
-        `from signal (max 1.00 ATR)`;
-    }
-  }
+  const priceMoveAtr =
+    priceMove != null && atr != null
+      ? priceMove / atr
+      : null;
 
-  // ========== РАССТОЯНИЕ ОТ EMA20 / BB ==========
+  const indicators: TradeFlowIndicators = {
+    windowMs: config.windowMs,
+    windowTradeCount: current.count,
+    buyVolume: current.buyVolume,
+    sellVolume: current.sellVolume,
+    totalVolume,
+    baselineVolumePerWindow,
+    volumeMultiple,
+    imbalance,
+    referencePrice,
+    priceMoveAtr,
+    excludedLiquidationCount
+  };
 
-  if (
-    side !== 'none' &&
-    lastAtr > 0
-  ) {
-    const referencePrice =
-      regime === 'breakout_watch'
-        ? side === 'long'
-          ? lastBb.upper
-          : lastBb.lower
-        : regimeIndicators.ema20;
-
-    // Направленное расстояние:
-    // long: price - referencePrice
-    // short: referencePrice - price
-    const distanceFromRef =
-      side === 'long'
-        ? price - referencePrice
-        : referencePrice - price;
-
-    entryExtensionAtr =
-      distanceFromRef / lastAtr;
-
-    maxEntryExtensionAtr =
-      regime === 'breakout_watch'
-        ? 1.5
-        : MAX_ENTRY_EXTENSION_TREND_ATR;
-
-    entryTooExtended =
-      entryExtensionAtr > maxEntryExtensionAtr;
-
-    if (entryTooExtended) {
-      const direction =
-        side === 'long'
-          ? 'above'
-          : 'below';
-
-      const refLabel =
-        regime === 'breakout_watch'
-          ? side === 'long'
-            ? 'BB.upper'
-            : 'BB.lower'
-          : 'EMA20';
-
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
-
-      skipReason =
-        `Entry too extended: ` +
-        `${entryExtensionAtr.toFixed(2)} ATR ` +
-        `${direction} ${refLabel} ` +
-        `(max ${maxEntryExtensionAtr.toFixed(2)} ATR, ` +
-        `regime ${regime})`;
-    }
-  }
-
-  // ========== ФИНАЛЬНАЯ ПРОВЕРКА ВХОДА ==========
-
-  if (
-    side !== 'none' &&
-    stopLossPrice != null
-  ) {
-    const entryDistanceFromEma20 =
-      side === 'long'
-        ? price - regimeIndicators.ema20
-        : regimeIndicators.ema20 - price;
-
-    const entryDistanceFromEma20Atr =
-      lastAtr > 0
-        ? entryDistanceFromEma20 / lastAtr
-        : 0;
-
-    const canOpen = canOpenTrade({
+  if (!latestTrade || price <= 0) {
+    return emptyResult(
       symbol,
-      side,
-      lastRsi,
-      lastAtr,
-      adx: regimeIndicators.adx,
-      bbWidth: regimeIndicators.bbWidth,
-      entryDistanceFromEma20,
-      entryDistanceFromEma20Atr,
-      entryTooExtended,
-      now: new Date()
-    });
-
-    if (!canOpen) {
-      buy = false;
-      sell = false;
-      side = 'none';
-      takeProfitPrice = null;
-      stopLossPrice = null;
-      positionSize = null;
-
-      skipReason =
-        'Entry filters failed ' +
-        '(RSI/ADX/ATR/BB/EMA20/trading window)';
-    }
+      price,
+      now,
+      'No valid recent trades',
+      indicators
+    );
   }
 
-  // ========== РАЗМЕР ПОЗИЦИИ ==========
+  if (now - latestTrade.receivedAt > config.maxTradeAgeMs) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Trade stream is stale',
+      indicators
+    );
+  }
 
   if (
-    side !== 'none' &&
-    stopLossPrice != null
+    baselineVolumePerWindow == null ||
+    nonEmptyBaselineBuckets < config.minBaselineBuckets
   ) {
-    const riskPerUnit =
-      Math.abs(price - stopLossPrice);
-
-    positionSize =
-      riskPerUnit > 0
-        ? riskCapital / riskPerUnit
-        : null;
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Insufficient trade-flow baseline',
+      indicators
+    );
   }
 
-  // ========== ВРЕМЯ СИГНАЛА ==========
+  if (atr == null) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'ATR unavailable',
+      indicators
+    );
+  }
 
-  const signalTime = lastCandle.time;
+  if (current.count === 0 || totalVolume <= 0) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'No eligible trades in current window',
+      indicators
+    );
+  }
 
-  const signalTimeIso = new Date(
-    signalTime < 1_000_000_000_000
-      ? signalTime * 1000
-      : signalTime
-  ).toISOString();
+  const spikeConfirmed =
+    volumeMultiple != null &&
+    volumeMultiple >= config.spikeMultiplier;
 
-  // ========== РАССТОЯНИЕ ОТ EMA20 ДЛЯ ЛОГА ==========
+  if (!spikeConfirmed) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Trade volume spike threshold not met',
+      indicators
+    );
+  }
 
-  const entryDistanceFromEma20ForLog =
-    side !== 'none'
-      ? side === 'long'
-        ? price - regimeIndicators.ema20
-        : regimeIndicators.ema20 - price
-      : null;
+  let side: 'long' | 'short' | 'none' = 'none';
 
-  const entryDistanceFromEma20AtrForLog =
-    side !== 'none' &&
-    lastAtr > 0 &&
-    entryDistanceFromEma20ForLog != null
-      ? entryDistanceFromEma20ForLog / lastAtr
-      : null;
+  if (imbalance >= config.minImbalance) {
+    side = 'long';
+  } else if (imbalance <= -config.minImbalance) {
+    side = 'short';
+  }
+
+  if (side === 'none') {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Aggressor-side imbalance threshold not met',
+      indicators
+    );
+  }
+
+  const directionalMoveAtr =
+    priceMoveAtr == null
+      ? null
+      : side === 'long'
+        ? priceMoveAtr
+        : -priceMoveAtr;
+
+  if (
+    directionalMoveAtr == null ||
+    directionalMoveAtr < config.minDirectionalMoveAtr
+  ) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Price has not confirmed flow direction',
+      indicators
+    );
+  }
+
+  if (directionalMoveAtr > config.maxChaseAtr) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      'Price already moved too far from flow trigger',
+      indicators
+    );
+  }
+
+  const stopDistance = atr * config.stopAtrMultiplier;
+  const targetDistance = atr * config.takeProfitAtrMultiplier;
+
+  const stopLossPrice =
+    side === 'long'
+      ? price - stopDistance
+      : price + stopDistance;
+
+  const takeProfitPrice =
+    side === 'long'
+      ? price + targetDistance
+      : price - targetDistance;
+
+  const signalTime = latestTrade.time;
+  const signalTimeIso =
+    new Date(signalTime).toISOString();
 
   return {
-    price,
-    buy,
-    sell,
+    symbol,
+    ready: true,
+    buy: side === 'long',
+    sell: side === 'short',
     side,
+    price,
     takeProfitPrice,
     stopLossPrice,
-    positionSize,
-    regime,
-    skipReason,
+    positionSize: null,
+    regime: 'aggressive_trade_flow_spike',
+    skipReason: null,
     signalTime,
     signalTimeIso,
-    indicators: {
-      macdCrossUp,
-      macdCrossDown,
-      lastRsi,
-      lastAtr,
-      bbUpper: lastBb.upper,
-      bbMiddle: lastBb.middle,
-      bbLower: lastBb.lower,
-      regimeReady: regimeInfo.ready,
-      regimeIndicators,
-      entryExtensionAtr,
-      maxEntryExtensionAtr,
-      entryTooExtended,
-      tradeFeeRate: TRADE_FEE_RATE,
-      ready: side !== 'none',
-      atrPct: regimeIndicators.atrPct,
-      adx: regimeIndicators.adx,
-      bbWidth: regimeIndicators.bbWidth,
-      ema20: regimeIndicators.ema20,
-      ema200: regimeIndicators.ema200,
-      priceVsEma200:
-        regimeIndicators.ema200 > 0
-          ? (price - regimeIndicators.ema200) /
-            regimeIndicators.ema200
-          : null,
-      entryDistanceFromEma20:
-        entryDistanceFromEma20ForLog,
-      entryDistanceFromEma20Atr:
-        entryDistanceFromEma20AtrForLog,
-      isCandleClosed: false
-    }
+    indicators
   };
 }
+
+/**
+ * Старые export-имена намеренно не оставлены:
+ * новая стратегия не использует свечной режим и индикаторы.
+ */
