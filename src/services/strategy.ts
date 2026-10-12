@@ -7,9 +7,7 @@ export const ENABLE_TREND_UP_TRADES = true;
 export const ENABLE_TREND_DOWN_TRADES = true;
 export const SYMBOL_COOLDOWN_MS = 60 * 60 * 1000;
 export const TRADE_FEE_RATE = 0.0
-
 const TRADING_HOUR_WINDOWS_UTC_PLUS_4: ReadonlyArray<readonly [number, number]> = [[0, 24]];
-
 export const MIN_ENTRY_RSI_LONG = 40;
 export const MAX_ENTRY_RSI_LONG = 65;
 export const MIN_ENTRY_RSI_SHORT = 35;
@@ -27,20 +25,16 @@ export const MAX_SIGNAL_CANDLE_ATR = 1.2;
 export const MIN_SIGNAL_BODY_ATR = 0.35;
 export const REQUIRE_DI_DIRECTION = true;
 export const LONG_BLACKLIST = [''];
-
 export const PULLBACK_LOOKBACK_CANDLES = 4;
 export const PULLBACK_MAX_DEPTH_EMA20_ATR = 1.5;
 export const PULLBACK_MAX_DEPTH_EMA50_ATR = 2.5;
 export const RECLAIM_MIN_BODY_ATR = 0.35;
 export const RECLAIM_MIN_CLOSE_POSITION = 0.6;
 export const RECLAIM_VOLUME_VS_LAST_PULLBACK = 1.3;
-
 export const STOP_LOSS_ATR_MULTIPLIER = 3.0;
 export const TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
-
 const symbolCooldowns = new Map<string, number>();
 const lastProcessedSignalCandleBySymbol = new Map<string, number>();
-
 const getUtcPlus4 = (date = new Date()): number => (date.getUTCHours() + 4) % 24;
 const formatHour = (h: number): string => `${String(h).padStart(2, '0')}:00`;
 const normalizeTimestamp = (t: number): number => t < 1e12 ? t * 1000 : t;
@@ -107,7 +101,6 @@ export function getRemainingCooldownMs(symbol: string, now = new Date()): number
 }
 
 export type MarketRegime = 'trend_up' | 'trend_down' | 'range' | 'high_volatility' | 'unknown';
-
 type RegimeIndicators = {
   lastClose: number; lastAtr: number; atrPct: number; adx: number; previousAdx: number; adxRising: boolean;
   plusDi: number; minusDi: number; ema20: number; ema50: number; ema200: number; previousEma20: number;
@@ -119,7 +112,6 @@ type RegimeIndicators = {
 };
 
 type FilterCheckResult = { passed: boolean; failedFilter?: string };
-
 export type StrategyIndicators = {
   lastRsi: number; lastAtr: number;
   bbUpper: number; bbMiddle: number; bbLower: number; regimeReady: boolean; regimeIndicators: RegimeIndicators;
@@ -154,7 +146,6 @@ const MIN_ADX_TREND = 21, MIN_ADX_RANGE = 20;
 const TREND_SWING_LOOKBACK = 20;
 const ER_PERIOD = 20;
 const MIN_EFFICIENCY_RATIO = 0.25;
-
 type SignalState = { buy: boolean; sell: boolean; side: 'long' | 'short' | 'none'; takeProfitPrice: number | null; stopLossPrice: number | null; positionSize: number | null };
 const resetSignalState = (s: SignalState): SignalState => ({ ...s, buy: false, sell: false, side: 'none', takeProfitPrice: null, stopLossPrice: null, positionSize: null });
 
@@ -180,7 +171,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const { candles, ema20, ema50, ema200, atr, regimeIndicators } = params;
   const minCandles = 21 + PULLBACK_LOOKBACK_CANDLES;
   if (candles.length < minCandles || ema20.length < minCandles || ema50.length < minCandles || ema200.length < 1 || atr.length < 3) return noPullbackSignal('not_enough_trigger_data');
-
   const current = last(candles);
   const currentEma20 = last(ema20), previousEma20 = ema20[ema20.length - 2];
   const currentEma50 = last(ema50);
@@ -193,7 +183,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   const recent = candles.slice(-1 - lookback, -1);
   const recentEma20 = ema20.slice(-1 - lookback, -1);
   const recentEma50 = ema50.slice(-1 - lookback, -1);
-
   let touchedEma20Long = false, touchedEma50Long = false, touchedEma20Short = false, touchedEma50Short = false;
   for (let i = 0; i < recent.length; i++) {
     const c = recent[i];
@@ -211,7 +200,6 @@ function detectPullbackReclaimSignal(params: { candles: Candle[]; ema20: number[
   else if (touchedEma50Long) touchedEma = 'ema50';
   const lowestLow = Math.min(...recent.map(c => c.low));
   const highestHigh = Math.max(...recent.map(c => c.high));
-
   // ИСПРАВЛЕНО: глубина от min/max EMA20 за окно отката, а не от текущей EMA20
   const minRecentEma20 = Math.min(...recentEma20);
   const maxRecentEma20 = Math.max(...recentEma20);
@@ -291,7 +279,6 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   const ema200 = EMA.calculate({ period: 200, values: closes });
   const bb = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
   if (atr.length < 2 || adx.length < 2 || ema20.length < 2 || ema50.length < 2 || ema200.length < 1 || bb.length < 2) return { regime: 'unknown', ready: false, indicators: null };
-
   const lastClose = last(closes), lastAtr = last(atr), lastAdx = last(adx), previousAdx = adx[adx.length - 2];
   const lastEma20 = last(ema20), previousEma20 = ema20[ema20.length - 2], lastEma50 = last(ema50), previousEma50 = ema50[ema50.length - 2];
   const lastEma200 = last(ema200), lastBb = last(bb), previousBb = bb[bb.length - 2];
@@ -310,13 +297,11 @@ export function detectMarketRegime(candles: Candle[]): { regime: MarketRegime; r
   const strongTrendDown = lastClose < lastEma200 && lastEma20 < lastEma50 && lastEma50 < lastEma200 && lastEma20 < previousEma20 && trendStructureDown && adxValue >= MIN_ADX_TREND && minusDi > plusDi;
   const range = adxValue < MIN_ADX_RANGE && bbWidth < 0.08;
   const highVolatility = atrPct > 0.025 || bbWidth > 0.12;
-
   let regime: MarketRegime = 'unknown';
   if (highVolatility) regime = 'high_volatility';
   else if (strongTrendUp) regime = 'trend_up';
   else if (strongTrendDown) regime = 'trend_down';
   else if (range) regime = 'range';
-
   return { regime, ready: true, indicators: { lastClose, lastAtr, atrPct, adx: adxValue, previousAdx: previousAdxValue, adxRising, plusDi, minusDi, ema20: lastEma20, ema50: lastEma50, ema200: lastEma200, previousEma20, previousEma50, bbWidth, previousBbWidth, bbWidthRising, avgVol20, candleRangeAtr,
     swingHigh: swing.swingHigh, swingLow: swing.swingLow, prevSwingHigh: swing.prevSwingHigh, prevSwingLow: swing.prevSwingLow,
     higherHigh: swing.higherHigh, higherLow: swing.higherLow, lowerHigh: swing.lowerHigh, lowerLow: swing.lowerLow,
@@ -331,9 +316,7 @@ export function canOpenTrade(params: {
   entryPattern?: 'pullback_reclaim'; now?: Date;
 }): FilterCheckResult {
   const { symbol, side, price, ema20, lastRsi, atrPct, adx, adxRising = true, plusDi = 0, minusDi = 0, bbWidth, bbWidthRising = true, candleRangeAtr = 0, entryDistanceFromEma20Atr, entryTooExtended, pullbackDetected, reclaimDetected, now = new Date() } = params;
-
   const isPullback = true;
-
   if (!isTradingTimeUtcPlus4(now)) return { passed: false, failedFilter: 'trading_window' };
   if (isSymbolOnCooldown(symbol, now)) return { passed: false, failedFilter: 'cooldown' };
   if (side !== 'long' && side !== 'short') return { passed: false, failedFilter: 'invalid_side' };
@@ -348,8 +331,6 @@ export function canOpenTrade(params: {
     if (side === 'long' && (lastRsi < MIN_ENTRY_RSI_LONG || lastRsi > MAX_ENTRY_RSI_LONG)) return { passed: false, failedFilter: 'rsi' };
     if (side === 'short' && (lastRsi < MIN_ENTRY_RSI_SHORT || lastRsi > MAX_ENTRY_RSI_SHORT)) return { passed: false, failedFilter: 'rsi' };
   }
-
-
   const maxAtrPct = side === 'long' ? MAX_LAST_ATR_PCT_LONG : MAX_LAST_ATR_PCT_SHORT;
   if (atrPct < MIN_LAST_ATR_PCT || atrPct > maxAtrPct) return { passed: false, failedFilter: 'atr_pct' };
   const minAdx = side === 'long' ? MIN_ENTRY_ADX_LONG : MIN_ENTRY_ADX_SHORT;
@@ -358,7 +339,6 @@ export function canOpenTrade(params: {
     if (side === 'long' && plusDi <= minusDi) return { passed: false, failedFilter: 'di_direction' };
     if (side === 'short' && minusDi <= plusDi) return { passed: false, failedFilter: 'di_direction' };
   }
-
   const maxBbWidth =
     side === 'long' ? MAX_BB_WIDTH_LONG : MAX_BB_WIDTH_SHORT;
   
@@ -418,7 +398,6 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   const regimeIndicators = regimeInfo.indicators!;
   const trigger = detectPullbackReclaimSignal({ candles: closedCandles, ema20, ema50, ema200, atr, regimeIndicators });
   const riskCapital = STARTING_BALANCE * MAX_RISK_PER_TRADE;
-
   let side: 'long' | 'short' | 'none' = 'none';
   let buy = false, sell = false;
   let takeProfitPrice: number | null = null;
@@ -437,11 +416,9 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
   else if (ENABLE_TREND_UP_TRADES && regime === 'trend_up' && trigger.long) { side = 'long'; buy = true; entryPattern = 'pullback_reclaim'; }
   else if (ENABLE_TREND_DOWN_TRADES && regime === 'trend_down' && trigger.short) { side = 'short'; sell = true; entryPattern = 'pullback_reclaim'; }
   else { diagnosticPattern = 'pullback_reclaim'; skipReason = 'No pullback/reclaim signal'; }
-
   let atrUsedForExit: number | undefined;
   let slMultiplierUsed: number | undefined;
   let tpMultiplierUsed: number | undefined;
-
   if (side !== 'none' && lastAtr > 0) {
     entryExtensionAtr = getEntryDistanceFromEma20Atr(price, regimeIndicators.ema20, lastAtr);
     entryTooExtended = entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
@@ -452,10 +429,8 @@ export async function analyzeMarket(candles: Candle[], symbol: string, signalPri
     atrUsedForExit = lastAtr;
   }
 
-
   let entryDistanceFromEma20ForTrade: number | null = null;
   let entryDistanceFromEma20AtrForTrade: number | null = null;
-
   if (side !== 'none' && stopLossPrice != null) {
     const entryDistanceFromEma20 = getEntryDistanceFromEma20(price, regimeIndicators.ema20);
     const entryDistanceFromEma20Atr = getEntryDistanceFromEma20Atr(price, regimeIndicators.ema20, lastAtr);
@@ -559,7 +534,6 @@ export function formatStrategyDiagnostics(result: StrategyResult): string {
   const maxAtrPct = side === 'short' ? MAX_LAST_ATR_PCT_SHORT : MAX_LAST_ATR_PCT_LONG;
   const maxDistanceAtr = MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
   const maxCandleAtr = MAX_SIGNAL_CANDLE_ATR;
-
   // ИСПРАВЛЕНО: нейтральный расчёт, всегда заполнен
   const ema20Direction = r.lastClose > r.ema20 ? 'above EMA20' : 'below EMA20';
   const distEma20Atr = r.lastAtr > 0 ? (Math.abs(r.lastClose - r.ema20) / r.lastAtr).toFixed(3) : '-';
