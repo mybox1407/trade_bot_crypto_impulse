@@ -572,6 +572,20 @@ export function getTrades(
   return trades.slice(-limit);
 }
 
+export function getMarketTimeframe(
+  symbol: string
+): string | null {
+  const market = resolveMarket(symbol);
+
+  return clients.get(market.marketId)?.timeframe ?? null;
+}
+
+export function isMarketDataStarted(
+  marketId: number
+): boolean {
+  return clients.has(marketId);
+}
+
 export function getMarkPrice(
   symbol: string
 ): number | null {
