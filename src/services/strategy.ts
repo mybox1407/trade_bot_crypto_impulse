@@ -1418,12 +1418,19 @@ export async function analyzeMarket(
   let stopLossPrice: number | null = null;
   let positionSize: number | null = null;
   let skipReason: string | null = null;
-  let entryExtensionAtr: number | null = null;
-
+  
+  const entryExtensionAtr = getEntryDistanceFromEma20Atr(
+    price,
+    regimeIndicators.ema20,
+    lastAtr
+  );
+  
   const maxEntryExtensionAtr =
     MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-
-  let entryTooExtended = false;
+  
+  const entryTooExtended =
+    entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
+  
   let entryPattern: 'pullback_reclaim' | null = null;
   let diagnosticPattern: 'pullback_reclaim' | null = null;
   let diagnosticFailedFilter: string | null = null;
@@ -1461,15 +1468,6 @@ export async function analyzeMarket(
   let tpMultiplierUsed: number | undefined;
 
   if (side !== 'none' && lastAtr > 0) {
-    entryExtensionAtr = getEntryDistanceFromEma20Atr(
-      price,
-      regimeIndicators.ema20,
-      lastAtr
-    );
-
-    entryTooExtended =
-      entryExtensionAtr > MAX_ENTRY_DISTANCE_FROM_EMA20_ATR;
-
     stopLossPrice =
       side === 'long'
         ? price - lastAtr * STOP_LOSS_ATR_MULTIPLIER
