@@ -35,15 +35,52 @@ function calculateAtr(candles: Candle[]): number | null {
   return Number.isFinite(atr) && atr > 0 ? atr : null;
 }
 
+function isClosedPosition(position: unknown): boolean {
+  const value = position as Record<string, unknown>;
+
+  return Boolean(
+    value.closedAt ||
+    value.closedAtIso ||
+    value.closePrice ||
+    value.closed === true ||
+    value.status === 'closed'
+  );
+}
+
+function getPositionPnL(position: unknown): number {
+  const value = position as Record<string, unknown>;
+
+  const candidates = [
+    value.netPnL,
+    value.realizedPnL,
+    value.pnl,
+    value.unrealizedPnL
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return 0;
+}
+
 function getClosedTradeHistory(): TradeHistoryEntry[] {
   return getPositions()
-    .filter(position => position.status === 'closed')
-    .map(position => ({
-      symbol: position.symbol,
-      side: position.side,
-      openedAt: new Date(position.openedAt).getTime(),
-      netPnL: position.netPnL ?? 0
-    }));
+    .filter(isClosedPosition)
+    .map(position => {
+      const value = position as Record<string, unknown>;
+
+      return {
+        symbol: String(value.symbol),
+        side: value.side === 'short' ? 'short' : 'long',
+        openedAt: new Date(String(value.openedAt)).getTime(),
+        netPnL: getPositionPnL(position)
+      };
+    });
 }
 
 export function runTradeFlowOnce(
