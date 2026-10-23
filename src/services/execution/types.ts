@@ -80,6 +80,13 @@ export interface ExecutionResult {
   fee?: number;
   protectiveOrders?: ProtectiveOrders;
   message?: string;
+
+  /**
+   * Actual protective levels calculated from the real average fill price.
+   * These values must be used when creating the local position.
+   */
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
 }
 
 export interface ExecutionService {
