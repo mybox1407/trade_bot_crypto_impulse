@@ -36,7 +36,7 @@ function calculateAtr(candles: Candle[]): number | null {
 }
 
 function isClosedPosition(position: unknown): boolean {
-  const value = position as Record<string, unknown>;
+  const value = position as unknown as Record<string, unknown>;
 
   return Boolean(
     value.closedAt ||
@@ -48,7 +48,7 @@ function isClosedPosition(position: unknown): boolean {
 }
 
 function getPositionPnL(position: unknown): number {
-  const value = position as Record<string, unknown>;
+  const value = position as unknown as Record<string, unknown>;
 
   const candidates = [
     value.netPnL,
@@ -72,7 +72,7 @@ function getClosedTradeHistory(): TradeHistoryEntry[] {
   return getPositions()
     .filter(isClosedPosition)
     .map(position => {
-      const value = position as Record<string, unknown>;
+      const value = position as unknown as Record<string, unknown>;
 
       return {
         symbol: String(value.symbol),
