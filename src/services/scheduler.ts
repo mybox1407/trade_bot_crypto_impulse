@@ -414,13 +414,18 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
     }
 
     const expectedPrice = validateSignalPrice(result.price);
-    
+
     const signalStopLossPrice = result.stopLossPrice;
-    
+    const signalTakeProfitPrice = result.takeProfitPrice;
+
     if (signalStopLossPrice == null) {
       throw new Error('Trade-flow signal missing stop-loss for position sizing');
     }
-    
+
+    if (signalTakeProfitPrice == null) {
+      throw new Error('Trade-flow signal missing take-profit price');
+    }
+
     const stopDistance = Math.abs(expectedPrice - signalStopLossPrice);
     const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
 
@@ -465,8 +470,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         clientOrderId,
         priceDecimals: activeMarket.priceDecimals,
         sizeDecimals: activeMarket.sizeDecimals,
-        stopLossPrice: result.stopLossPrice,
-        takeProfitPrice: result.takeProfitPrice
+        stopLossPrice: signalStopLossPrice,
+        takeProfitPrice: signalTakeProfitPrice
       });
 
       const rawAverageFillPrice = executionResult.averageFillPrice;
@@ -507,7 +512,7 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         filledQuantity: executionResult.filledQuantity,
         expectedPrice,
         averageFillPrice,
-        stopLossPrice: result.stopLossPrice,
+        stopLossPrice: signalStopLossPrice,
         orderId: executionResult.orderId,
         clientOrderId,
         regime: result.regime,
