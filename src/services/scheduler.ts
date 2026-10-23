@@ -69,6 +69,7 @@ type PendingFilledOpen = {
   expectedPrice: number;
   averageFillPrice: number;
   stopLossPrice: number;
+  takeProfitPrice: number;
   orderId?: string;
   clientOrderId: string;
   regime: string;
@@ -268,6 +269,8 @@ function savePendingFilledOpen(input: PendingFilledOpen): void {
     side: input.side,
     filledQuantity: input.filledQuantity,
     averageFillPrice: input.averageFillPrice,
+    stopLossPrice: input.stopLossPrice,
+    takeProfitPrice: input.takeProfitPrice,
     orderId: input.orderId ?? null
   });
 }
@@ -283,7 +286,7 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     side: input.side,
     entryPrice: input.averageFillPrice,
     quantity: input.filledQuantity,
-    takeProfitPrice: input.averageFillPrice,
+    takeProfitPrice: input.takeProfitPrice,
     stopLossPrice: input.stopLossPrice,
     metadata: buildPositionMetadata(
       input.regime,
@@ -502,6 +505,9 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
 
       const averageFillPrice: number = Number(rawAverageFillPrice);
 
+      const actualStopLossPrice = executionResult.stopLossPrice ?? signalStopLossPrice;
+      const actualTakeProfitPrice = executionResult.takeProfitPrice ?? signalTakeProfitPrice;
+
       const signalIndicators = { ...result.indicators, atr: stopDistance };
 
       const pending: PendingFilledOpen = {
@@ -512,7 +518,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         filledQuantity: executionResult.filledQuantity,
         expectedPrice,
         averageFillPrice,
-        stopLossPrice: signalStopLossPrice,
+        stopLossPrice: actualStopLossPrice,
+        takeProfitPrice: actualTakeProfitPrice,
         orderId: executionResult.orderId,
         clientOrderId,
         regime: result.regime,
@@ -555,6 +562,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         quantity: pending.filledQuantity,
         requestedPrice: expectedPrice,
         averageFillPrice: pending.averageFillPrice,
+        stopLossPrice: pending.stopLossPrice,
+        takeProfitPrice: pending.takeProfitPrice,
         executionOrderId: pending.orderId ?? null
       });
 
