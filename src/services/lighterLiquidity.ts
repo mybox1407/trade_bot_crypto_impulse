@@ -101,7 +101,9 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'PLTR',
   'SOXL',
   'AMD',
-  '',
+  'PAXG',
+  'IBM',
+  'PRL',
 
   'XMR'
 
