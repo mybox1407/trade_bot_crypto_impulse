@@ -5,9 +5,7 @@ import {
   type MarketPrice
 } from './lighterWs';
 
-import {
-  getLighterMarket
-} from '../config/lighterMarkets';
+import { getLighterMarket } from '../config/lighterMarkets';
 
 import {
   TradeFlowBaselineTracker,
@@ -18,9 +16,10 @@ const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-const MAX_CANDLES = 250;
+const MAX_CANDLES = 700;
 const MAX_TRADES = 5_000;
 const TRADE_ID_CACHE_SIZE = 20_000;
+const DEFAULT_TIMEFRAME = '1m';
 
 export type MarketReference = {
   symbol: string;
@@ -37,36 +36,17 @@ export type TradeListener = (
   trade: LighterTrade
 ) => void | Promise<void>;
 
-const candlesByMarket =
-  new Map<number, Candle[]>();
+const candlesByMarket = new Map<number, Candle[]>();
+const pricesByMarket = new Map<number, MarketPrice>();
+const tradesByMarket = new Map<number, LighterTrade[]>();
+const baselineTrackersByMarket = new Map<number, TradeFlowBaselineTracker>();
+const clients = new Map<number, MarketClient>();
+const dynamicMarketsBySymbol = new Map<string, MarketReference>();
+const startingMarkets = new Set<number>();
+const tradeListeners = new Set<TradeListener>();
+const seenTradeIdsByMarket = new Map<number, Set<string>>();
 
-const pricesByMarket =
-  new Map<number, MarketPrice>();
-
-const tradesByMarket =
-  new Map<number, LighterTrade[]>();
-
-const baselineTrackersByMarket =
-  new Map<number, TradeFlowBaselineTracker>();
-
-const clients =
-  new Map<number, MarketClient>();
-
-const dynamicMarketsBySymbol =
-  new Map<string, MarketReference>();
-
-const startingMarkets =
-  new Set<number>();
-
-const tradeListeners =
-  new Set<TradeListener>();
-
-const seenTradeIdsByMarket =
-  new Map<number, Set<string>>();
-
-export function subscribeToTrades(
-  listener: TradeListener
-): () => void {
+export function subscribeToTrades(listener: TradeListener): () => void {
   tradeListeners.add(listener);
 
   return () => {
@@ -74,41 +54,24 @@ export function subscribeToTrades(
   };
 }
 
-function normalizeCandleTime(
-  value: number
-): number {
-  if (!Number.isFinite(value)) {
-    return value;
-  }
+function normalizeCandleTime(value: number): number {
+  if (!Number.isFinite(value)) return value;
 
-  return value > 10_000_000_000
-    ? Math.floor(value / 1000)
-    : Math.floor(value);
+  // Lighter может отдавать время в секундах или миллисекундах.
+  // Стратегия v6.41 работает с millisecond epoch.
+  return value > 10_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
 }
 
-function timeframeToSeconds(
-  timeframe: string
-): number {
-  const match = timeframe.match(
-    /^(\d+)([mhd])$/
-  );
+function timeframeToSeconds(timeframe: string): number {
+  const match = timeframe.match(/^(\d+)([mhd])$/);
 
-  if (!match) {
-    throw new Error(
-      `Unsupported timeframe: ${timeframe}`
-    );
-  }
+  if (!match) throw new Error(`Unsupported timeframe: ${timeframe}`);
 
   const amount = Number(match[1]);
   const unit = match[2];
 
-  if (unit === 'm') {
-    return amount * 60;
-  }
-
-  if (unit === 'h') {
-    return amount * 60 * 60;
-  }
+  if (unit === 'm') return amount * 60;
+  if (unit === 'h') return amount * 60 * 60;
 
   return amount * 24 * 60 * 60;
 }
@@ -131,35 +94,20 @@ function normalizeCandle(raw: {
   };
 }
 
-export function normalizeSymbol(
-  symbol: string
-): string {
+export function normalizeSymbol(symbol: string): string {
   const value = symbol.trim().toUpperCase();
 
-  return value.endsWith('/USDT')
-    ? value
-    : `${value}/USDT`;
+  return value.endsWith('/USDT') ? value : `${value}/USDT`;
 }
 
-function resolveMarket(
-  symbol: string
-): MarketReference {
-  const normalizedSymbol =
-    normalizeSymbol(symbol);
+function resolveMarket(symbol: string): MarketReference {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const dynamicMarket = dynamicMarketsBySymbol.get(normalizedSymbol);
 
-  const dynamicMarket =
-    dynamicMarketsBySymbol.get(normalizedSymbol);
-
-  if (dynamicMarket) {
-    return dynamicMarket;
-  }
-
-  return getLighterMarket(normalizedSymbol);
+  return dynamicMarket ?? getLighterMarket(normalizedSymbol);
 }
 
-export function registerDynamicMarket(
-  market: MarketReference
-): void {
+export function registerDynamicMarket(market: MarketReference): void {
   const pair = normalizeSymbol(market.symbol);
 
   dynamicMarketsBySymbol.set(pair, {
@@ -168,20 +116,13 @@ export function registerDynamicMarket(
   });
 }
 
-export function unregisterDynamicMarket(
-  marketId: number
-): void {
+export function unregisterDynamicMarket(marketId: number): void {
   for (const [symbol, market] of dynamicMarketsBySymbol) {
-    if (market.marketId === marketId) {
-      dynamicMarketsBySymbol.delete(symbol);
-    }
+    if (market.marketId === marketId) dynamicMarketsBySymbol.delete(symbol);
   }
 }
 
-function rememberTradeId(
-  marketId: number,
-  tradeId: string
-): boolean {
+function rememberTradeId(marketId: number, tradeId: string): boolean {
   let ids = seenTradeIdsByMarket.get(marketId);
 
   if (!ids) {
@@ -189,42 +130,32 @@ function rememberTradeId(
     seenTradeIdsByMarket.set(marketId, ids);
   }
 
-  if (ids.has(tradeId)) {
-    return false;
-  }
+  if (ids.has(tradeId)) return false;
 
   ids.add(tradeId);
 
   if (ids.size > TRADE_ID_CACHE_SIZE) {
     const oldestId = ids.values().next().value;
 
-    if (oldestId !== undefined) {
-      ids.delete(oldestId);
-    }
+    if (oldestId !== undefined) ids.delete(oldestId);
   }
 
   return true;
 }
 
-function publishTrade(
-  market: MarketReference,
-  trade: LighterTrade
-): void {
+function publishTrade(market: MarketReference, trade: LighterTrade): void {
   if (!trade.tradeId) {
     console.error(
-      `[${new Date().toISOString()}] ` +
-        `Ignoring Lighter trade without tradeId`,
+      `[${new Date().toISOString()}] Ignoring Lighter trade without tradeId`,
       trade
     );
+
     return;
   }
 
-  if (!rememberTradeId(market.marketId, trade.tradeId)) {
-    return;
-  }
+  if (!rememberTradeId(market.marketId, trade.tradeId)) return;
 
-  const trades =
-    tradesByMarket.get(market.marketId) ?? [];
+  const trades = tradesByMarket.get(market.marketId) ?? [];
 
   trades.push(trade);
 
@@ -234,15 +165,11 @@ function publishTrade(
 
   tradesByMarket.set(market.marketId, trades);
 
-  let baselineTracker =
-    baselineTrackersByMarket.get(market.marketId);
+  let baselineTracker = baselineTrackersByMarket.get(market.marketId);
 
   if (!baselineTracker) {
     baselineTracker = new TradeFlowBaselineTracker();
-    baselineTrackersByMarket.set(
-      market.marketId,
-      baselineTracker
-    );
+    baselineTrackersByMarket.set(market.marketId, baselineTracker);
   }
 
   baselineTracker.addTrade(trade);
@@ -251,32 +178,24 @@ function publishTrade(
 
   for (const listener of tradeListeners) {
     try {
-      void Promise.resolve(
-        listener(symbol, trade)
-      ).catch(error => {
+      void Promise.resolve(listener(symbol, trade)).catch(error => {
         console.error(
-          `[${new Date().toISOString()}] ` +
-            `Trade listener failed for ${symbol}:`,
+          `[${new Date().toISOString()}] Trade listener failed for ${symbol}:`,
           error
         );
       });
     } catch (error) {
       console.error(
-        `[${new Date().toISOString()}] ` +
-          `Trade listener failed for ${symbol}:`,
+        `[${new Date().toISOString()}] Trade listener failed for ${symbol}:`,
         error
       );
     }
   }
 }
 
-export function getTradeFlowBaseline(
-  symbol: string,
-  now = Date.now()
-): TradeFlowBaseline {
+export function getTradeFlowBaseline(symbol: string, now = Date.now()): TradeFlowBaseline {
   const market = resolveMarket(symbol);
-  const tracker =
-    baselineTrackersByMarket.get(market.marketId);
+  const tracker = baselineTrackersByMarket.get(market.marketId);
 
   if (!tracker) {
     return {
@@ -290,13 +209,10 @@ export function getTradeFlowBaseline(
   return tracker.getBaseline(now);
 }
 
-export function getTradeFlowBaselineTracker(
-  symbol: string
-): TradeFlowBaselineTracker {
+export function getTradeFlowBaselineTracker(symbol: string): TradeFlowBaselineTracker {
   const market = resolveMarket(symbol);
 
-  let tracker =
-    baselineTrackersByMarket.get(market.marketId);
+  let tracker = baselineTrackersByMarket.get(market.marketId);
 
   if (!tracker) {
     tracker = new TradeFlowBaselineTracker();
@@ -323,52 +239,31 @@ async function loadHistoricalCandles(
     count_back: String(limit)
   });
 
-  const url =
-    `${LIGHTER_API_URL}/api/v1/candles?` +
-    params.toString();
+  const url = `${LIGHTER_API_URL}/api/v1/candles?${params.toString()}`;
 
-  console.log(
-    `[${new Date().toISOString()}] ` +
-      `Loading historical candles: ${url}`
-  );
+  console.log(`[${new Date().toISOString()}] Loading historical candles: ${url}`);
 
   const response = await fetch(url);
   const body = await response.text();
 
   if (!response.ok) {
-    throw new Error(
-      `Lighter candles HTTP ${response.status}: ${body}`
-    );
+    throw new Error(`Lighter candles HTTP ${response.status}: ${body}`);
   }
 
   let data: {
     code: number;
     message?: string;
-    r?: string;
-    c?: Array<{
-      t: number;
-      o: number;
-      h: number;
-      l: number;
-      c: number;
-      v: number;
-    }>;
+    c?: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>;
   };
 
   try {
     data = JSON.parse(body) as typeof data;
   } catch {
-    throw new Error(
-      `Invalid JSON from Lighter candles endpoint: ` +
-        `${body.slice(0, 300)}`
-    );
+    throw new Error(`Invalid JSON from Lighter candles endpoint: ${body.slice(0, 300)}`);
   }
 
   if (data.code !== 200) {
-    throw new Error(
-      `Lighter candles API error ${data.code}: ` +
-        `${data.message ?? 'unknown error'}`
-    );
+    throw new Error(`Lighter candles API error ${data.code}: ${data.message ?? 'unknown error'}`);
   }
 
   return (data.c ?? [])
@@ -394,24 +289,18 @@ function attachClient(
 
   candlesByMarket.set(marketId, historicalCandles);
 
-  if (!tradesByMarket.has(marketId)) {
-    tradesByMarket.set(marketId, []);
-  }
+  if (!tradesByMarket.has(marketId)) tradesByMarket.set(marketId, []);
 
   if (!baselineTrackersByMarket.has(marketId)) {
-    baselineTrackersByMarket.set(
-      marketId,
-      new TradeFlowBaselineTracker()
-    );
+    baselineTrackersByMarket.set(marketId, new TradeFlowBaselineTracker());
   }
 
   const client = new LighterWsClient(
     marketId,
     timeframe,
-    candle => {
-      const candles =
-        candlesByMarket.get(marketId) ?? [];
 
+    candle => {
+      const candles = candlesByMarket.get(marketId) ?? [];
       const normalizedCandle: Candle = {
         ...candle,
         time: normalizeCandleTime(candle.time)
@@ -433,19 +322,17 @@ function attachClient(
 
       candlesByMarket.set(marketId, candles);
     },
+
     price => {
       pricesByMarket.set(marketId, price);
     },
+
     trade => {
       publishTrade(market, trade);
     }
   );
 
-  clients.set(marketId, {
-    client,
-    timeframe
-  });
-
+  clients.set(marketId, { client, timeframe });
   client.connect();
 }
 
@@ -460,8 +347,7 @@ async function startResolvedMarket(
 
     if (existing.timeframe !== timeframe) {
       console.warn(
-        `[${new Date().toISOString()}] ` +
-          `Market ${market.symbol} already started with timeframe ` +
+        `[${new Date().toISOString()}] Market ${market.symbol} already started with timeframe ` +
           `${existing.timeframe}, ignoring request for ${timeframe}`
       );
     }
@@ -471,9 +357,7 @@ async function startResolvedMarket(
 
   if (startingMarkets.has(marketId)) {
     console.log(
-      `[${new Date().toISOString()}] ` +
-        `Market ${market.symbol} is already starting, ` +
-        `skipping duplicate request`
+      `[${new Date().toISOString()}] Market ${market.symbol} is already starting, skipping duplicate request`
     );
 
     return;
@@ -482,38 +366,22 @@ async function startResolvedMarket(
   startingMarkets.add(marketId);
 
   try {
-    const historicalCandles =
-      await loadHistoricalCandles(
-        marketId,
-        timeframe,
-        MAX_CANDLES
-      );
+    const historicalCandles = await loadHistoricalCandles(marketId, timeframe, MAX_CANDLES);
 
     if (historicalCandles.length === 0) {
-      throw new Error(
-        `No historical candles received for ${market.symbol}`
-      );
+      throw new Error(`No historical candles received for ${market.symbol}`);
     }
 
-    attachClient(
-      market,
-      timeframe,
-      historicalCandles
-    );
+    attachClient(market, timeframe, historicalCandles);
 
     console.log(
-      `[${new Date().toISOString()}] ` +
-        `Market data started: ${normalizeSymbol(market.symbol)}, ` +
-        `marketId=${marketId}, timeframe=${timeframe}, ` +
-        `candles=${historicalCandles.length}`
+      `[${new Date().toISOString()}] Market data started: ${normalizeSymbol(market.symbol)}, ` +
+        `marketId=${marketId}, timeframe=${timeframe}, candles=${historicalCandles.length}`
     );
   } catch (error) {
     console.error(
-      `[${new Date().toISOString()}] ` +
-        `Failed to start market data for ${market.symbol}:`,
-      error instanceof Error
-        ? error.message
-        : 'Unknown error'
+      `[${new Date().toISOString()}] Failed to start market data for ${market.symbol}:`,
+      error instanceof Error ? error.message : 'Unknown error'
     );
 
     throw error;
@@ -524,17 +392,14 @@ async function startResolvedMarket(
 
 export async function startMarketData(
   symbol: string,
-  timeframe = '15m'
+  timeframe = DEFAULT_TIMEFRAME
 ): Promise<void> {
-  await startResolvedMarket(
-    resolveMarket(symbol),
-    timeframe
-  );
+  await startResolvedMarket(resolveMarket(symbol), timeframe);
 }
 
 export async function startMarketDataByMarket(
   market: MarketReference,
-  timeframe = '15m'
+  timeframe = DEFAULT_TIMEFRAME
 ): Promise<void> {
   const normalizedMarket = {
     symbol: normalizeSymbol(market.symbol),
@@ -543,112 +408,66 @@ export async function startMarketDataByMarket(
 
   registerDynamicMarket(normalizedMarket);
 
-  await startResolvedMarket(
-    normalizedMarket,
-    timeframe
-  );
+  await startResolvedMarket(normalizedMarket, timeframe);
 }
 
 export function getCandles(
   symbol: string,
-  _timeframe = '15m',
+  _timeframe = DEFAULT_TIMEFRAME,
   limit = MAX_CANDLES
 ): Candle[] {
   const market = resolveMarket(symbol);
-  const candles =
-    candlesByMarket.get(market.marketId) ?? [];
+  const candles = candlesByMarket.get(market.marketId) ?? [];
 
   return candles.slice(-limit);
 }
 
-export function getTrades(
-  symbol: string,
-  limit = MAX_TRADES
-): LighterTrade[] {
+export function getTrades(symbol: string, limit = MAX_TRADES): LighterTrade[] {
   const market = resolveMarket(symbol);
-  const trades =
-    tradesByMarket.get(market.marketId) ?? [];
+  const trades = tradesByMarket.get(market.marketId) ?? [];
 
   return trades.slice(-limit);
 }
 
-export function getMarketTimeframe(
-  symbol: string
-): string | null {
+export function getMarketTimeframe(symbol: string): string | null {
   const market = resolveMarket(symbol);
 
   return clients.get(market.marketId)?.timeframe ?? null;
 }
 
-export function isMarketDataStarted(
-  marketId: number
-): boolean {
+export function isMarketDataStarted(marketId: number): boolean {
   return clients.has(marketId);
 }
 
-export function getMarkPrice(
-  symbol: string
-): number | null {
+export function getMarkPrice(symbol: string): number | null {
   const market = resolveMarket(symbol);
-  const price =
-    pricesByMarket.get(market.marketId);
+  const price = pricesByMarket.get(market.marketId);
 
-  return (
-    price?.markPrice ??
-    price?.midPrice ??
-    price?.lastTradePrice ??
-    null
-  );
+  return price?.markPrice ?? price?.midPrice ?? price?.lastTradePrice ?? null;
 }
 
-export function getExitPrice(
-  symbol: string,
-  side: 'long' | 'short'
-): number | null {
+export function getExitPrice(symbol: string, side: 'long' | 'short'): number | null {
   const market = resolveMarket(symbol);
-  const price =
-    pricesByMarket.get(market.marketId);
+  const price = pricesByMarket.get(market.marketId);
 
   if (side === 'long') {
-    return (
-      price?.bestBid ??
-      price?.markPrice ??
-      price?.midPrice ??
-      price?.lastTradePrice ??
-      price?.bestAsk ??
-      null
-    );
+    return price?.bestBid ?? price?.markPrice ?? price?.midPrice ?? price?.lastTradePrice ?? price?.bestAsk ?? null;
   }
 
-  return (
-    price?.bestAsk ??
-    price?.markPrice ??
-    price?.midPrice ??
-    price?.lastTradePrice ??
-    price?.bestBid ??
-    null
-  );
+  return price?.bestAsk ?? price?.markPrice ?? price?.midPrice ?? price?.lastTradePrice ?? price?.bestBid ?? null;
 }
 
-export function getCurrentPrice(
-  symbol: string
-): number | null {
+export function getCurrentPrice(symbol: string): number | null {
   return getMarkPrice(symbol);
 }
 
-export function getMarketPrice(
-  symbol: string
-): MarketPrice | null {
+export function getMarketPrice(symbol: string): MarketPrice | null {
   const market = resolveMarket(symbol);
 
-  return (
-    pricesByMarket.get(market.marketId) ?? null
-  );
+  return pricesByMarket.get(market.marketId) ?? null;
 }
 
-export function stopMarketDataByMarketId(
-  marketId: number
-): void {
+export function stopMarketDataByMarketId(marketId: number): void {
   clients.get(marketId)?.client.stop();
 
   clients.delete(marketId);
@@ -661,12 +480,8 @@ export function stopMarketDataByMarketId(
   unregisterDynamicMarket(marketId);
 }
 
-export function stopMarketData(
-  symbol: string
-): void {
-  const market = resolveMarket(symbol);
-
-  stopMarketDataByMarketId(market.marketId);
+export function stopMarketData(symbol: string): void {
+  stopMarketDataByMarketId(resolveMarket(symbol).marketId);
 }
 
 export { resolveMarket };
