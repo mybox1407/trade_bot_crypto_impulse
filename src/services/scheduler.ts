@@ -414,12 +414,14 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
     }
 
     const expectedPrice = validateSignalPrice(result.price);
-
-    if (result.stopLossPrice == null) {
+    
+    const signalStopLossPrice = result.stopLossPrice;
+    
+    if (signalStopLossPrice == null) {
       throw new Error('Trade-flow signal missing stop-loss for position sizing');
     }
-
-    const stopDistance = Math.abs(expectedPrice - result.stopLossPrice);
+    
+    const stopDistance = Math.abs(expectedPrice - signalStopLossPrice);
     const totalRiskPerUnit = stopDistance + stopDistance * TRADE_FEE_RATE;
 
     if (!Number.isFinite(totalRiskPerUnit) || totalRiskPerUnit <= 0) {
