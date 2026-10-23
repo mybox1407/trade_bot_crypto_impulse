@@ -2,28 +2,29 @@ import { ATR } from 'technicalindicators';
 
 import {
   getCandles,
-  getMarketTimeframe,
   getTrades,
   getTradeFlowBaselineTracker
 } from './exchange';
 
 import {
   analyzeTradeFlow,
-  type TradeFlowResult
+  type Candle,
+  type TradeFlowResult,
+  type TradeHistoryEntry
 } from './strategy';
 
-import type {
-  Candle,
-  LighterTrade
-} from './lighterWs';
+import type { LighterTrade } from './lighterWs';
+
+import { getPositions } from './positionState';
+
+const REQUIRED_CANDLE_COUNT = 700;
+const ATR_PERIOD = 14;
 
 function calculateAtr(candles: Candle[]): number | null {
-  if (candles.length < 15) {
-    return null;
-  }
+  if (candles.length < ATR_PERIOD + 1) return null;
 
   const atrValues = ATR.calculate({
-    period: 14,
+    period: ATR_PERIOD,
     high: candles.map(candle => candle.high),
     low: candles.map(candle => candle.low),
     close: candles.map(candle => candle.close)
@@ -31,38 +32,39 @@ function calculateAtr(candles: Candle[]): number | null {
 
   const atr = atrValues[atrValues.length - 1];
 
-  return Number.isFinite(atr) && atr > 0
-    ? atr
-    : null;
+  return Number.isFinite(atr) && atr > 0 ? atr : null;
 }
 
-/**
- * Анализирует текущий rolling-буфер сделок.
- * Вызывать из обработчика новой WebSocket-сделки.
- */
+function getClosedTradeHistory(): TradeHistoryEntry[] {
+  return getPositions()
+    .filter(position => position.status === 'closed')
+    .map(position => ({
+      symbol: position.symbol,
+      side: position.side,
+      openedAt: new Date(position.openedAt).getTime(),
+      netPnL: position.netPnL ?? 0
+    }));
+}
+
 export function runTradeFlowOnce(
   symbol: string,
   now = Date.now()
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
-  const timeframe = getMarketTimeframe(symbol) ?? '15m';
-  const candles: Candle[] =
-    getCandles(symbol, timeframe, 250);
+  const candles: Candle[] = getCandles(symbol, '1m', REQUIRED_CANDLE_COUNT);
   const atr = calculateAtr(candles);
-  const baselineTracker =
-    getTradeFlowBaselineTracker(symbol);
+  const baselineTracker = getTradeFlowBaselineTracker(symbol);
+  const tradeHistory = getClosedTradeHistory();
 
   return analyzeTradeFlow(symbol, trades, {
     now,
     atr,
-    baselineTracker
+    baselineTracker,
+    candles,
+    tradeHistory
   });
 }
 
-/**
- * Совместимость со старым route /bot.
- * Вход по-прежнему анализируется по потоку сделок.
- */
 export function runBotOnce(
   symbol = 'BTC/USDT',
   _timeframe = '15m'
