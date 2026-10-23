@@ -104,8 +104,9 @@ function isSymbolLocked(symbol: string): boolean {
   return true;
 }
 
-const lockSymbol = (symbol: string, durationMs = SIGNAL_LOCK_MS): void =>
+function lockSymbol(symbol: string, durationMs = SIGNAL_LOCK_MS): void {
   symbolLocks.set(normalizeSymbol(symbol), Date.now() + durationMs);
+}
 
 function unlockSymbol(symbol: string): void {
   const key = normalizeSymbol(symbol);
@@ -271,8 +272,9 @@ function savePendingFilledOpen(input: PendingFilledOpen): void {
   });
 }
 
-const clearPendingFilledOpen = (symbol: string): void =>
+function clearPendingFilledOpen(symbol: string): void {
   pendingFilledOpens.delete(normalizeSymbol(symbol));
+}
 
 function buildOpenPositionInput(input: PendingFilledOpen) {
   return {
@@ -465,11 +467,11 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         takeProfitPrice: result.takeProfitPrice
       });
 
-      const averageFillPrice = executionResult.averageFillPrice;
+      const rawAverageFillPrice = executionResult.averageFillPrice;
       const fillConfirmed =
         executionResult.filledQuantity > 0 &&
-        averageFillPrice != null &&
-        Number.isFinite(averageFillPrice);
+        rawAverageFillPrice != null &&
+        Number.isFinite(rawAverageFillPrice);
 
       if (!fillConfirmed) {
         const reason = executionResult.message ?? 'Execution failed';
@@ -483,13 +485,15 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
           status: executionResult.status,
           orderId: executionResult.orderId ?? null,
           filledQuantity: executionResult.filledQuantity,
-          averageFillPrice: averageFillPrice ?? null
+          averageFillPrice: rawAverageFillPrice ?? null
         });
 
         if (executionResult.status === 'unknown') markReconciliationPending(symbol);
 
         return;
       }
+
+      const averageFillPrice: number = Number(rawAverageFillPrice);
 
       const signalIndicators = { ...result.indicators, atr: stopDistance };
 
@@ -628,7 +632,7 @@ async function reconcileLocalPositionsWithExchange(
         ? markPrice
         : local.entryPrice;
 
-      const closeResult = closePosition(local.id, closePrice, 'exchange_closed', {
+      const closeResult = closePosition(local.id, closePrice, 'stop_loss', {
         executionOrderId: 'exchange-auto-close',
         clientOrderId: `${symbol}-${Date.now()}-reconcile`,
         fee: 0
@@ -647,7 +651,7 @@ async function reconcileLocalPositionsWithExchange(
         tradeLog('POSITION_CLOSED', {
           symbol,
           positionId: local.id,
-          closeReason: 'exchange_closed',
+          closeReason: 'stop_loss',
           closePrice
         });
       }
