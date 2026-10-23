@@ -10,10 +10,7 @@ type CsvValue =
   | null
   | undefined;
 
-const FILE_HEADERS: Record<
-  string,
-  string[]
-> = {
+const FILE_HEADERS: Record<string, string[]> = {
   'signal_log.csv': [
     'timestamp',
     'symbol',
@@ -94,16 +91,8 @@ const FILE_HEADERS: Record<
     'side',
     'entryPrice',
     'currentPrice',
-    'takeProfitPrice',
-    'stopLossPrice',
     'unrealizedPnL',
     'unrealizedPnLPercent',
-    'distanceToTP',
-    'distanceToTPPercent',
-    'distanceToSL',
-    'distanceToSLPercent',
-    'hitTakeProfit',
-    'hitStopLoss',
     'action',
     'positionAgeSeconds'
   ],
@@ -176,82 +165,43 @@ const FILE_HEADERS: Record<
 
 function ensureDirExists(): void {
   if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, {
-      recursive: true
-    });
+    fs.mkdirSync(LOG_DIR, { recursive: true });
   }
 }
 
-function ensureFileExists(
-  filePath: string,
-  headers: string[]
-): void {
+function ensureFileExists(filePath: string, headers: string[]): void {
   if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(
-      filePath,
-      `${headers.join(',')}\n`,
-      'utf8'
-    );
+    fs.writeFileSync(filePath, `${headers.join(',')}\n`, 'utf8');
   }
 }
 
-function escapeCsvValue(
-  value: CsvValue
-): string {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return '';
-  }
+function escapeCsvValue(value: CsvValue): string {
+  if (value === null || value === undefined) return '';
 
-  const stringValue =
-    String(value);
+  const stringValue = String(value);
 
   if (
     stringValue.includes(',') ||
     stringValue.includes('"') ||
     stringValue.includes('\n')
   ) {
-    return (
-      `"${stringValue.replace(
-        /"/g,
-        '""'
-      )}"`
-    );
+    return `"${stringValue.replace(/"/g, '""')}"`;
   }
 
   return stringValue;
 }
 
-function writeRow(
-  fileName: string,
-  row: Record<string, CsvValue>
-): void {
+function writeRow(fileName: string, row: Record<string, CsvValue>): void {
   ensureDirExists();
 
-  const filePath =
-    path.join(LOG_DIR, fileName);
+  const filePath = path.join(LOG_DIR, fileName);
+  const headers = FILE_HEADERS[fileName] ?? Object.keys(row);
 
-  const headers =
-    FILE_HEADERS[fileName] ??
-    Object.keys(row);
+  ensureFileExists(filePath, headers);
 
-  ensureFileExists(
-    filePath,
-    headers
-  );
+  const values = headers.map(header => escapeCsvValue(row[header]));
 
-  const values = headers.map(
-    header =>
-      escapeCsvValue(row[header])
-  );
-
-  fs.appendFileSync(
-    filePath,
-    `${values.join(',')}\n`,
-    'utf8'
-  );
+  fs.appendFileSync(filePath, `${values.join(',')}\n`, 'utf8');
 }
 
 export function logSignalCheck(row: {
@@ -289,10 +239,7 @@ export function logSignalCheck(row: {
   signalTimeIso?: string;
   isTradingWindow?: boolean;
 }): void {
-  writeRow(
-    'signal_log.csv',
-    row
-  );
+  writeRow('signal_log.csv', row);
 }
 
 export function logPositionOpen(row: {
@@ -331,10 +278,7 @@ export function logPositionOpen(row: {
   signalTime?: number;
   signalTimeIso?: string;
 }): void {
-  writeRow(
-    'position_open_log.csv',
-    row
-  );
+  writeRow('position_open_log.csv', row);
 }
 
 export function logPositionCheck(row: {
@@ -344,23 +288,12 @@ export function logPositionCheck(row: {
   side: string;
   entryPrice: number;
   currentPrice: number;
-  takeProfitPrice: number;
-  stopLossPrice: number;
   unrealizedPnL: number;
   unrealizedPnLPercent: number;
-  distanceToTP: number;
-  distanceToTPPercent: number;
-  distanceToSL: number;
-  distanceToSLPercent: number;
-  hitTakeProfit: boolean;
-  hitStopLoss: boolean;
   action: string;
   positionAgeSeconds: number;
 }): void {
-  writeRow(
-    'position_check_log.csv',
-    row
-  );
+  writeRow('position_check_log.csv', row);
 }
 
 export function logPositionClose(row: {
@@ -394,10 +327,7 @@ export function logPositionClose(row: {
   trailingActive?: boolean;
   trailingStopPrice?: number;
 }): void {
-  writeRow(
-    'trade_log.csv',
-    row
-  );
+  writeRow('trade_log.csv', row);
 }
 
 export function logPartialClose(row: {
@@ -423,10 +353,7 @@ export function logPartialClose(row: {
   executionOrderId?: string;
   clientOrderId?: string;
 }): void {
-  writeRow(
-    'partial_close_log.csv',
-    row
-  );
+  writeRow('partial_close_log.csv', row);
 }
 
 export function logError(row: {
@@ -437,8 +364,5 @@ export function logError(row: {
   error: string;
   stack?: string;
 }): void {
-  writeRow(
-    'error_log.csv',
-    row
-  );
+  writeRow('error_log.csv', row);
 }
