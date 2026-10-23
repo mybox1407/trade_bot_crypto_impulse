@@ -17,6 +17,7 @@ const LIGHTER_API_URL =
   'https://mainnet.zklighter.elliot.ai';
 
 const MAX_CANDLES = 700;
+const MAX_CANDLES_PER_REQUEST = 500;
 const MAX_TRADES = 5_000;
 const TRADE_ID_CACHE_SIZE = 20_000;
 const DEFAULT_TIMEFRAME = '1m';
@@ -57,8 +58,6 @@ export function subscribeToTrades(listener: TradeListener): () => void {
 function normalizeCandleTime(value: number): number {
   if (!Number.isFinite(value)) return value;
 
-  // Lighter может отдавать время в секундах или миллисекундах.
-  // Стратегия v6.41 работает с millisecond epoch.
   return value > 10_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
 }
 
@@ -222,21 +221,21 @@ export function getTradeFlowBaselineTracker(symbol: string): TradeFlowBaselineTr
   return tracker;
 }
 
-async function loadHistoricalCandles(
+async function fetchCandlesPage(
   marketId: number,
   timeframe: string,
-  limit: number
+  endTimestampSeconds: number,
+  count: number
 ): Promise<Candle[]> {
-  const now = Math.floor(Date.now() / 1000);
   const candleSeconds = timeframeToSeconds(timeframe);
-  const startTimestamp = now - limit * candleSeconds;
+  const startTimestamp = endTimestampSeconds - count * candleSeconds;
 
   const params = new URLSearchParams({
     market_id: String(marketId),
     resolution: timeframe,
     start_timestamp: String(startTimestamp),
-    end_timestamp: String(now),
-    count_back: String(limit)
+    end_timestamp: String(endTimestampSeconds),
+    count_back: String(count)
   });
 
   const url = `${LIGHTER_API_URL}/api/v1/candles?${params.toString()}`;
@@ -275,7 +274,50 @@ async function loadHistoricalCandles(
       Number.isFinite(candle.low) &&
       Number.isFinite(candle.close) &&
       Number.isFinite(candle.volume)
-    )
+    );
+}
+
+async function loadHistoricalCandles(
+  marketId: number,
+  timeframe: string,
+  limit: number
+): Promise<Candle[]> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  const recentCount = Math.min(limit, MAX_CANDLES_PER_REQUEST);
+  const olderCount = Math.max(0, limit - recentCount);
+
+  const recentCandles = await fetchCandlesPage(
+    marketId,
+    timeframe,
+    nowSeconds,
+    recentCount
+  );
+
+  if (olderCount === 0 || recentCandles.length === 0) {
+    return recentCandles
+      .sort((a, b) => a.time - b.time)
+      .slice(-limit);
+  }
+
+  const oldestRecentTimeSeconds = Math.floor(
+    recentCandles[0].time / 1000
+  );
+
+  const olderCandles = await fetchCandlesPage(
+    marketId,
+    timeframe,
+    oldestRecentTimeSeconds,
+    olderCount
+  );
+
+  const candlesByTime = new Map<number, Candle>();
+
+  for (const candle of [...olderCandles, ...recentCandles]) {
+    candlesByTime.set(candle.time, candle);
+  }
+
+  return [...candlesByTime.values()]
     .sort((a, b) => a.time - b.time)
     .slice(-limit);
 }
