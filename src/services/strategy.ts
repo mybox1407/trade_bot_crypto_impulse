@@ -361,11 +361,11 @@ function calculateAtr(candles: Candle[], period: number): number | null {
 function calculateEma(values: number[], period: number): number | null {
   if (values.length < period) return null;
 
-  let emaValue = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+  let emaValue = values[0];
   const multiplier = 2 / (period + 1);
 
-  for (const value of values.slice(period)) {
-    emaValue = value * multiplier + emaValue * (1 - multiplier);
+  for (let i = 1; i < values.length; i += 1) {
+    emaValue = values[i] * multiplier + emaValue * (1 - multiplier);
   }
 
   return emaValue;
@@ -415,33 +415,45 @@ function calculatePrevious10Return(candles: Candle[]): number | null {
   return (close5 / close15 - 1) * 100;
 }
 
-function resampleCandles(candles: Candle[], intervalMinutes: number): Candle[] {
+function resampleCandles(
+  candles: Candle[],
+  intervalMinutes: number
+): Array<{ candle: Candle; count: number }> {
   const intervalMs = intervalMinutes * MINUTE_MS;
-  const buckets = new Map<number, Candle>();
+  const buckets = new Map<number, { candle: Candle; count: number }>();
 
   for (const candle of candles) {
     const bucketTime = Math.floor(candle.time / intervalMs) * intervalMs;
     const existing = buckets.get(bucketTime);
 
     if (!existing) {
-      buckets.set(bucketTime, { ...candle, time: bucketTime });
+      buckets.set(bucketTime, {
+        candle: { ...candle, time: bucketTime },
+        count: 1
+      });
+
       continue;
     }
 
-    existing.high = Math.max(existing.high, candle.high);
-    existing.low = Math.min(existing.low, candle.low);
-    existing.close = candle.close;
-    existing.volume += candle.volume;
+    existing.candle.high = Math.max(existing.candle.high, candle.high);
+    existing.candle.low = Math.min(existing.candle.low, candle.low);
+    existing.candle.close = candle.close;
+    existing.candle.volume += candle.volume;
+    existing.count += 1;
   }
 
-  return [...buckets.values()].filter(candle => candle.volume >= 0).sort((a, b) => a.time - b.time);
+  return [...buckets.values()].sort((a, b) => a.candle.time - b.candle.time);
 }
 
-function buildHtf(candles: Candle[], intervalMinutes: number, emaPeriod: number, slopeBars: number): HtfRegime {
-  const htf = resampleCandles(candles, intervalMinutes).filter((_, index, array) => {
-    if (index === 0) return true;
-    return array[index].time - array[index - 1].time === intervalMinutes * MINUTE_MS;
-  });
+function buildHtf(
+  candles: Candle[],
+  intervalMinutes: number,
+  emaPeriod: number,
+  slopeBars: number
+): HtfRegime {
+  const htf = resampleCandles(candles, intervalMinutes)
+    .filter(item => item.count === intervalMinutes)
+    .map(item => item.candle);
 
   if (htf.length < emaPeriod + slopeBars) return { slope: null, ema: null };
 
