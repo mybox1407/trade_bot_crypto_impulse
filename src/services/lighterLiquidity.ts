@@ -104,6 +104,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'PAXG',
   'IBM',
   'PRL',
+  'DRV',
 
   'XMR'
 
