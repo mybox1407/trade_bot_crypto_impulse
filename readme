@@ -2,7 +2,7 @@ cd lighter_trade_live
 docker compose down
 cd ~
 rm -rf lighter_trade_live
-git clone -b Impulse_12_10_2026 --single-branch https://github.com/mybox1407/trade_bot_crypto_impulse.git lighter_trade_live
+git clone -b Impulse_final_23_10_2026 --single-branch https://github.com/mybox1407/trade_bot_crypto_impulse.git lighter_trade_live
 cd lighter_trade_live
 npm install protobufjs
 npm install -D @types/protobufjs
