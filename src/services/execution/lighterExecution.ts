@@ -125,6 +125,19 @@ export class LighterExecutionService implements ExecutionService {
       const execution = await this.waitForOrderExecution(req, req.marketId, clientOrderIndex, submitted.orderId, baseAmount / 10 ** sizeDecimals);
       if (execution.filledQuantity <= 0 || execution.averageFillPrice == null) return execution;
 
+      const entryPrice = execution.averageFillPrice;
+
+      const stopDistance = Math.abs(req.expectedPrice - req.stopLossPrice);
+      const takeProfitDistance = Math.abs(req.takeProfitPrice - req.expectedPrice);
+
+      const actualStopLossPrice = req.side === 'long'
+        ? entryPrice - stopDistance
+        : entryPrice + stopDistance;
+
+      const actualTakeProfitPrice = req.side === 'long'
+        ? entryPrice + takeProfitDistance
+        : entryPrice - takeProfitDistance;
+
       try {
         const actualBaseAmount = this.toBaseAmount(execution.filledQuantity, sizeDecimals);
         if (actualBaseAmount <= 0) {
@@ -136,8 +149,22 @@ export class LighterExecutionService implements ExecutionService {
           };
         }
 
-        const protectiveOrders = await this.createProtectiveOrders(req, actualBaseAmount);
-        return { ...execution, ok: true, protectiveOrders };
+        const protectiveOrders = await this.createProtectiveOrders(
+          {
+            ...req,
+            stopLossPrice: actualStopLossPrice,
+            takeProfitPrice: actualTakeProfitPrice
+          },
+          actualBaseAmount
+        );
+
+        return {
+          ...execution,
+          ok: true,
+          protectiveOrders,
+          stopLossPrice: actualStopLossPrice,
+          takeProfitPrice: actualTakeProfitPrice
+        };
       } catch (error) {
         // The entry is already filled. Do not hide that fact from scheduler.
         // Scheduler must persist the fill and recover protective orders.
@@ -148,6 +175,8 @@ export class LighterExecutionService implements ExecutionService {
           filledQuantity: execution.filledQuantity,
           averageFillPrice: execution.averageFillPrice,
           orderId: execution.orderId ?? submitted.orderId,
+          stopLossPrice: actualStopLossPrice,
+          takeProfitPrice: actualTakeProfitPrice,
           message: `Entry filled but protective orders were not created: ${error instanceof Error ? error.message : 'unknown error'}`
         } as ExecutionResult;
       }
