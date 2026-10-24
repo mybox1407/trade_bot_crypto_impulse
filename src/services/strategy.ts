@@ -238,7 +238,7 @@ export class TradeFlowBaselineTracker {
       return { ready: false, nonEmptyBuckets: nonEmpty, volumePerWindow: null, reason: 'Baseline volume is zero' };
     }
 
-    return { ready: true, nonEmptyBuckets: nonEmpty, volumePerWindow, reason: null };
+    return { ready: true, nonEmptyBuckets: nonEmpty, volumePerWindow: volumePerWindow, reason: null };
   }
 
   reset(): void {
@@ -804,6 +804,7 @@ export function analyzeTradeFlow(
   options?: {
     now?: number;
     atr?: number | null;
+    slTpAtr?: number | null;
     config?: Partial<TradeFlowConfig>;
     baselineTracker?: TradeFlowBaselineTracker;
     candles?: Candle[];
@@ -827,16 +828,16 @@ export function analyzeTradeFlow(
   let excludedLiquidationCount = current.excludedLiquidationCount;
 
   if (!options?.baselineTracker) {
-    const baselineStart = now - config.windowMs - config.baselineMs;
-    const baselineEnd = now - config.windowMs;
-    const bucketDuration = config.baselineMs / config.baselineBuckets;
-    const bucketVolumes = Array<number>(config.baselineBuckets).fill(0);
+    const baselineStart = now - config.windowMs - this.config.baselineMs;
+    const baselineEnd = now - this.config.windowMs;
+    const bucketDuration = this.config.baselineMs / this.config.baselineBuckets;
+    const bucketVolumes = Array<number>(this.config.baselineBuckets).fill(0);
 
-    for (let i = 0; i < config.baselineBuckets; i += 1) {
+    for (let i = 0; i < this.config.baselineBuckets; i += 1) {
       const bucketStart = baselineStart + i * bucketDuration;
-      const bucketEnd = i === config.baselineBuckets - 1 ? baselineEnd : bucketStart + bucketDuration;
+      const bucketEnd = i === this.config.baselineBuckets - 1 ? baselineEnd : bucketStart + bucketDuration;
 
-      const bucket = aggregate(valid, bucketStart, bucketEnd, config.excludeLiquidations);
+      const bucket = aggregate(valid, bucketStart, bucketEnd, this.config.excludeLiquidations);
 
       bucketVolumes[i] = bucket.buyVolume + bucket.sellVolume;
       excludedLiquidationCount += bucket.excludedLiquidationCount;
@@ -844,8 +845,8 @@ export function analyzeTradeFlow(
 
     nonEmptyBaselineBuckets = bucketVolumes.filter(volume => volume > 0).length;
 
-    if (nonEmptyBaselineBuckets >= config.minBaselineBuckets) {
-      const value = bucketVolumes.reduce((sum, volume) => sum + volume, 0) / config.baselineBuckets;
+    if (nonEmptyBaselineBuckets >= this.config.minBaselineBuckets) {
+      const value = bucketVolumes.reduce((sum, volume) => sum + volume, 0) / this.config.baselineBuckets;
       baselineVolumePerWindow = value > 0 ? value : null;
     }
   }
@@ -994,8 +995,15 @@ export function analyzeTradeFlow(
     );
   }
 
-  const stopDistance = atr * config.stopAtrMultiplier;
-  const targetDistance = atr * config.takeProfitAtrMultiplier;
+  const slTpAtr =
+    options?.slTpAtr != null &&
+    Number.isFinite(options.slTpAtr) &&
+    options.slTpAtr > 0
+      ? options.slTpAtr
+      : atr;
+
+  const stopDistance = slTpAtr * config.stopAtrMultiplier;
+  const targetDistance = slTpAtr * config.takeProfitAtrMultiplier;
 
   const stopLossPrice = side === 'long' ? price - stopDistance : price + stopDistance;
   const takeProfitPrice = side === 'long' ? price + targetDistance : price - targetDistance;
