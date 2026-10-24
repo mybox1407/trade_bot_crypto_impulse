@@ -336,6 +336,10 @@ export function getTradeHistory(
   return tradeHistoryByMarket.get(market.marketId) ?? [];
 }
 
+export function getAllTradeHistory(): TradeHistoryEntry[] {
+  return [...tradeHistoryByMarket.values()].flat();
+}
+
 async function loadCandlesPage(
   marketId: number,
   timeframe: string,
@@ -723,8 +727,6 @@ export function getCurrentPrice(
 export function getMarketPrice(
   symbol: string
 ): MarketPrice | null {
-  const market = resolveMarket(symbol);
-
   return (
     pricesByMarket.get(market.marketId) ?? null
   );
