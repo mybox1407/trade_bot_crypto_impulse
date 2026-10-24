@@ -5,12 +5,8 @@ import {
   getMarketTimeframe,
   getTrades,
   getTradeFlowBaselineTracker,
-  getTradeHistory
+  getAllTradeHistory
 } from './exchange';
-
-import {
-  getLastClosedTrade
-} from './positionState';
 
 import {
   analyzeTradeFlow,
@@ -70,41 +66,8 @@ function resampleTo15m(candles: Candle[], limit = SLTP_15M_CANDLE_LIMIT): Candle
     .slice(-limit);
 }
 
-function normalizeHistorySymbol(symbol: string): string {
-  const value = symbol.trim().toUpperCase();
-
-  return value.endsWith('/USDT') ? value : `${value}/USDT`;
-}
-
-function buildTradeHistory(symbol: string): TradeHistoryEntry[] {
-  const normalizedSymbol = normalizeHistorySymbol(symbol);
-  const history = getTradeHistory(symbol);
-  const lastClosedTrade = getLastClosedTrade();
-
-  const merged = [...history];
-
-  if (lastClosedTrade) {
-    const entry: TradeHistoryEntry = {
-      symbol: normalizeHistorySymbol(lastClosedTrade.symbol),
-      side: lastClosedTrade.side,
-      openedAt: new Date(lastClosedTrade.openedAt).getTime(),
-      netPnL: lastClosedTrade.netPnL
-    };
-
-    const duplicate = merged.some(item =>
-      item.symbol === entry.symbol &&
-      item.side === entry.side &&
-      item.openedAt === entry.openedAt &&
-      item.netPnL === entry.netPnL
-    );
-
-    if (!duplicate) {
-      merged.push(entry);
-    }
-  }
-
-  return merged
-    .filter(item => item.symbol === normalizedSymbol)
+function buildTradeHistory(): TradeHistoryEntry[] {
+  return getAllTradeHistory()
     .sort((a, b) => a.openedAt - b.openedAt);
 }
 
@@ -127,7 +90,7 @@ export function runTradeFlowOnce(
   const slTpAtr = calculateAtrWilder(slTpCandles);
 
   const baselineTracker = getTradeFlowBaselineTracker(symbol);
-  const tradeHistory = buildTradeHistory(symbol);
+  const tradeHistory = buildTradeHistory();
 
   return analyzeTradeFlow(symbol, trades, {
     now,
