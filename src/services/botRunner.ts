@@ -4,7 +4,8 @@ import {
   getCandles,
   getMarketTimeframe,
   getTrades,
-  getTradeFlowBaselineTracker
+  getTradeFlowBaselineTracker,
+  getTradeHistory
 } from './exchange';
 
 import {
@@ -16,6 +17,9 @@ import type {
   Candle,
   LighterTrade
 } from './lighterWs';
+
+const CANDLE_LIMIT = 700;
+const DEFAULT_TIMEFRAME = '1m';
 
 function calculateAtr(candles: Candle[]): number | null {
   if (candles.length < 15) {
@@ -45,16 +49,17 @@ export function runTradeFlowOnce(
   now = Date.now()
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
-  const timeframe = getMarketTimeframe(symbol) ?? '15m';
-  const candles: Candle[] =
-    getCandles(symbol, timeframe, 250);
+  const timeframe = getMarketTimeframe(symbol) ?? DEFAULT_TIMEFRAME;
+  const candles: Candle[] = getCandles(symbol, timeframe, CANDLE_LIMIT);
   const atr = calculateAtr(candles);
-  const baselineTracker =
-    getTradeFlowBaselineTracker(symbol);
+  const baselineTracker = getTradeFlowBaselineTracker(symbol);
+  const tradeHistory = getTradeHistory(symbol);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
     atr,
+    candles,
+    tradeHistory,
     baselineTracker
   });
 }
@@ -65,7 +70,7 @@ export function runTradeFlowOnce(
  */
 export function runBotOnce(
   symbol = 'BTC/USDT',
-  _timeframe = '15m'
+  _timeframe = '1m'
 ): TradeFlowResult {
   return runTradeFlowOnce(symbol);
 }
