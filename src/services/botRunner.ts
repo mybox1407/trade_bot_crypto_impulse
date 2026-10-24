@@ -1,5 +1,3 @@
-import { ATR } from 'technicalindicators';
-
 import {
   getCandles,
   getMarketTimeframe,
@@ -20,24 +18,35 @@ import type {
 
 const CANDLE_LIMIT = 700;
 const DEFAULT_TIMEFRAME = '1m';
+const ATR_PERIOD = 14;
 
-function calculateAtr(candles: Candle[]): number | null {
-  if (candles.length < 15) {
+function calculateAtr(candles: Candle[], period = ATR_PERIOD): number | null {
+  if (candles.length < period + 1) {
     return null;
   }
 
-  const atrValues = ATR.calculate({
-    period: 14,
-    high: candles.map(candle => candle.high),
-    low: candles.map(candle => candle.low),
-    close: candles.map(candle => candle.close)
-  });
+  const trueRanges: number[] = [];
 
-  const atr = atrValues[atrValues.length - 1];
+  for (let i = 1; i < candles.length; i += 1) {
+    const current = candles[i];
+    const previousClose = candles[i - 1].close;
 
-  return Number.isFinite(atr) && atr > 0
-    ? atr
-    : null;
+    trueRanges.push(Math.max(
+      current.high - current.low,
+      Math.abs(current.high - previousClose),
+      Math.abs(current.low - previousClose)
+    ));
+  }
+
+  const window = trueRanges.slice(-period);
+
+  if (window.length < period) {
+    return null;
+  }
+
+  const atr = window.reduce((sum, value) => sum + value, 0) / period;
+
+  return Number.isFinite(atr) && atr > 0 ? atr : null;
 }
 
 /**
