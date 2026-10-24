@@ -748,16 +748,21 @@ function isS2Allowed(
   history: TradeHistoryEntry[],
   entryTime: number
 ): boolean {
-  const previousPnL = getPreviousSameSidePnL(
-    history,
-    group === 'down_short' ? 'short' : 'long',
-    entryTime
-  );
+  const side = group === 'down_short' ? 'short' : 'long';
+  const previousPnL = getPreviousSameSidePnL(history, side, entryTime);
 
-  const s2Allowed = previousPnL != null && previousPnL > 0;
+  // Cold start: нет предыдущей сделки в этом направлении — разрешаем вход.
+  if (previousPnL == null) return true;
 
-  if (group === 'down_long') return ENABLE_DOWN_LONG_S2 ? s2Allowed : true;
-  if (group === 'down_short') return ENABLE_DOWN_SHORT_S2 ? s2Allowed : true;
+  const s2Allowed = previousPnL > 0;
+
+  if (group === 'down_long') {
+    return ENABLE_DOWN_LONG_S2 ? s2Allowed : true;
+  }
+
+  if (group === 'down_short') {
+    return ENABLE_DOWN_SHORT_S2 ? s2Allowed : true;
+  }
 
   if (group === 'up_long') {
     if (!ENABLE_UP_LONG_S2) return true;
