@@ -20,7 +20,7 @@ import {
   getPositions
 } from './positionState';
 
-const MARKET_DATA_TIMEFRAME = '15m';
+const MARKET_DATA_TIMEFRAME = '1m';
 
 let activeMarkets: LighterMarket[] = [];
 
