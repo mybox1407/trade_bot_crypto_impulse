@@ -11,14 +11,16 @@ import {
 
 import {
   TradeFlowBaselineTracker,
-  type TradeFlowBaseline
+  type TradeFlowBaseline,
+  type TradeHistoryEntry
 } from './strategy';
 
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
 
-const MAX_CANDLES = 250;
+const MAX_CANDLES = 700;
+const CANDLES_REQUEST_LIMIT = 500;
 const MAX_TRADES = 5_000;
 const TRADE_ID_CACHE_SIZE = 20_000;
 
@@ -48,6 +50,9 @@ const tradesByMarket =
 
 const baselineTrackersByMarket =
   new Map<number, TradeFlowBaselineTracker>();
+
+const tradeHistoryByMarket =
+  new Map<number, TradeHistoryEntry[]>();
 
 const clients =
   new Map<number, MarketClient>();
@@ -306,21 +311,46 @@ export function getTradeFlowBaselineTracker(
   return tracker;
 }
 
-async function loadHistoricalCandles(
+export function recordTradeHistory(
+  symbol: string,
+  entry: TradeHistoryEntry
+): void {
+  const market = resolveMarket(symbol);
+  const history =
+    tradeHistoryByMarket.get(market.marketId) ?? [];
+
+  history.push(entry);
+
+  if (history.length > 1_000) {
+    history.splice(0, history.length - 1_000);
+  }
+
+  tradeHistoryByMarket.set(market.marketId, history);
+}
+
+export function getTradeHistory(
+  symbol: string
+): TradeHistoryEntry[] {
+  const market = resolveMarket(symbol);
+
+  return tradeHistoryByMarket.get(market.marketId) ?? [];
+}
+
+async function loadCandlesPage(
   marketId: number,
   timeframe: string,
-  limit: number
+  endTimestamp: number
 ): Promise<Candle[]> {
-  const now = Math.floor(Date.now() / 1000);
   const candleSeconds = timeframeToSeconds(timeframe);
-  const startTimestamp = now - limit * candleSeconds;
+  const startTimestamp =
+    endTimestamp - CANDLES_REQUEST_LIMIT * candleSeconds;
 
   const params = new URLSearchParams({
     market_id: String(marketId),
     resolution: timeframe,
     start_timestamp: String(startTimestamp),
-    end_timestamp: String(now),
-    count_back: String(limit)
+    end_timestamp: String(endTimestamp),
+    count_back: String(CANDLES_REQUEST_LIMIT)
   });
 
   const url =
@@ -380,7 +410,57 @@ async function loadHistoricalCandles(
       Number.isFinite(candle.low) &&
       Number.isFinite(candle.close) &&
       Number.isFinite(candle.volume)
-    )
+    );
+}
+
+async function loadHistoricalCandles(
+  marketId: number,
+  timeframe: string,
+  limit: number
+): Promise<Candle[]> {
+  const candleSeconds = timeframeToSeconds(timeframe);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  const allCandles = new Map<number, Candle>();
+  let endTimestamp = nowSeconds;
+  let pagesLoaded = 0;
+  const maxPages = Math.ceil(limit / CANDLES_REQUEST_LIMIT) + 1;
+
+  while (
+    allCandles.size < limit &&
+    pagesLoaded < maxPages
+  ) {
+    const page = await loadCandlesPage(
+      marketId,
+      timeframe,
+      endTimestamp
+    );
+
+    if (page.length === 0) {
+      break;
+    }
+
+    for (const candle of page) {
+      allCandles.set(candle.time, candle);
+    }
+
+    pagesLoaded += 1;
+
+    const oldestCandleTime = Math.min(
+      ...page.map(candle => candle.time)
+    );
+
+    const nextEndTimestamp =
+      oldestCandleTime - candleSeconds;
+
+    if (nextEndTimestamp >= endTimestamp) {
+      break;
+    }
+
+    endTimestamp = nextEndTimestamp;
+  }
+
+  return [...allCandles.values()]
     .sort((a, b) => a.time - b.time)
     .slice(-limit);
 }
@@ -403,6 +483,10 @@ function attachClient(
       marketId,
       new TradeFlowBaselineTracker()
     );
+  }
+
+  if (!tradeHistoryByMarket.has(marketId)) {
+    tradeHistoryByMarket.set(marketId, []);
   }
 
   const client = new LighterWsClient(
@@ -524,7 +608,7 @@ async function startResolvedMarket(
 
 export async function startMarketData(
   symbol: string,
-  timeframe = '15m'
+  timeframe = '1m'
 ): Promise<void> {
   await startResolvedMarket(
     resolveMarket(symbol),
@@ -534,7 +618,7 @@ export async function startMarketData(
 
 export async function startMarketDataByMarket(
   market: MarketReference,
-  timeframe = '15m'
+  timeframe = '1m'
 ): Promise<void> {
   const normalizedMarket = {
     symbol: normalizeSymbol(market.symbol),
@@ -551,7 +635,7 @@ export async function startMarketDataByMarket(
 
 export function getCandles(
   symbol: string,
-  _timeframe = '15m',
+  _timeframe = '1m',
   limit = MAX_CANDLES
 ): Candle[] {
   const market = resolveMarket(symbol);
@@ -656,6 +740,7 @@ export function stopMarketDataByMarketId(
   pricesByMarket.delete(marketId);
   tradesByMarket.delete(marketId);
   baselineTrackersByMarket.delete(marketId);
+  tradeHistoryByMarket.delete(marketId);
   seenTradeIdsByMarket.delete(marketId);
 
   unregisterDynamicMarket(marketId);
