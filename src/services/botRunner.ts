@@ -9,8 +9,13 @@ import {
 } from './exchange';
 
 import {
+  getLastClosedTrade
+} from './positionState';
+
+import {
   analyzeTradeFlow,
-  type TradeFlowResult
+  type TradeFlowResult,
+  type TradeHistoryEntry
 } from './strategy';
 
 import type {
@@ -24,31 +29,6 @@ const DEFAULT_TIMEFRAME = '1m';
 const ATR_PERIOD = 14;
 const MINUTE_MS = 60_000;
 const FIFTEEN_MINUTE_MS = 15 * MINUTE_MS;
-
-function calculateAtrSma(candles: Candle[], period = ATR_PERIOD): number | null {
-  if (candles.length < period + 1) return null;
-
-  const trueRanges: number[] = [];
-
-  for (let i = 1; i < candles.length; i += 1) {
-    const current = candles[i];
-    const previousClose = candles[i - 1].close;
-
-    trueRanges.push(Math.max(
-      current.high - current.low,
-      Math.abs(current.high - previousClose),
-      Math.abs(current.low - previousClose)
-    ));
-  }
-
-  const window = trueRanges.slice(-period);
-
-  if (window.length < period) return null;
-
-  const atr = window.reduce((sum, value) => sum + value, 0) / period;
-
-  return Number.isFinite(atr) && atr > 0 ? atr : null;
-}
 
 function calculateAtrWilder(candles: Candle[], period = ATR_PERIOD): number | null {
   if (candles.length < period + 1) return null;
@@ -90,6 +70,44 @@ function resampleTo15m(candles: Candle[], limit = SLTP_15M_CANDLE_LIMIT): Candle
     .slice(-limit);
 }
 
+function normalizeHistorySymbol(symbol: string): string {
+  const value = symbol.trim().toUpperCase();
+
+  return value.endsWith('/USDT') ? value : `${value}/USDT`;
+}
+
+function buildTradeHistory(symbol: string): TradeHistoryEntry[] {
+  const normalizedSymbol = normalizeHistorySymbol(symbol);
+  const history = getTradeHistory(symbol);
+  const lastClosedTrade = getLastClosedTrade();
+
+  const merged = [...history];
+
+  if (lastClosedTrade) {
+    const entry: TradeHistoryEntry = {
+      symbol: normalizeHistorySymbol(lastClosedTrade.symbol),
+      side: lastClosedTrade.side,
+      openedAt: new Date(lastClosedTrade.openedAt).getTime(),
+      netPnL: lastClosedTrade.netPnL
+    };
+
+    const duplicate = merged.some(item =>
+      item.symbol === entry.symbol &&
+      item.side === entry.side &&
+      item.openedAt === entry.openedAt &&
+      item.netPnL === entry.netPnL
+    );
+
+    if (!duplicate) {
+      merged.push(entry);
+    }
+  }
+
+  return merged
+    .filter(item => item.symbol === normalizedSymbol)
+    .sort((a, b) => a.openedAt - b.openedAt);
+}
+
 /**
  * Анализирует текущий rolling-буфер сделок.
  * Вызывать из обработчика новой WebSocket-сделки.
@@ -100,16 +118,16 @@ export function runTradeFlowOnce(
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
 
-  // Фильтры v6.41 — строго 1m свечи и SMA ATR, как в скрипте.
+  // Входной фильтр v6.41 — 1m свечи и Wilder ATR, как в рабочей версии.
   const filterCandles: Candle[] = getCandles(symbol, DEFAULT_TIMEFRAME, FILTER_CANDLE_LIMIT);
-  const filterAtr = calculateAtrSma(filterCandles);
+  const filterAtr = calculateAtrWilder(filterCandles);
 
   // SL/TP — только закрытые 15m свечи (ресемплинг из 1m) и Wilder ATR.
   const slTpCandles: Candle[] = resampleTo15m(filterCandles);
   const slTpAtr = calculateAtrWilder(slTpCandles);
 
   const baselineTracker = getTradeFlowBaselineTracker(symbol);
-  const tradeHistory = getTradeHistory(symbol);
+  const tradeHistory = buildTradeHistory(symbol);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
