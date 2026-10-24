@@ -1,3 +1,5 @@
+import { ATR } from 'technicalindicators';
+
 import {
   getCandles,
   getMarketTimeframe,
@@ -16,11 +18,13 @@ import type {
   LighterTrade
 } from './lighterWs';
 
-const CANDLE_LIMIT = 700;
+const FILTER_CANDLE_LIMIT = 700;
+const SLTP_CANDLE_LIMIT = 250;
 const DEFAULT_TIMEFRAME = '1m';
+const SLTP_TIMEFRAME = '15m';
 const ATR_PERIOD = 14;
 
-function calculateAtr(candles: Candle[], period = ATR_PERIOD): number | null {
+function calculateAtrSma(candles: Candle[], period = ATR_PERIOD): number | null {
   if (candles.length < period + 1) {
     return null;
   }
@@ -49,6 +53,23 @@ function calculateAtr(candles: Candle[], period = ATR_PERIOD): number | null {
   return Number.isFinite(atr) && atr > 0 ? atr : null;
 }
 
+function calculateAtrWilder(candles: Candle[], period = ATR_PERIOD): number | null {
+  if (candles.length < period + 1) {
+    return null;
+  }
+
+  const atrValues = ATR.calculate({
+    period,
+    high: candles.map(candle => candle.high),
+    low: candles.map(candle => candle.low),
+    close: candles.map(candle => candle.close)
+  });
+
+  const atr = atrValues[atrValues.length - 1];
+
+  return Number.isFinite(atr) && atr > 0 ? atr : null;
+}
+
 /**
  * Анализирует текущий rolling-буфер сделок.
  * Вызывать из обработчика новой WebSocket-сделки.
@@ -58,16 +79,23 @@ export function runTradeFlowOnce(
   now = Date.now()
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
-  const timeframe = getMarketTimeframe(symbol) ?? DEFAULT_TIMEFRAME;
-  const candles: Candle[] = getCandles(symbol, timeframe, CANDLE_LIMIT);
-  const atr = calculateAtr(candles);
+
+  // Фильтры v6.41 — строго 1m свечи и SMA ATR, как в скрипте.
+  const filterCandles: Candle[] = getCandles(symbol, DEFAULT_TIMEFRAME, FILTER_CANDLE_LIMIT);
+  const filterAtr = calculateAtrSma(filterCandles);
+
+  // SL/TP — 15m свечи и Wilder ATR, как в ранней версии бота.
+  const slTpCandles: Candle[] = getCandles(symbol, SLTP_TIMEFRAME, SLTP_CANDLE_LIMIT);
+  const slTpAtr = calculateAtrWilder(slTpCandles);
+
   const baselineTracker = getTradeFlowBaselineTracker(symbol);
   const tradeHistory = getTradeHistory(symbol);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
-    atr,
-    candles,
+    atr: filterAtr,
+    slTpAtr,
+    candles: filterCandles,
     tradeHistory,
     baselineTracker
   });
@@ -75,7 +103,6 @@ export function runTradeFlowOnce(
 
 /**
  * Совместимость со старым route /bot.
- * Вход по-прежнему анализируется по потоку сделок.
  */
 export function runBotOnce(
   symbol = 'BTC/USDT',
