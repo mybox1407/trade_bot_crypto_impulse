@@ -450,12 +450,16 @@ async function loadHistoricalCandles(
 
     pagesLoaded += 1;
 
-    const oldestCandleTime = Math.min(
+    const oldestCandleTimeMs = Math.min(
       ...page.map(candle => candle.time)
     );
 
+    const oldestCandleTimeSeconds = Math.floor(
+      oldestCandleTimeMs / 1000
+    );
+
     const nextEndTimestamp =
-      oldestCandleTime - candleSeconds;
+      oldestCandleTimeSeconds - candleSeconds;
 
     if (nextEndTimestamp >= endTimestamp) {
       break;
