@@ -501,13 +501,7 @@ function calculateRegimeFeatures(
 
 export function computeTradeState(candles: Candle[], entryTime: number): TradeState | null {
   const entryMinute = Math.floor(entryTime / MINUTE_MS) * MINUTE_MS;
-
-  const closedCandles = candles
-    .map(candle => ({
-      ...candle,
-      time: candle.time > 10_000_000_000 ? candle.time : candle.time * 1000
-    }))
-    .filter(candle => candle.time + MINUTE_MS <= entryTime);
+  const closedCandles = candles.filter(candle => candle.time + MINUTE_MS <= entryTime);
 
   const window = closedCandles.slice(-MAX_WINDOW_MINUTES).sort((a, b) => a.time - b.time);
 
