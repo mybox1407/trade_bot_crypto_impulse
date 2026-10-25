@@ -5,7 +5,7 @@ import {
   getMarketTimeframe,
   getTrades,
   getTradeFlowBaselineTracker,
-  getTickerPrice,
+  getCurrentPrice,
   getAllTradeHistory
 } from './exchange';
 
@@ -37,7 +37,10 @@ const FIFTEEN_MINUTE_MS = 15 * MINUTE_MS;
 
 const VIRTUAL_TRADE_CHECK_INTERVAL_MS = 5_000;
 
-function calculateAtrWilder(candles: Candle[], period = ATR_PERIOD): number | null {
+function calculateAtrWilder(
+  candles: Candle[],
+  period = ATR_PERIOD
+): number | null {
   if (candles.length < period + 1) return null;
 
   const atrValues = ATR.calculate({
@@ -52,16 +55,26 @@ function calculateAtrWilder(candles: Candle[], period = ATR_PERIOD): number | nu
   return Number.isFinite(atr) && atr > 0 ? atr : null;
 }
 
-function resampleTo15m(candles: Candle[], limit = SLTP_15M_CANDLE_LIMIT): Candle[] {
+function resampleTo15m(
+  candles: Candle[],
+  limit = SLTP_15M_CANDLE_LIMIT
+): Candle[] {
   const now = Date.now();
   const buckets = new Map<number, Candle>();
 
   for (const candle of candles) {
-    const bucketTime = Math.floor(candle.time / FIFTEEN_MINUTE_MS) * FIFTEEN_MINUTE_MS;
+    const bucketTime =
+      Math.floor(candle.time / FIFTEEN_MINUTE_MS) *
+      FIFTEEN_MINUTE_MS;
+
     const existing = buckets.get(bucketTime);
 
     if (!existing) {
-      buckets.set(bucketTime, { ...candle, time: bucketTime });
+      buckets.set(bucketTime, {
+        ...candle,
+        time: bucketTime
+      });
+
       continue;
     }
 
@@ -72,7 +85,9 @@ function resampleTo15m(candles: Candle[], limit = SLTP_15M_CANDLE_LIMIT): Candle
   }
 
   return [...buckets.values()]
-    .filter(candle => candle.time + FIFTEEN_MINUTE_MS <= now)
+    .filter(candle =>
+      candle.time + FIFTEEN_MINUTE_MS <= now
+    )
     .sort((a, b) => a.time - b.time)
     .slice(-limit);
 }
@@ -89,7 +104,7 @@ function buildRealTradeHistory(): TradeHistoryEntry[] {
 /**
  * История для S2.
  *
- * Теперь S2 использует закрытые виртуальные сделки,
+ * S2 использует только закрытые виртуальные сделки,
  * а не только реально исполненные сделки бота.
  */
 function buildVirtualTradeHistory(): TradeHistoryEntry[] {
@@ -107,7 +122,7 @@ function buildVirtualTradeHistory(): TradeHistoryEntry[] {
 /**
  * Открывает виртуальную сделку на сыром trade-flow сигнале.
  *
- * Правило старого бота сохраняется:
+ * Правило старого бота:
  * один символ — одна открытая виртуальная позиция.
  */
 function maybeOpenVirtualTrade(
@@ -117,7 +132,12 @@ function maybeOpenVirtualTrade(
 ): void {
   if (!result.rawSignal) return;
 
-  if (result.side !== 'long' && result.side !== 'short') return;
+  if (
+    result.side !== 'long' &&
+    result.side !== 'short'
+  ) {
+    return;
+  }
 
   if (
     !Number.isFinite(result.price) ||
@@ -157,15 +177,21 @@ export function runTradeFlowOnce(
 ): TradeFlowResult {
   const trades: LighterTrade[] = getTrades(symbol);
 
-  // Входной фильтр v6.41 — 1m свечи и Wilder ATR, как в рабочей версии.
-  const filterCandles: Candle[] = getCandles(symbol, DEFAULT_TIMEFRAME, FILTER_CANDLE_LIMIT);
+  // Входной фильтр v6.41 — 1m свечи и Wilder ATR.
+  const filterCandles: Candle[] = getCandles(
+    symbol,
+    DEFAULT_TIMEFRAME,
+    FILTER_CANDLE_LIMIT
+  );
+
   const filterAtr = calculateAtrWilder(filterCandles);
 
-  // SL/TP — только закрытые 15m свечи (ресемплинг из 1m) и Wilder ATR.
+  // SL/TP — только закрытые 15m свечи и Wilder ATR.
   const slTpCandles: Candle[] = resampleTo15m(filterCandles);
   const slTpAtr = calculateAtrWilder(slTpCandles);
 
-  const baselineTracker = getTradeFlowBaselineTracker(symbol);
+  const baselineTracker =
+    getTradeFlowBaselineTracker(symbol);
 
   // S2 теперь работает по виртуальной истории сырых импульсов.
   const tradeHistory = buildVirtualTradeHistory();
@@ -189,11 +215,14 @@ export function runTradeFlowOnce(
 }
 
 /**
- * Проверяет открытые виртуальные сделки по текущей REST-цене.
- * Закрытая виртуальная сделка попадает в virtual_trade_log.csv
- * и становится доступной для будущего S2-решения.
+ * Проверяет открытые виртуальные сделки по текущей WebSocket-цене.
+ *
+ * Закрытая виртуальная сделка:
+ * - удаляется из активных;
+ * - дописывается в virtual_trade_log.csv;
+ * - становится доступной для будущего S2-решения.
  */
-export async function checkOpenVirtualTrades(): Promise<void> {
+export function checkOpenVirtualTrades(): void {
   const symbols = new Set<string>();
 
   for (const trade of getVirtualTradeHistory()) {
@@ -205,24 +234,17 @@ export async function checkOpenVirtualTrades(): Promise<void> {
 
     if (!activeTrade) continue;
 
-    try {
-      const price = await getTickerPrice(symbol);
+    const price = getCurrentPrice(symbol);
 
-      if (
-        price == null ||
-        !Number.isFinite(price) ||
-        price <= 0
-      ) {
-        continue;
-      }
-
-      checkVirtualTrade(symbol, price);
-    } catch (error) {
-      console.error(
-        `[virtual-trade] Failed to check ${symbol}:`,
-        error
-      );
+    if (
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0
+    ) {
+      continue;
     }
+
+    checkVirtualTrade(symbol, price);
   }
 }
 
@@ -231,7 +253,14 @@ export async function checkOpenVirtualTrades(): Promise<void> {
  */
 export function startVirtualTradeMonitor(): void {
   setInterval(() => {
-    void checkOpenVirtualTrades();
+    try {
+      checkOpenVirtualTrades();
+    } catch (error) {
+      console.error(
+        `[virtual-trade] Monitor check failed:`,
+        error
+      );
+    }
   }, VIRTUAL_TRADE_CHECK_INTERVAL_MS);
 }
 
