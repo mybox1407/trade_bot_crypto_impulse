@@ -129,6 +129,15 @@ export interface TradeState {
   windowCandles: number;
 }
 
+export interface RawTradeFlowSignal {
+  side: 'long' | 'short';
+  entryPrice: number;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  slTpAtr: number;
+  signalTime: number;
+}
+
 export interface TradeFlowResult {
   symbol: string;
   ready: boolean;
@@ -146,6 +155,8 @@ export interface TradeFlowResult {
   signalTimeIso: string;
   indicators: TradeFlowIndicators;
   tradeState: TradeState | null;
+  rawSignal: boolean;
+  rawSignalData: RawTradeFlowSignal | null;
 }
 
 export interface TradeFlowConfig {
@@ -781,7 +792,8 @@ function emptyResult(
   now: number,
   reason: string,
   indicators: TradeFlowIndicators,
-  tradeState: TradeState | null
+  tradeState: TradeState | null,
+  rawSignalData: RawTradeFlowSignal | null = null
 ): TradeFlowResult {
   return {
     symbol,
@@ -799,7 +811,9 @@ function emptyResult(
     signalTime: now,
     signalTimeIso: new Date(now).toISOString(),
     indicators,
-    tradeState
+    tradeState,
+    rawSignal: rawSignalData != null,
+    rawSignalData
   };
 }
 
@@ -963,6 +977,39 @@ export function analyzeTradeFlow(
     );
   }
 
+  // Сырой trade-flow сигнал подтверждён.
+  // Он не зависит от HTF-группы и S2.
+  const rawSlTpAtr =
+    options?.slTpAtr != null &&
+    Number.isFinite(options.slTpAtr) &&
+    options.slTpAtr > 0
+      ? options.slTpAtr
+      : atr;
+
+  const rawStopDistance = rawSlTpAtr * config.stopAtrMultiplier;
+  const rawTargetDistance = rawSlTpAtr * config.takeProfitAtrMultiplier;
+
+  const rawStopLossPrice =
+    side === 'long'
+      ? price - rawStopDistance
+      : price + rawStopDistance;
+
+  const rawTakeProfitPrice =
+    side === 'long'
+      ? price + rawTargetDistance
+      : price - rawTargetDistance;
+
+  const rawSignalTime = latestTrade.time;
+
+  const rawSignalData: RawTradeFlowSignal = {
+    side,
+    entryPrice: price,
+    stopLossPrice: rawStopLossPrice,
+    takeProfitPrice: rawTakeProfitPrice,
+    slTpAtr: rawSlTpAtr,
+    signalTime: rawSignalTime
+  };
+
   if (!tradeState) {
     return emptyResult(
       symbol,
@@ -970,7 +1017,8 @@ export function analyzeTradeFlow(
       now,
       'Candle history is insufficient for v6.41 regime',
       indicators,
-      tradeState
+      tradeState,
+      rawSignalData
     );
   }
 
@@ -983,7 +1031,8 @@ export function analyzeTradeFlow(
       now,
       reason ?? 'Script strategy group not allowed',
       indicators,
-      tradeState
+      tradeState,
+      rawSignalData
     );
   }
 
@@ -996,23 +1045,10 @@ export function analyzeTradeFlow(
       now,
       'S2 previous same-side trade filter blocked entry',
       indicators,
-      tradeState
+      tradeState,
+      rawSignalData
     );
   }
-
-  const slTpAtr =
-    options?.slTpAtr != null &&
-    Number.isFinite(options.slTpAtr) &&
-    options.slTpAtr > 0
-      ? options.slTpAtr
-      : atr;
-
-  const stopDistance = slTpAtr * config.stopAtrMultiplier;
-  const targetDistance = slTpAtr * config.takeProfitAtrMultiplier;
-
-  const stopLossPrice = side === 'long' ? price - stopDistance : price + stopDistance;
-  const takeProfitPrice = side === 'long' ? price + targetDistance : price - targetDistance;
-  const signalTime = latestTrade.time;
 
   return {
     symbol,
@@ -1021,16 +1057,18 @@ export function analyzeTradeFlow(
     sell: side === 'short',
     side,
     price,
-    takeProfitPrice,
-    stopLossPrice,
+    takeProfitPrice: rawTakeProfitPrice,
+    stopLossPrice: rawStopLossPrice,
     positionSize: null,
     regime: group,
     group,
     skipReason: null,
-    signalTime,
-    signalTimeIso: new Date(signalTime).toISOString(),
+    signalTime: rawSignalTime,
+    signalTimeIso: new Date(rawSignalTime).toISOString(),
     indicators,
-    tradeState
+    tradeState,
+    rawSignal: true,
+    rawSignalData
   };
 }
 
