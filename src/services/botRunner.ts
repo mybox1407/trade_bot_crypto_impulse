@@ -122,33 +122,35 @@ function buildVirtualTradeHistory(): TradeHistoryEntry[] {
 /**
  * Открывает виртуальную сделку на сыром trade-flow сигнале.
  *
+ * Важно:
+ * сырой сигнал может быть заблокирован HTF-группой или S2,
+ * но всё равно должен попасть в виртуальную историю.
+ *
  * Правило старого бота:
  * один символ — одна открытая виртуальная позиция.
  */
 function maybeOpenVirtualTrade(
   symbol: string,
-  result: TradeFlowResult,
-  slTpAtr: number | null
+  result: TradeFlowResult
 ): void {
-  if (!result.rawSignal) return;
+  if (!result.rawSignal || !result.rawSignalData) return;
+
+  const rawSignal = result.rawSignalData;
 
   if (
-    result.side !== 'long' &&
-    result.side !== 'short'
+    rawSignal.side !== 'long' &&
+    rawSignal.side !== 'short'
   ) {
     return;
   }
 
   if (
-    !Number.isFinite(result.price) ||
-    result.price <= 0 ||
-    result.stopLossPrice == null ||
-    !Number.isFinite(result.stopLossPrice) ||
-    result.takeProfitPrice == null ||
-    !Number.isFinite(result.takeProfitPrice) ||
-    slTpAtr == null ||
-    !Number.isFinite(slTpAtr) ||
-    slTpAtr <= 0
+    !Number.isFinite(rawSignal.entryPrice) ||
+    rawSignal.entryPrice <= 0 ||
+    !Number.isFinite(rawSignal.stopLossPrice) ||
+    !Number.isFinite(rawSignal.takeProfitPrice) ||
+    !Number.isFinite(rawSignal.slTpAtr) ||
+    rawSignal.slTpAtr <= 0
   ) {
     return;
   }
@@ -159,11 +161,11 @@ function maybeOpenVirtualTrade(
 
   openVirtualTrade({
     symbol,
-    side: result.side,
-    entryPrice: result.price,
-    stopLossPrice: result.stopLossPrice,
-    takeProfitPrice: result.takeProfitPrice,
-    slTpAtr
+    side: rawSignal.side,
+    entryPrice: rawSignal.entryPrice,
+    stopLossPrice: rawSignal.stopLossPrice,
+    takeProfitPrice: rawSignal.takeProfitPrice,
+    slTpAtr: rawSignal.slTpAtr
   });
 }
 
@@ -205,11 +207,7 @@ export function runTradeFlowOnce(
     baselineTracker
   });
 
-  maybeOpenVirtualTrade(
-    symbol,
-    result,
-    slTpAtr
-  );
+  maybeOpenVirtualTrade(symbol, result);
 
   return result;
 }
