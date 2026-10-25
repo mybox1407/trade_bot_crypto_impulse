@@ -87,8 +87,8 @@ function normalizeCandleTime(
   }
 
   return value > 10_000_000_000
-    ? Math.floor(value / 1000)
-    : Math.floor(value);
+    ? Math.floor(value)
+    : Math.floor(value * 1000);
 }
 
 function timeframeToSeconds(
