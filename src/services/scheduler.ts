@@ -8,7 +8,10 @@
 
 import { POSITION_CHECK_INTERVAL_MS } from '../config/constants';
 
-import { runTradeFlowOnce } from './botRunner';
+import {
+  runTradeFlowOnce,
+  initializeVirtualTradeSystem
+} from './botRunner';
 
 import {
   getCandles,
@@ -492,15 +495,13 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
 
     lastProcessedTradeBySymbol.set(symbol, tradeId);
 
-    if (tryRestorePendingFilledOpen(symbol)) return;
-    if (isReconciliationPending(symbol)) return;
-    if (isSymbolLocked(symbol) || isPositionOpening(symbol)) return;
-    if (hasOpenPosition(symbol)) return;
-    if (getOpenPositionsCount() >= MAX_PARALLEL_POSITIONS) return;
-
     const market = resolveMarket(symbol);
     const marketId = requireMarketId(market.marketId, `trade-flow signal ${symbol}`);
 
+    // Важно:
+    // runTradeFlowOnce() вызывается до блокирующих проверок.
+    // Он открывает виртуальную сделку на каждом сыром trade-flow сигнале,
+    // даже если реальный вход позже будет запрещён.
     const result = runTradeFlowOnce(symbol);
 
     tradeLog('TRADE_FLOW_CHECK', {
@@ -510,9 +511,17 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
       ready: result.ready,
       side: result.side,
       price: result.price,
+      rawSignal: result.rawSignal,
+      rawSignalSide: result.rawSignalData?.side ?? null,
       reason: describeSignalReason(result),
       indicators: result.indicators
     });
+
+    if (tryRestorePendingFilledOpen(symbol)) return;
+    if (isReconciliationPending(symbol)) return;
+    if (isSymbolLocked(symbol) || isPositionOpening(symbol)) return;
+    if (hasOpenPosition(symbol)) return;
+    if (getOpenPositionsCount() >= MAX_PARALLEL_POSITIONS) return;
 
     if (!result.ready || result.side === 'none') return;
 
@@ -1029,6 +1038,11 @@ export async function startScheduler(): Promise<void> {
       startReconciliationLoop(signerClient, accountIndex);
       startBalanceSyncLoop(accountIndex);
     }
+
+    // Виртуальный S2:
+    // загружает data/virtual_trade_log.csv
+    // и запускает проверку открытых виртуальных сделок каждые 5 секунд.
+    initializeVirtualTradeSystem();
 
     startMarketRefresh();
 
