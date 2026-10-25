@@ -105,6 +105,10 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'IBM',
   'PRL',
   'DRV',
+  'STABLECOINX',
+  'CC',
+  'USDJPY',
+  'TAO',
 
   'XMR'
 
