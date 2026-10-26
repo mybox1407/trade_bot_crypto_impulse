@@ -110,6 +110,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'USDJPY',
   'TAO',
   'SPX',
+  'UNITREE',
+  'CAP',
 
   'XMR'
 
