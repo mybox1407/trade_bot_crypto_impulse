@@ -132,6 +132,7 @@ type PendingFilledOpen = {
   orderId?: string;
   clientOrderId: string;
   regime: string;
+  strategyGroup: string;
   indicators: Record<string, unknown>;
   signalTime?: number;
   signalTimeIso?: string;
@@ -284,6 +285,7 @@ function stopBalanceSyncLoop(): void {
 
 function buildPositionMetadata(
   regime: string,
+  strategyGroup: string,
   indicators: Record<string, unknown>,
   signalTime?: number,
   signalTimeIso?: string
@@ -295,6 +297,7 @@ function buildPositionMetadata(
 
   return {
     regime,
+    strategyGroup: strategyGroup as any,
     macdCrossUp: false,
     macdCrossDown: false,
     lastRsi: 0,
@@ -357,7 +360,13 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
     exchangeTakeProfitPrice: input.exchangeTakeProfitPrice,
     exchangeStopLossOrderId: input.protectionStopLossOrderId,
     exchangeTakeProfitOrderId: input.protectionTakeProfitOrderId,
-    metadata: buildPositionMetadata(input.regime, input.indicators, input.signalTime, input.signalTimeIso),
+    metadata: buildPositionMetadata(
+      input.regime,
+      input.strategyGroup,
+      input.indicators,
+      input.signalTime,
+      input.signalTimeIso
+    ),
     executionOrderId: input.orderId,
     clientOrderId: input.clientOrderId
   };
@@ -560,6 +569,7 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
       symbol,
       marketId,
       side: result.side,
+      strategyGroup: result.group,
       quantity,
       expectedPrice,
       stopLossPrice: result.stopLossPrice,
@@ -627,6 +637,7 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         orderId: executionResult.orderId,
         clientOrderId,
         regime: result.regime,
+        strategyGroup: result.group,
         indicators: signalIndicators,
         signalTime: result.signalTime,
         signalTimeIso: result.signalTimeIso,
@@ -665,6 +676,7 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         symbol,
         marketId,
         side: result.side,
+        strategyGroup: result.group,
         quantity: pending.filledQuantity,
         requestedPrice: expectedPrice,
         averageFillPrice: pending.averageFillPrice,
