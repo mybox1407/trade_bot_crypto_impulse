@@ -55,6 +55,7 @@ const FILE_HEADERS: Record<
     'positionId',
     'symbol',
     'side',
+    'strategyGroup',
     'entryPrice',
     'quantity',
     'notional',
@@ -113,6 +114,7 @@ const FILE_HEADERS: Record<
     'positionId',
     'symbol',
     'side',
+    'strategyGroup',
     'entryPrice',
     'exitPrice',
     'quantity',
@@ -300,6 +302,7 @@ export function logPositionOpen(row: {
   positionId: string;
   symbol: string;
   side: string;
+  strategyGroup?: string;
   entryPrice: number;
   quantity: number;
   notional: number;
@@ -368,6 +371,7 @@ export function logPositionClose(row: {
   positionId: string;
   symbol: string;
   side: string;
+  strategyGroup?: string;
   entryPrice: number;
   exitPrice: number;
   quantity: number;
