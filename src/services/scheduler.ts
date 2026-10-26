@@ -517,7 +517,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
     const isNoiseReason =
       reason.includes('Trade volume spike threshold not met') ||
       reason.includes('Warming trade-flow baseline') ||
-      reason.includes('Price has not confirmed flow direction');
+      reason.includes('Price has not confirmed flow direction') ||
+      reason.includes('Aggressor-side imbalance threshold not met');
     if (!isNoiseReason) {
       tradeLog('TRADE_FLOW_CHECK', {
         symbol,
@@ -532,7 +533,7 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         indicators: result.indicators
       });
     }
-
+    
     if (tryRestorePendingFilledOpen(symbol)) return;
     if (isReconciliationPending(symbol)) return;
     if (isSymbolLocked(symbol) || isPositionOpening(symbol)) return;
