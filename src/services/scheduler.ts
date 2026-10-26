@@ -513,18 +513,24 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
     // даже если реальный вход позже будет запрещён.
     const result = runTradeFlowOnce(symbol);
 
-    tradeLog('TRADE_FLOW_CHECK', {
-      symbol,
-      marketId,
-      tradeId,
-      ready: result.ready,
-      side: result.side,
-      price: result.price,
-      rawSignal: result.rawSignal,
-      rawSignalSide: result.rawSignalData?.side ?? null,
-      reason: describeSignalReason(result),
-      indicators: result.indicators
-    });
+    const reason = describeSignalReason(result);
+    const isNoiseReason =
+      reason.includes('Trade volume spike threshold not met') ||
+      reason.includes('Warming trade-flow baseline');
+    if (!isNoiseReason) {
+      tradeLog('TRADE_FLOW_CHECK', {
+        symbol,
+        marketId,
+        tradeId,
+        ready: result.ready,
+        side: result.side,
+        price: result.price,
+        rawSignal: result.rawSignal,
+        rawSignalSide: result.rawSignalData?.side ?? null,
+        reason,
+        indicators: result.indicators
+      });
+    }
 
     if (tryRestorePendingFilledOpen(symbol)) return;
     if (isReconciliationPending(symbol)) return;
