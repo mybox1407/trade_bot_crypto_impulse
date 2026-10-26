@@ -760,10 +760,14 @@ function isS2Allowed(
   entryTime: number
 ): boolean {
   const side = group === 'down_short' ? 'short' : 'long';
+
   const previousPnL = getPreviousSameSidePnL(history, side, entryTime);
 
-  // Cold start: нет предыдущей сделки в этом направлении — разрешаем вход.
-  if (previousPnL == null) return true;
+  // Cold start отключён.
+  // Нет закрытой виртуальной сделки в этом направлении — реальный вход запрещён.
+  if (previousPnL == null) {
+    return false;
+  }
 
   const s2Allowed = previousPnL > 0;
 
