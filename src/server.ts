@@ -1,18 +1,20 @@
 import { app } from './app';
 import { startScheduler, stopScheduler } from './services/scheduler';
+import { initializeVirtualTradeSystem } from './services/botRunner';
 
 const port = Number(process.env.PORT) || 3007;
 
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`[${new Date().toISOString()}] Server started on port ${port}`);
   startScheduler();
+  initializeVirtualTradeSystem();
 });
 
 async function gracefulShutdown(signal: string) {
   console.log(`[${new Date().toISOString()}] Received ${signal}, shutting down gracefully...`);
-  
+
   await stopScheduler();
-  
+
   server.close(() => {
     console.log(`[${new Date().toISOString()}] HTTP server closed`);
     process.exit(0);
