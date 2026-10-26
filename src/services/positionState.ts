@@ -23,6 +23,13 @@ import {
 export const POSITION_PERCENT = 0.30;
 export const MAX_PARALLEL_POSITIONS = 3;
 
+export type StrategyGroup =
+  | 'down_long'
+  | 'down_short'
+  | 'up_long'
+  | 'up_short'
+  | 'none';
+
 export type PositionCloseReason =
   | 'take_profit'
   | 'stop_loss'
@@ -57,6 +64,7 @@ export interface VirtualPosition {
   clientOrderId?: string;
   metadata?: {
     regime: string;
+    strategyGroup?: StrategyGroup;
     macdCrossUp: boolean;
     macdCrossDown: boolean;
     lastRsi: number;
@@ -352,6 +360,7 @@ export function openPosition(data: {
     positionId: position.id,
     symbol: position.symbol,
     side: position.side,
+    strategyGroup: data.metadata?.strategyGroup ?? 'none',
     entryPrice: position.entryPrice,
     quantity: position.quantity,
     notional: position.notional,
@@ -461,6 +470,7 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     positionId: position.id,
     symbol: position.symbol,
     side: position.side,
+    strategyGroup: position.metadata?.strategyGroup ?? 'none',
     entryPrice: position.entryPrice,
     exitPrice,
     quantity: position.quantity,
@@ -541,6 +551,7 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     entryFee: Math.max(0, position.entryFee - proportionalEntryFee),
     metadata: {
       regime: position.metadata?.regime ?? '',
+      strategyGroup: position.metadata?.strategyGroup ?? 'none',
       macdCrossUp: position.metadata?.macdCrossUp ?? false,
       macdCrossDown: position.metadata?.macdCrossDown ?? false,
       lastRsi: position.metadata?.lastRsi ?? 0,
