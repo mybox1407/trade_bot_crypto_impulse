@@ -21,7 +21,7 @@ export interface VirtualTrade {
 
 const VIRTUAL_TRADE_LOG_FILE =
   process.env.VIRTUAL_TRADE_LOG_FILE ??
-  path.join(process.cwd(), 'data', 'virtual_trade_log.csv');
+  '/root/lighter_trade_live/logs/virtual_trade_log.csv';
 
 const activeVirtualTrades = new Map<string, VirtualTrade>();
 let virtualTradeHistory: VirtualTrade[] = [];
@@ -31,8 +31,13 @@ const CSV_HEADER =
   'openedAt,closedAt,exitPrice,netPnL,status,closeReason\n';
 
 export function loadVirtualTradeHistory(): void {
+  const directory = path.dirname(VIRTUAL_TRADE_LOG_FILE);
+
+  if (!fs.existsSync(directory)) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+
   if (!fs.existsSync(VIRTUAL_TRADE_LOG_FILE)) {
-    fs.mkdirSync(path.dirname(VIRTUAL_TRADE_LOG_FILE), { recursive: true });
     fs.writeFileSync(VIRTUAL_TRADE_LOG_FILE, CSV_HEADER, 'utf8');
     virtualTradeHistory = [];
     return;
@@ -54,6 +59,10 @@ export function getVirtualTradeHistory(): VirtualTrade[] {
 
 export function getActiveVirtualTrade(symbol: string): VirtualTrade | undefined {
   return activeVirtualTrades.get(symbol);
+}
+
+export function getActiveVirtualTradeSymbols(): string[] {
+  return [...activeVirtualTrades.keys()];
 }
 
 export function openVirtualTrade(input: {
