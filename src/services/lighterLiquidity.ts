@@ -109,6 +109,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'CC',
   'USDJPY',
   'TAO',
+  'SPX',
 
   'XMR'
 
