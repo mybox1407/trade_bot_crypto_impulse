@@ -93,6 +93,20 @@ export function openVirtualTrade(input: {
 
   activeVirtualTrades.set(input.symbol, trade);
 
+  console.log(JSON.stringify({
+    event: 'VIRTUAL_TRADE_OPENED',
+    timestamp: new Date().toISOString(),
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side,
+    entryPrice: trade.entryPrice,
+    stopLossPrice: trade.stopLossPrice,
+    takeProfitPrice: trade.takeProfitPrice,
+    slTpAtr: trade.slTpAtr,
+    openedAt: trade.openedAt,
+    status: trade.status
+  }));
+
   return trade;
 }
 
@@ -143,6 +157,23 @@ export function checkVirtualTrade(
   activeVirtualTrades.delete(symbol);
   virtualTradeHistory.push(closed);
   appendVirtualTradeToCsv(closed);
+
+  console.log(JSON.stringify({
+    event: 'VIRTUAL_TRADE_CLOSED',
+    timestamp: new Date().toISOString(),
+    id: closed.id,
+    symbol: closed.symbol,
+    side: closed.side,
+    entryPrice: closed.entryPrice,
+    exitPrice: closed.exitPrice,
+    stopLossPrice: closed.stopLossPrice,
+    takeProfitPrice: closed.takeProfitPrice,
+    netPnL: closed.netPnL,
+    status: closed.status,
+    closeReason: closed.closeReason,
+    openedAt: closed.openedAt,
+    closedAt: closed.closedAt
+  }));
 
   return closed;
 }
