@@ -18,6 +18,7 @@ import {
 import {
   loadVirtualTradeHistory,
   getVirtualTradeHistory,
+  getActiveVirtualTradeSymbols,
   getActiveVirtualTrade,
   openVirtualTrade,
   checkVirtualTrade
@@ -215,17 +216,17 @@ export function runTradeFlowOnce(
 /**
  * Проверяет открытые виртуальные сделки по текущей WebSocket-цене.
  *
+ * Важно:
+ * список символов берётся из активных виртуальных сделок,
+ * а не из истории закрытых сделок.
+ *
  * Закрытая виртуальная сделка:
  * - удаляется из активных;
  * - дописывается в virtual_trade_log.csv;
  * - становится доступной для будущего S2-решения.
  */
 export function checkOpenVirtualTrades(): void {
-  const symbols = new Set<string>();
-
-  for (const trade of getVirtualTradeHistory()) {
-    symbols.add(trade.symbol);
-  }
+  const symbols = getActiveVirtualTradeSymbols();
 
   for (const symbol of symbols) {
     const activeTrade = getActiveVirtualTrade(symbol);
