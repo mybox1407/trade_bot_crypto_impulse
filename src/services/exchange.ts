@@ -458,8 +458,12 @@ async function loadHistoricalCandles(
       oldestCandleTimeMs / 1000
     );
 
-    const nextEndTimestamp =
-      oldestCandleTimeSeconds - candleSeconds;
+    // Важно:
+    // следующая страница должна заканчиваться на той же свече,
+    // которая является самой старой в текущей странице.
+    // Дубликат будет удалён через allCandles.set(candle.time, candle).
+    // Это устраняет возможную потерю одной свечи на границе страниц.
+    const nextEndTimestamp = oldestCandleTimeSeconds;
 
     if (nextEndTimestamp >= endTimestamp) {
       break;
@@ -468,9 +472,48 @@ async function loadHistoricalCandles(
     endTimestamp = nextEndTimestamp;
   }
 
-  return [...allCandles.values()]
+  const sortedCandles = [...allCandles.values()]
     .sort((a, b) => a.time - b.time)
     .slice(-limit);
+
+  let gaps = 0;
+  let firstGapBefore: number | null = null;
+  let maxGapMinutes = 0;
+
+  for (let i = 1; i < sortedCandles.length; i += 1) {
+    const delta = sortedCandles[i].time - sortedCandles[i - 1].time;
+    const expectedDelta = candleSeconds * 1000;
+
+    if (delta !== expectedDelta) {
+      gaps += 1;
+
+      if (firstGapBefore == null) {
+        firstGapBefore = sortedCandles[i - 1].time;
+      }
+
+      maxGapMinutes = Math.max(
+        maxGapMinutes,
+        Math.round(delta / expectedDelta)
+      );
+    }
+  }
+
+  console.log(JSON.stringify({
+    event: 'CANDLE_HISTORY_DIAGNOSTIC',
+    timestamp: new Date().toISOString(),
+    marketId,
+    timeframe,
+    requestedLimit: limit,
+    loaded: sortedCandles.length,
+    pagesLoaded,
+    gaps,
+    maxGapMinutes,
+    firstGapBefore,
+    firstCandle: sortedCandles[0]?.time ?? null,
+    lastCandle: sortedCandles[sortedCandles.length - 1]?.time ?? null
+  }));
+
+  return sortedCandles;
 }
 
 function attachClient(
@@ -731,7 +774,6 @@ export function getCurrentPrice(
 export function getMarketPrice(
   symbol: string
 ): MarketPrice | null {
-  const market = resolveMarket(symbol);
   const price =
     pricesByMarket.get(market.marketId) ?? null;
 
