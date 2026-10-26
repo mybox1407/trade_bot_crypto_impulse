@@ -774,6 +774,7 @@ export function getCurrentPrice(
 export function getMarketPrice(
   symbol: string
 ): MarketPrice | null {
+  const market = resolveMarket(symbol);
   const price =
     pricesByMarket.get(market.marketId) ?? null;
 
