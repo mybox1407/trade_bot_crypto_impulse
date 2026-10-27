@@ -103,17 +103,20 @@ export class LighterWsClient {
   private stopped = false;
   private lastMessageTime = 0;
   private staleDataTimeout?: NodeJS.Timeout;
+  private hasConnectedOnce = false;
 
   constructor(
     private readonly marketId: number,
     private readonly resolution: string,
     private readonly onCandle: (candle: Candle) => void,
     private readonly onPrice: (price: MarketPrice) => void,
-    private readonly onTrade: (trade: LighterTrade) => void
+    private readonly onTrade: (trade: LighterTrade) => void,
+    private readonly onReconnect?: () => void
   ) {}
 
   connect(): void {
     this.stopped = false;
+    this.hasConnectedOnce = false;
     this.lastMessageTime = Date.now();
     this.open();
   }
@@ -189,6 +192,21 @@ export class LighterWsClient {
       }, 30_000);
 
       this.scheduleStaleDataCheck();
+
+      if (this.hasConnectedOnce && this.onReconnect) {
+        try {
+          this.onReconnect();
+        } catch (error) {
+          console.error(
+            `[${new Date().toISOString()}] ` +
+              `Lighter WebSocket reconnect callback failed ` +
+              `market=${this.marketId}:`,
+            error
+          );
+        }
+      }
+
+      this.hasConnectedOnce = true;
     });
 
     ws.on('message', raw => {
@@ -199,13 +217,6 @@ export class LighterWsClient {
           | CandleMessage
           | MarketStatsMessage
           | TradeMessage;
-
-/*        if (message.type === 'update/trade') {
-          console.log(
-            `[${new Date().toISOString()}] RAW LIGHTER TRADE`,
-            raw.toString()
-          );
-        }*/
 
         if (
           message.type === 'subscribed/candle' ||
@@ -359,11 +370,7 @@ export class LighterWsClient {
       price,
       size,
       usdAmount: toFiniteNumber(raw.usd_amount),
-
-      // is_maker_ask describes the passive maker.
-      // If maker is ask, the taker/initiator bought.
       aggressorSide: raw.is_maker_ask ? 'buy' : 'sell',
-
       type: raw.type ?? (isLiquidation ? 'liquidation' : 'trade'),
       isLiquidation
     });
