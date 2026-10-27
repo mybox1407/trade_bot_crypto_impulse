@@ -821,8 +821,7 @@ function isS2Allowed(
  *
  * Important:
  * - stopPct and execution latency are known before entry;
- * - notionalPct requires balanceBefore;
- * - if balanceBefore is not provided, notional filters fail open.
+ * - notional exposure is validated in scheduler.ts after quantity calculation.
  */
 function passesEntryQualityFilters(
   group: StrategyGroup,
@@ -831,8 +830,7 @@ function passesEntryQualityFilters(
   entryPrice: number,
   stopLossPrice: number,
   signalTime: number,
-  executionTime: number,
-  balanceBefore: number | null
+  executionTime: number
 ): { allowed: boolean; reason: string | null } {
   if (group === 'down_short') {
     return { allowed: false, reason: 'DOWN_SHORT disabled by entry-quality filters' };
@@ -869,36 +867,10 @@ function passesEntryQualityFilters(
       };
     }
 
-    if (balanceBefore != null && balanceBefore > 0) {
-      const notionalPct = (entryPrice * 1) / balanceBefore;
-
-      // Actual position notional is supplied by the execution layer;
-      // here we validate the pre-trade risk-based maximum.
-      if (notionalPct > DOWN_LONG_MAX_NOTIONAL_PCT) {
-        return {
-          allowed: false,
-          reason: `DOWN_LONG notional exposure too high: ${(notionalPct * 100).toFixed(2)}%`
-        };
-      }
-    }
-
     return { allowed: true, reason: null };
   }
 
   if (group === 'up_long') {
-    if (balanceBefore != null && balanceBefore > 0) {
-      const notionalPct = (entryPrice * 1) / balanceBefore;
-
-      // Actual position notional is supplied by the execution layer;
-      // here we validate the pre-trade risk-based maximum.
-      if (notionalPct > UP_LONG_MAX_NOTIONAL_PCT) {
-        return {
-          allowed: false,
-          reason: `UP_LONG notional exposure too high: ${(notionalPct * 100).toFixed(2)}%`
-        };
-      }
-    }
-
     return { allowed: true, reason: null };
   }
 
@@ -962,8 +934,6 @@ export function analyzeTradeFlow(
     baselineTracker?: TradeFlowBaselineTracker;
     candles?: Candle[];
     tradeHistory?: TradeHistoryEntry[];
-    balanceBefore?: number | null;
-    plannedNotional?: number | null;
   }
 ): TradeFlowResult {
   const config: TradeFlowConfig = { ...DEFAULT_TRADE_FLOW_CONFIG, ...options?.config };
@@ -1179,8 +1149,7 @@ export function analyzeTradeFlow(
     price,
     rawStopLossPrice,
     rawSignalTime,
-    now,
-    options?.balanceBefore ?? null
+    now
   );
 
   if (!entryQuality.allowed) {
