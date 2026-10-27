@@ -105,6 +105,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'XTEN',
   'SPX',
   'CHIP',
+  'TAO',
+  'USDJPY',
 ]);
 
 function toNumber(
