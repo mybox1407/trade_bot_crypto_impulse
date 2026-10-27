@@ -73,7 +73,7 @@ export const UP_LONG_MAX_NOTIONAL_PCT = 0.298;
 
 // up_short
 export const UP_SHORT_MIN_STOP_PCT = 0.0035;
-export const UP_SHORT_BLOCKED_SYMBOLS = new Set<string>(['LIT/USDT']);
+export const UP_SHORT_BLOCKED_SYMBOLS = new Set<string>([]);
 
 const MINUTE_MS = 60_000;
 const MAX_WINDOW_MINUTES = Math.max(
