@@ -107,6 +107,7 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'CHIP',
   'TAO',
   'USDJPY',
+  'PAXG',
 ]);
 
 function toNumber(
