@@ -63,6 +63,9 @@ const dynamicMarketsBySymbol =
 const startingMarkets =
   new Set<number>();
 
+const refreshingMarkets =
+  new Set<number>();
+
 const tradeListeners =
   new Set<TradeListener>();
 
@@ -458,11 +461,9 @@ async function loadHistoricalCandles(
       oldestCandleTimeMs / 1000
     );
 
-    // Важно:
-    // следующая страница должна заканчиваться на той же свече,
+    // Следующая страница заканчивается на той же свече,
     // которая является самой старой в текущей странице.
-    // Дубликат будет удалён через allCandles.set(candle.time, candle).
-    // Это устраняет возможную потерю одной свечи на границе страниц.
+    // Дубликат удаляется через allCandles.set(candle.time, candle).
     const nextEndTimestamp = oldestCandleTimeSeconds;
 
     if (nextEndTimestamp >= endTimestamp) {
@@ -516,6 +517,56 @@ async function loadHistoricalCandles(
   return sortedCandles;
 }
 
+async function refreshCandles(
+  market: MarketReference,
+  timeframe: string
+): Promise<void> {
+  const marketId = market.marketId;
+
+  if (refreshingMarkets.has(marketId)) {
+    return;
+  }
+
+  refreshingMarkets.add(marketId);
+
+  try {
+    const freshCandles = await loadHistoricalCandles(
+      marketId,
+      timeframe,
+      MAX_CANDLES
+    );
+
+    if (freshCandles.length === 0) {
+      console.warn(
+        `[${new Date().toISOString()}] ` +
+          `No candles received during refresh for ` +
+          `${normalizeSymbol(market.symbol)}, marketId=${marketId}`
+      );
+
+      return;
+    }
+
+    candlesByMarket.set(marketId, freshCandles);
+
+    console.log(
+      `[${new Date().toISOString()}] ` +
+        `Refreshed candle history after reconnect: ` +
+        `${normalizeSymbol(market.symbol)}, marketId=${marketId}, ` +
+        `candles=${freshCandles.length}`
+    );
+  } catch (error) {
+    console.error(
+      `[${new Date().toISOString()}] ` +
+        `Failed to refresh candles for ${normalizeSymbol(market.symbol)}:`,
+      error instanceof Error
+        ? error.message
+        : 'Unknown error'
+    );
+  } finally {
+    refreshingMarkets.delete(marketId);
+  }
+}
+
 function attachClient(
   market: MarketReference,
   timeframe: string,
@@ -552,12 +603,15 @@ function attachClient(
         time: normalizeCandleTime(candle.time)
       };
 
-      const last = candles[candles.length - 1];
+      const existingIndex = candles.findIndex(
+        existingCandle =>
+          existingCandle.time === normalizedCandle.time
+      );
 
-      if (!last || normalizedCandle.time > last.time) {
+      if (existingIndex >= 0) {
+        candles[existingIndex] = normalizedCandle;
+      } else {
         candles.push(normalizedCandle);
-      } else if (normalizedCandle.time === last.time) {
-        candles[candles.length - 1] = normalizedCandle;
       }
 
       candles.sort((a, b) => a.time - b.time);
@@ -573,6 +627,9 @@ function attachClient(
     },
     trade => {
       publishTrade(market, trade);
+    },
+    () => {
+      void refreshCandles(market, timeframe);
     }
   );
 
@@ -793,6 +850,7 @@ export function stopMarketDataByMarketId(
   baselineTrackersByMarket.delete(marketId);
   tradeHistoryByMarket.delete(marketId);
   seenTradeIdsByMarket.delete(marketId);
+  refreshingMarkets.delete(marketId);
 
   unregisterDynamicMarket(marketId);
 }
