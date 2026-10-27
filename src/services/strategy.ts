@@ -9,8 +9,8 @@ export const TRADE_FEE_RATE = 0.0;
 export const FLOW_WINDOW_MS = 3_000;
 export const FLOW_BASELINE_MS = 60_000;
 export const FLOW_BASELINE_BUCKETS = 10;
-export const FLOW_SPIKE_MULTIPLIER = 3.5;
-export const FLOW_MIN_IMBALANCE = 0.70;
+export const FLOW_SPIKE_MULTIPLIER = 4.0;
+export const FLOW_MIN_IMBALANCE = 0.75;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.15;
 export const FLOW_MAX_CHASE_ATR = 0.8;
 export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
@@ -18,6 +18,11 @@ export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
 export const FLOW_MIN_BASELINE_BUCKETS = 5;
 export const FLOW_MAX_TRADE_AGE_MS = 5_000;
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
+
+// Дополнительные фильтры качества потока.
+export const FLOW_MIN_TRADES_IN_WINDOW = 8;
+export const FLOW_MIN_LARGE_TRADE_SHARE = 0.35;
+export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
@@ -34,6 +39,8 @@ export interface TradeFlowIndicators {
   priceMoveAtr: number | null;
   excludedLiquidationCount: number;
   baselineNonEmptyBuckets: number;
+  largeTradeNotional: number;
+  largeTradeShare: number;
 }
 
 export interface TradeFlowResult {
@@ -66,6 +73,9 @@ export interface TradeFlowConfig {
   minBaselineBuckets: number;
   maxTradeAgeMs: number;
   excludeLiquidations: boolean;
+  minTradesInWindow: number;
+  minLargeTradeShare: number;
+  largeTradeNotional: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -80,7 +90,10 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   takeProfitAtrMultiplier: FLOW_TAKE_PROFIT_ATR_MULTIPLIER,
   minBaselineBuckets: FLOW_MIN_BASELINE_BUCKETS,
   maxTradeAgeMs: FLOW_MAX_TRADE_AGE_MS,
-  excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS
+  excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
+  minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
+  minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
+  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL
 };
 
 export interface TradeFlowBaseline {
@@ -226,6 +239,7 @@ interface Aggregate {
   firstPrice: number | null;
   lastPrice: number | null;
   excludedLiquidationCount: number;
+  largeTradeNotional: number;
 }
 
 function isValidTrade(trade: LighterTrade): boolean {
@@ -259,7 +273,8 @@ function aggregate(
   trades: LighterTrade[],
   fromTime: number,
   toTime: number,
-  excludeLiquidations: boolean
+  excludeLiquidations: boolean,
+  largeTradeNotionalThreshold = 0
 ): Aggregate {
   let buyVolume = 0;
   let sellVolume = 0;
@@ -267,6 +282,7 @@ function aggregate(
   let firstPrice: number | null = null;
   let lastPrice: number | null = null;
   let excludedLiquidationCount = 0;
+  let largeTradeNotional = 0;
 
   const sorted = trades
     .filter(
@@ -291,6 +307,13 @@ function aggregate(
       sellVolume += volume;
     }
 
+    if (
+      largeTradeNotionalThreshold > 0 &&
+      volume >= largeTradeNotionalThreshold
+    ) {
+      largeTradeNotional += volume;
+    }
+
     count += 1;
 
     if (firstPrice == null) {
@@ -306,7 +329,8 @@ function aggregate(
     count,
     firstPrice,
     lastPrice,
-    excludedLiquidationCount
+    excludedLiquidationCount,
+    largeTradeNotional
   };
 }
 
@@ -372,7 +396,8 @@ export function analyzeTradeFlow(
     valid,
     now - config.windowMs,
     now + 1,
-    config.excludeLiquidations
+    config.excludeLiquidations,
+    config.largeTradeNotional
   );
 
   const trackerBaseline =
@@ -449,6 +474,11 @@ export function analyzeTradeFlow(
       ? totalVolume / baselineVolumePerWindow
       : null;
 
+  const largeTradeShare =
+    totalVolume > 0
+      ? current.largeTradeNotional / totalVolume
+      : 0;
+
   const latestTrade = valid[valid.length - 1];
   const price = latestTrade?.price ?? 0;
 
@@ -484,7 +514,9 @@ export function analyzeTradeFlow(
     referencePrice,
     priceMoveAtr,
     excludedLiquidationCount,
-    baselineNonEmptyBuckets: nonEmptyBaselineBuckets
+    baselineNonEmptyBuckets: nonEmptyBaselineBuckets,
+    largeTradeNotional: current.largeTradeNotional,
+    largeTradeShare
   };
 
   if (!latestTrade || price <= 0) {
@@ -534,6 +566,29 @@ export function analyzeTradeFlow(
       price,
       now,
       'No eligible trades in current window',
+      indicators
+    );
+  }
+
+  if (current.count < config.minTradesInWindow) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Not enough trades in current window: ` +
+        `${current.count}/${config.minTradesInWindow}`,
+      indicators
+    );
+  }
+
+  if (largeTradeShare < config.minLargeTradeShare) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Flow is not supported by sufficiently large trades: ` +
+        `${(largeTradeShare * 100).toFixed(1)}% < ` +
+        `${(config.minLargeTradeShare * 100).toFixed(1)}%`,
       indicators
     );
   }
