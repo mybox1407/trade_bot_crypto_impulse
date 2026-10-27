@@ -93,6 +93,8 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'MSTR',
   'SKHY',
   'DRAM',
+  'SKR',
+  'PRL',
 
   //блеклист
   'UNI',
