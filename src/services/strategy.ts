@@ -1,3 +1,5 @@
+// src/services/strategy.ts
+
 import type { LighterTrade } from './lighterWs';
 
 export const STARTING_BALANCE = 150;
@@ -52,6 +54,26 @@ export const ATR_MIN_UP_LONG = 0.10;
 export const ATR_MAX_UP_LONG = 0.30;
 export const UP_LONG_STREAK_MIN = 3;
 export const ENABLE_UP_LONG_S2 = true;
+
+// ============================================================
+// Entry-quality filters (backtest: 2026-10-26 -> 2026-10-27)
+// ============================================================
+
+// down_short полностью отключён.
+export const ENABLE_DOWN_SHORT = false;
+
+// down_long
+export const DOWN_LONG_MAX_NOTIONAL_PCT = 0.2995;
+export const DOWN_LONG_MIN_STOP_PCT = 0.0035;
+export const DOWN_LONG_MAX_STOP_PCT = 0.0075;
+export const DOWN_LONG_MAX_EXECUTION_LATENCY_MS = 60_000;
+
+// up_long
+export const UP_LONG_MAX_NOTIONAL_PCT = 0.298;
+
+// up_short
+export const UP_SHORT_MIN_STOP_PCT = 0.0035;
+export const UP_SHORT_BLOCKED_SYMBOLS = new Set<string>(['LIT/USDT']);
 
 const MINUTE_MS = 60_000;
 const MAX_WINDOW_MINUTES = Math.max(
@@ -647,6 +669,10 @@ function resolveStrategyGroup(
     state.down.direction1h === 'down' &&
     state.down.direction30m === 'down'
   ) {
+    if (!ENABLE_DOWN_SHORT) {
+      return { group: 'none', reason: 'DOWN_SHORT disabled by entry-quality filters' };
+    }
+
     return { group: 'down_short', reason: null };
   }
 
@@ -790,6 +816,110 @@ function isS2Allowed(
   return true;
 }
 
+/**
+ * Entry-quality filters, calibrated on closed-trade backtest.
+ *
+ * Important:
+ * - stopPct and execution latency are known before entry;
+ * - notionalPct requires balanceBefore;
+ * - if balanceBefore is not provided, notional filters fail open.
+ */
+function passesEntryQualityFilters(
+  group: StrategyGroup,
+  symbol: string,
+  side: 'long' | 'short',
+  entryPrice: number,
+  stopLossPrice: number,
+  signalTime: number,
+  executionTime: number,
+  balanceBefore: number | null
+): { allowed: boolean; reason: string | null } {
+  if (group === 'down_short') {
+    return { allowed: false, reason: 'DOWN_SHORT disabled by entry-quality filters' };
+  }
+
+  const stopDistance = Math.abs(entryPrice - stopLossPrice);
+
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) {
+    return { allowed: false, reason: 'ENTRY_QUALITY invalid_stop_distance' };
+  }
+
+  const stopPct = stopDistance / entryPrice;
+  const executionLatencyMs = executionTime - signalTime;
+
+  if (group === 'down_long') {
+    if (stopPct < DOWN_LONG_MIN_STOP_PCT) {
+      return {
+        allowed: false,
+        reason: `DOWN_LONG stop too narrow: ${(stopPct * 100).toFixed(3)}%`
+      };
+    }
+
+    if (stopPct > DOWN_LONG_MAX_STOP_PCT) {
+      return {
+        allowed: false,
+        reason: `DOWN_LONG stop too wide: ${(stopPct * 100).toFixed(3)}%`
+      };
+    }
+
+    if (executionLatencyMs > DOWN_LONG_MAX_EXECUTION_LATENCY_MS) {
+      return {
+        allowed: false,
+        reason: `DOWN_LONG execution latency too high: ${Math.round(executionLatencyMs / 1000)}s`
+      };
+    }
+
+    if (balanceBefore != null && balanceBefore > 0) {
+      const notionalPct = (entryPrice * 1) / balanceBefore;
+
+      // Actual position notional is supplied by the execution layer;
+      // here we validate the pre-trade risk-based maximum.
+      if (notionalPct > DOWN_LONG_MAX_NOTIONAL_PCT) {
+        return {
+          allowed: false,
+          reason: `DOWN_LONG notional exposure too high: ${(notionalPct * 100).toFixed(2)}%`
+        };
+      }
+    }
+
+    return { allowed: true, reason: null };
+  }
+
+  if (group === 'up_long') {
+    if (balanceBefore != null && balanceBefore > 0) {
+      const notionalPct = (entryPrice * 1) / balanceBefore;
+
+      // Actual position notional is supplied by the execution layer;
+      // here we validate the pre-trade risk-based maximum.
+      if (notionalPct > UP_LONG_MAX_NOTIONAL_PCT) {
+        return {
+          allowed: false,
+          reason: `UP_LONG notional exposure too high: ${(notionalPct * 100).toFixed(2)}%`
+        };
+      }
+    }
+
+    return { allowed: true, reason: null };
+  }
+
+  if (group === 'up_short') {
+    if (UP_SHORT_BLOCKED_SYMBOLS.has(symbol)) {
+      return { allowed: false, reason: `UP_SHORT blocked symbol: ${symbol}` };
+    }
+
+    if (stopPct < UP_SHORT_MIN_STOP_PCT) {
+      return {
+        allowed: false,
+        reason: `UP_SHORT stop too narrow: ${(stopPct * 100).toFixed(3)}%`
+      };
+    }
+
+    return { allowed: true, reason: null };
+  }
+
+  return { allowed: true, reason: null };
+}
+
 function emptyResult(
   symbol: string,
   price: number,
@@ -832,6 +962,8 @@ export function analyzeTradeFlow(
     baselineTracker?: TradeFlowBaselineTracker;
     candles?: Candle[];
     tradeHistory?: TradeHistoryEntry[];
+    balanceBefore?: number | null;
+    plannedNotional?: number | null;
   }
 ): TradeFlowResult {
   const config: TradeFlowConfig = { ...DEFAULT_TRADE_FLOW_CONFIG, ...options?.config };
@@ -1034,6 +1166,29 @@ export function analyzeTradeFlow(
       price,
       now,
       reason ?? 'Script strategy group not allowed',
+      indicators,
+      tradeState,
+      rawSignalData
+    );
+  }
+
+  const entryQuality = passesEntryQualityFilters(
+    group,
+    symbol,
+    side,
+    price,
+    rawStopLossPrice,
+    rawSignalTime,
+    now,
+    options?.balanceBefore ?? null
+  );
+
+  if (!entryQuality.allowed) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      entryQuality.reason ?? 'Entry-quality filter blocked entry',
       indicators,
       tradeState,
       rawSignalData
