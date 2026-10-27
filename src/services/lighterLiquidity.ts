@@ -95,10 +95,16 @@ const NON_CRYPTO_SYMBOLS = new Set([
   'DRAM',
   'SKR',
   'PRL',
-
-  //блеклист
-  'UNI',
-  'SOXL'
+  'SOXL',
+  'MRNA',
+  'AMZN',
+  'CC',
+  'COIN',
+  'AMD',
+  'PLTR',
+  'XTEN',
+  'SPX',
+  'CHIP',
 ]);
 
 function toNumber(
