@@ -46,7 +46,11 @@ import {
   isReconciliationPendingSymbol
 } from './positionState';
 
-import { TRADE_FEE_RATE } from './strategy';
+import {
+  TRADE_FEE_RATE,
+  DOWN_LONG_MAX_NOTIONAL_PCT,
+  UP_LONG_MAX_NOTIONAL_PCT
+} from './strategy';
 
 import { logPositionCheck, logError } from './logger';
 
@@ -479,6 +483,26 @@ function describeSignalReason(result: ReturnType<typeof runTradeFlowOnce>): stri
   ].join(', ');
 }
 
+function isNotionalLimitExceeded(
+  strategyGroup: string,
+  plannedNotional: number,
+  balanceBefore: number
+): boolean {
+  if (balanceBefore <= 0) return false;
+
+  const notionalPct = plannedNotional / balanceBefore;
+
+  if (strategyGroup === 'down_long') {
+    return notionalPct > DOWN_LONG_MAX_NOTIONAL_PCT;
+  }
+
+  if (strategyGroup === 'up_long') {
+    return notionalPct > UP_LONG_MAX_NOTIONAL_PCT;
+  }
+
+  return false;
+}
+
 async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<void> {
   const symbol = normalizeSymbol(rawSymbol);
 
@@ -569,6 +593,29 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
       Math.floor(rawQuantity * 10 ** activeMarket.sizeDecimals) / 10 ** activeMarket.sizeDecimals
     );
 
+    const plannedNotional = quantity * expectedPrice;
+    const balanceBefore = getBalance();
+
+    if (isNotionalLimitExceeded(result.group, plannedNotional, balanceBefore)) {
+      tradeLog('POSITION_OPEN_SKIPPED_NOTIONAL_LIMIT', {
+        symbol,
+        marketId,
+        strategyGroup: result.group,
+        quantity,
+        expectedPrice,
+        plannedNotional,
+        balanceBefore,
+        notionalPct: balanceBefore > 0 ? plannedNotional / balanceBefore : 0,
+        limit:
+          result.group === 'down_long'
+            ? DOWN_LONG_MAX_NOTIONAL_PCT
+            : UP_LONG_MAX_NOTIONAL_PCT,
+        signalTradeId: tradeId
+      });
+
+      return;
+    }
+
     if (!beginPositionOpening(symbol)) return;
 
     const clientOrderId = `${symbol}-${Date.now()}-flow-open`;
@@ -580,6 +627,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
       strategyGroup: result.group,
       quantity,
       expectedPrice,
+      plannedNotional,
+      balanceBefore,
       stopLossPrice: result.stopLossPrice,
       takeProfitPrice: result.takeProfitPrice,
       clientOrderId,
@@ -688,6 +737,8 @@ async function handleTradeEvent(rawSymbol: string, tradeId: string): Promise<voi
         quantity: pending.filledQuantity,
         requestedPrice: expectedPrice,
         averageFillPrice: pending.averageFillPrice,
+        plannedNotional,
+        balanceBefore,
         stopLossPrice: pending.stopLossPrice,
         takeProfitPrice: pending.takeProfitPrice,
         executionOrderId: pending.orderId ?? null,
