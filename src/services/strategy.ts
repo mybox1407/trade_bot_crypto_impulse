@@ -6,17 +6,21 @@ export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
 // Стратегия исследовательская; значения — стартовые параметры.
-export const FLOW_WINDOW_MS = 3_000;
+export const FLOW_WINDOW_MS = 5_000;
 export const FLOW_BASELINE_MS = 60_000;
 export const FLOW_BASELINE_BUCKETS = 10;
-export const FLOW_SPIKE_MULTIPLIER = 4.0;
+
+// После исправления нормализации baseline.
+// 6.0 означает: текущий объём за 5 секунд >= 6x среднего объёма за 5 секунд.
+export const FLOW_SPIKE_MULTIPLIER = 6.0;
+
 export const FLOW_MIN_IMBALANCE = 0.80;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
 export const FLOW_MAX_CHASE_ATR = 0.55;
 export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
 export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
 export const FLOW_MIN_BASELINE_BUCKETS = 6;
-export const FLOW_MAX_TRADE_AGE_MS = 4_000;
+export const FLOW_MAX_TRADE_AGE_MS = 5_000;
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
 // Дополнительные фильтры качества потока.
@@ -149,8 +153,10 @@ export class TradeFlowBaselineTracker {
 
     const baselineStart =
       now - this.config.windowMs - this.config.baselineMs;
+
     const baselineEnd =
       now - this.config.windowMs;
+
     const bucketDuration =
       this.config.baselineMs / this.config.baselineBuckets;
 
@@ -192,9 +198,15 @@ export class TradeFlowBaselineTracker {
       };
     }
 
+    const baselineTotalVolume =
+      bucketVolumes.reduce((sum, volume) => sum + volume, 0);
+
+    // Приводим baseline к длительности текущего trade-flow window.
+    // Например: при windowMs=5000 и baselineMs=60000
+    // коэффициент равен 5000 / 60000 = 0.0833.
     const volumePerWindow =
-      bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
-      this.config.baselineBuckets;
+      baselineTotalVolume *
+      (this.config.windowMs / this.config.baselineMs);
 
     if (!Number.isFinite(volumePerWindow) || volumePerWindow <= 0) {
       return {
@@ -417,8 +429,10 @@ export function analyzeTradeFlow(
   if (!options?.baselineTracker) {
     const baselineStart =
       now - config.windowMs - config.baselineMs;
+
     const baselineEnd =
       now - config.windowMs;
+
     const bucketDuration =
       config.baselineMs / config.baselineBuckets;
 
@@ -428,6 +442,7 @@ export function analyzeTradeFlow(
     for (let i = 0; i < config.baselineBuckets; i += 1) {
       const bucketStart =
         baselineStart + i * bucketDuration;
+
       const bucketEnd =
         i === config.baselineBuckets - 1
           ? baselineEnd
@@ -451,9 +466,12 @@ export function analyzeTradeFlow(
       bucketVolumes.filter(volume => volume > 0).length;
 
     if (nonEmptyBaselineBuckets >= config.minBaselineBuckets) {
+      const baselineTotalVolume =
+        bucketVolumes.reduce((sum, volume) => sum + volume, 0);
+
       const value =
-        bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
-        config.baselineBuckets;
+        baselineTotalVolume *
+        (config.windowMs / config.baselineMs);
 
       baselineVolumePerWindow =
         value > 0 ? value : null;
