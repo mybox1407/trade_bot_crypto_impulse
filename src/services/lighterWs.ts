@@ -22,6 +22,18 @@ export interface MarketPrice {
   bestAsk: number | null;
 }
 
+export interface OrderBookLevel {
+  price: number;
+  size: number;
+}
+
+export interface OrderBookSnapshot {
+  marketId: number;
+  receivedAt: number;
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+}
+
 export interface LighterTrade {
   tradeId: string;
   marketId: number;
@@ -86,6 +98,20 @@ interface TradeMessage {
   liquidation_trades?: LighterTradeMessageItem[];
 }
 
+interface OrderBookLevelRaw {
+  price?: string | number;
+  size?: string | number;
+}
+
+interface OrderBookMessage {
+  type: string;
+  channel?: string;
+  order_book?: {
+    asks?: OrderBookLevelRaw[];
+    bids?: OrderBookLevelRaw[];
+  };
+}
+
 function toFiniteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -94,6 +120,34 @@ function toFiniteNumber(value: unknown): number | null {
   const number = Number(value);
 
   return Number.isFinite(number) ? number : null;
+}
+
+function parseLevels(
+  raw: OrderBookLevelRaw[] | undefined
+): OrderBookLevel[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const levels: OrderBookLevel[] = [];
+
+  for (const item of raw) {
+    const price = toFiniteNumber(item?.price);
+    const size = toFiniteNumber(item?.size);
+
+    if (
+      price === null ||
+      size === null ||
+      price <= 0 ||
+      size <= 0
+    ) {
+      continue;
+    }
+
+    levels.push({ price, size });
+  }
+
+  return levels;
 }
 
 export class LighterWsClient {
@@ -109,7 +163,10 @@ export class LighterWsClient {
     private readonly resolution: string,
     private readonly onCandle: (candle: Candle) => void,
     private readonly onPrice: (price: MarketPrice) => void,
-    private readonly onTrade: (trade: LighterTrade) => void
+    private readonly onTrade: (trade: LighterTrade) => void,
+    private readonly onOrderBook: (
+      snapshot: OrderBookSnapshot
+    ) => void
   ) {}
 
   connect(): void {
@@ -182,6 +239,13 @@ export class LighterWsClient {
         })
       );
 
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          channel: `order_book/${this.marketId}`
+        })
+      );
+
       this.pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -198,14 +262,8 @@ export class LighterWsClient {
         const message = JSON.parse(raw.toString()) as
           | CandleMessage
           | MarketStatsMessage
-          | TradeMessage;
-
-/*        if (message.type === 'update/trade') {
-          console.log(
-            `[${new Date().toISOString()}] RAW LIGHTER TRADE`,
-            raw.toString()
-          );
-        }*/
+          | TradeMessage
+          | OrderBookMessage;
 
         if (
           message.type === 'subscribed/candle' ||
@@ -273,6 +331,32 @@ export class LighterWsClient {
           for (const trade of tradeMessage.liquidation_trades ?? []) {
             this.handleTrade(trade, true);
           }
+
+          return;
+        }
+
+        if (
+          message.type === 'subscribed/order_book' ||
+          message.type === 'update/order_book'
+        ) {
+          const bookMessage = message as OrderBookMessage;
+          const book = bookMessage.order_book;
+
+          const bids = parseLevels(book?.bids);
+          const asks = parseLevels(book?.asks);
+
+          if (bids.length === 0 || asks.length === 0) {
+            return;
+          }
+
+          this.onOrderBook({
+            marketId: this.marketId,
+            receivedAt: Date.now(),
+            bids,
+            asks
+          });
+
+          return;
         }
       } catch (error) {
         console.error(
