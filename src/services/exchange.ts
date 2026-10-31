@@ -15,6 +15,12 @@ import {
   type TradeFlowBaseline
 } from './strategy';
 
+import {
+  OrderFlowImbalanceTracker,
+  DEFAULT_OFI_CONFIG,
+  type OfiResult
+} from './orderFlowImbalance';
+
 const LIGHTER_API_URL =
   process.env.LIGHTER_API_URL ??
   'https://mainnet.zklighter.elliot.ai';
@@ -22,6 +28,10 @@ const LIGHTER_API_URL =
 const MAX_CANDLES = 250;
 const MAX_TRADES = 5_000;
 const TRADE_ID_CACHE_SIZE = 20_000;
+
+// Единый предел свежести для книги и OFI.
+export const MAX_ORDER_BOOK_AGE_MS =
+  DEFAULT_OFI_CONFIG.maxBookAgeMs;
 
 export type MarketReference = {
   symbol: string;
@@ -38,6 +48,13 @@ export type TradeListener = (
   trade: LighterTrade
 ) => void | Promise<void>;
 
+export interface OrderBookAnalysis {
+  bookImbalance: number | null;
+  spread: number | null;
+  bookAgeMs: number | null;
+  ofi: OfiResult;
+}
+
 const candlesByMarket =
   new Map<number, Candle[]>();
 
@@ -53,6 +70,9 @@ const baselineTrackersByMarket =
 const orderBooksByMarket =
   new Map<number, OrderBookSnapshot>();
 
+const ofiTrackersByMarket =
+  new Map<number, OrderFlowImbalanceTracker>();
+
 const clients =
   new Map<number, MarketClient>();
 
@@ -61,6 +81,10 @@ const dynamicMarketsBySymbol =
 
 const startingMarkets =
   new Set<number>();
+
+// Позволяет отменить запуск, пока загружаются свечи.
+const startupTokensByMarket =
+  new Map<number, object>();
 
 const tradeListeners =
   new Set<TradeListener>();
@@ -86,7 +110,7 @@ function normalizeCandleTime(
   }
 
   return value > 10_000_000_000
-    ? Math.floor(value / 1000)
+    ? Math.floor(value / 1_000)
     : Math.floor(value);
 }
 
@@ -105,6 +129,15 @@ function timeframeToSeconds(
 
   const amount = Number(match[1]);
   const unit = match[2];
+
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      `Invalid timeframe: ${timeframe}`
+    );
+  }
 
   if (unit === 'm') {
     return amount * 60;
@@ -175,7 +208,9 @@ export function registerDynamicMarket(
 export function unregisterDynamicMarket(
   marketId: number
 ): void {
-  for (const [symbol, market] of dynamicMarketsBySymbol) {
+  for (
+    const [symbol, market] of dynamicMarketsBySymbol
+  ) {
     if (market.marketId === marketId) {
       dynamicMarketsBySymbol.delete(symbol);
     }
@@ -223,7 +258,12 @@ function publishTrade(
     return;
   }
 
-  if (!rememberTradeId(market.marketId, trade.tradeId)) {
+  if (
+    !rememberTradeId(
+      market.marketId,
+      trade.tradeId
+    )
+  ) {
     return;
   }
 
@@ -243,6 +283,7 @@ function publishTrade(
 
   if (!baselineTracker) {
     baselineTracker = new TradeFlowBaselineTracker();
+
     baselineTrackersByMarket.set(
       market.marketId,
       baselineTracker
@@ -279,6 +320,7 @@ export function getTradeFlowBaseline(
   now = Date.now()
 ): TradeFlowBaseline {
   const market = resolveMarket(symbol);
+
   const tracker =
     baselineTrackersByMarket.get(market.marketId);
 
@@ -287,7 +329,8 @@ export function getTradeFlowBaseline(
       ready: false,
       nonEmptyBuckets: 0,
       volumePerWindow: null,
-      reason: 'Trade-flow baseline tracker is not initialized'
+      reason:
+        'Trade-flow baseline tracker is not initialized'
     };
   }
 
@@ -304,6 +347,7 @@ export function getTradeFlowBaselineTracker(
 
   if (!tracker) {
     tracker = new TradeFlowBaselineTracker();
+
     baselineTrackersByMarket.set(
       market.marketId,
       tracker
@@ -313,12 +357,96 @@ export function getTradeFlowBaselineTracker(
   return tracker;
 }
 
+function resetOrderBookState(
+  marketId: number
+): void {
+  orderBooksByMarket.delete(marketId);
+  ofiTrackersByMarket.get(marketId)?.reset();
+}
+
+function getOrCreateOfiTracker(
+  marketId: number
+): OrderFlowImbalanceTracker {
+  let tracker = ofiTrackersByMarket.get(marketId);
+
+  if (!tracker) {
+    tracker = new OrderFlowImbalanceTracker();
+
+    ofiTrackersByMarket.set(
+      marketId,
+      tracker
+    );
+  }
+
+  return tracker;
+}
+
+function unavailableOfi(
+  reason: string,
+  bookAgeMs: number | null = null
+): OfiResult {
+  return {
+    ready: false,
+    value: null,
+    updateCount: 0,
+    bookAgeMs,
+    reason
+  };
+}
+
+function calculateBookImbalance(
+  book: OrderBookSnapshot,
+  depth: number
+): number | null {
+  if (
+    !Number.isInteger(depth) ||
+    depth < 1
+  ) {
+    return null;
+  }
+
+  const bids = book.bids.slice(0, depth);
+  const asks = book.asks.slice(0, depth);
+
+  if (
+    bids.length === 0 ||
+    asks.length === 0
+  ) {
+    return null;
+  }
+
+  const bidDepth = bids.reduce(
+    (sum, level) =>
+      sum + level.price * level.size,
+    0
+  );
+
+  const askDepth = asks.reduce(
+    (sum, level) =>
+      sum + level.price * level.size,
+    0
+  );
+
+  const total = bidDepth + askDepth;
+
+  if (
+    !Number.isFinite(bidDepth) ||
+    !Number.isFinite(askDepth) ||
+    !Number.isFinite(total) ||
+    total <= 0
+  ) {
+    return null;
+  }
+
+  return (bidDepth - askDepth) / total;
+}
+
 async function loadHistoricalCandles(
   marketId: number,
   timeframe: string,
   limit: number
 ): Promise<Candle[]> {
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1_000);
   const candleSeconds = timeframeToSeconds(timeframe);
   const startTimestamp = now - limit * candleSeconds;
 
@@ -399,7 +527,10 @@ function attachClient(
 ): void {
   const marketId = market.marketId;
 
-  candlesByMarket.set(marketId, historicalCandles);
+  candlesByMarket.set(
+    marketId,
+    historicalCandles
+  );
 
   if (!tradesByMarket.has(marketId)) {
     tradesByMarket.set(marketId, []);
@@ -412,9 +543,15 @@ function attachClient(
     );
   }
 
+  resetOrderBookState(marketId);
+
+  const ofiTracker =
+    getOrCreateOfiTracker(marketId);
+
   const client = new LighterWsClient(
     marketId,
     timeframe,
+
     candle => {
       const candles =
         candlesByMarket.get(marketId) ?? [];
@@ -426,28 +563,97 @@ function attachClient(
 
       const last = candles[candles.length - 1];
 
-      if (!last || normalizedCandle.time > last.time) {
+      if (
+        !last ||
+        normalizedCandle.time > last.time
+      ) {
         candles.push(normalizedCandle);
-      } else if (normalizedCandle.time === last.time) {
-        candles[candles.length - 1] = normalizedCandle;
+      } else if (
+        normalizedCandle.time === last.time
+      ) {
+        candles[candles.length - 1] =
+          normalizedCandle;
       }
 
       candles.sort((a, b) => a.time - b.time);
 
       if (candles.length > MAX_CANDLES) {
-        candles.splice(0, candles.length - MAX_CANDLES);
+        candles.splice(
+          0,
+          candles.length - MAX_CANDLES
+        );
       }
 
-      candlesByMarket.set(marketId, candles);
+      candlesByMarket.set(
+        marketId,
+        candles
+      );
     },
+
     price => {
       pricesByMarket.set(marketId, price);
     },
+
     trade => {
       publishTrade(market, trade);
     },
+
     book => {
-      orderBooksByMarket.set(marketId, book);
+      const bestBid = book.bids[0];
+      const bestAsk = book.asks[0];
+
+      if (
+        book.marketId !== marketId ||
+        !Number.isFinite(book.receivedAt) ||
+        !bestBid ||
+        !bestAsk ||
+        !Number.isFinite(bestBid.price) ||
+        !Number.isFinite(bestAsk.price) ||
+        !Number.isFinite(bestBid.size) ||
+        !Number.isFinite(bestAsk.size) ||
+        bestBid.price <= 0 ||
+        bestAsk.price <= bestBid.price ||
+        bestBid.size <= 0 ||
+        bestAsk.size <= 0
+      ) {
+        resetOrderBookState(marketId);
+
+        console.error(
+          `[${new Date().toISOString()}] ` +
+            `Invalid reconstructed order book ` +
+            `marketId=${marketId}`
+        );
+        return;
+      }
+
+      if (book.isSnapshot) {
+        ofiTracker.reset();
+      }
+
+      ofiTracker.update(
+        {
+          bidPrice: bestBid.price,
+          bidSize: bestBid.size,
+          askPrice: bestAsk.price,
+          askSize: bestAsk.size
+        },
+        book.receivedAt
+      );
+
+      orderBooksByMarket.set(
+        marketId,
+        book
+      );
+    },
+
+    reason => {
+      resetOrderBookState(marketId);
+
+      console.log(
+        `[${new Date().toISOString()}] ` +
+          `Order book and OFI reset ` +
+          `marketId=${marketId}, reason=${reason}`
+      );
     }
   );
 
@@ -471,8 +677,9 @@ async function startResolvedMarket(
     if (existing.timeframe !== timeframe) {
       console.warn(
         `[${new Date().toISOString()}] ` +
-          `Market ${market.symbol} already started with timeframe ` +
-          `${existing.timeframe}, ignoring request for ${timeframe}`
+          `Market ${market.symbol} already started ` +
+          `with timeframe ${existing.timeframe}, ` +
+          `ignoring request for ${timeframe}`
       );
     }
 
@@ -489,7 +696,14 @@ async function startResolvedMarket(
     return;
   }
 
+  const startupToken = {};
+
   startingMarkets.add(marketId);
+
+  startupTokensByMarket.set(
+    marketId,
+    startupToken
+  );
 
   try {
     const historicalCandles =
@@ -499,9 +713,18 @@ async function startResolvedMarket(
         MAX_CANDLES
       );
 
+    // Рынок могли остановить за время HTTP-запроса.
+    if (
+      startupTokensByMarket.get(marketId) !==
+      startupToken
+    ) {
+      return;
+    }
+
     if (historicalCandles.length === 0) {
       throw new Error(
-        `No historical candles received for ${market.symbol}`
+        `No historical candles received ` +
+          `for ${market.symbol}`
       );
     }
 
@@ -513,14 +736,17 @@ async function startResolvedMarket(
 
     console.log(
       `[${new Date().toISOString()}] ` +
-        `Market data started: ${normalizeSymbol(market.symbol)}, ` +
-        `marketId=${marketId}, timeframe=${timeframe}, ` +
+        `Market data started: ` +
+        `${normalizeSymbol(market.symbol)}, ` +
+        `marketId=${marketId}, ` +
+        `timeframe=${timeframe}, ` +
         `candles=${historicalCandles.length}`
     );
   } catch (error) {
     console.error(
       `[${new Date().toISOString()}] ` +
-        `Failed to start market data for ${market.symbol}:`,
+        `Failed to start market data ` +
+        `for ${market.symbol}:`,
       error instanceof Error
         ? error.message
         : 'Unknown error'
@@ -528,7 +754,13 @@ async function startResolvedMarket(
 
     throw error;
   } finally {
-    startingMarkets.delete(marketId);
+    if (
+      startupTokensByMarket.get(marketId) ===
+      startupToken
+    ) {
+      startupTokensByMarket.delete(marketId);
+      startingMarkets.delete(marketId);
+    }
   }
 }
 
@@ -565,6 +797,7 @@ export function getCandles(
   limit = MAX_CANDLES
 ): Candle[] {
   const market = resolveMarket(symbol);
+
   const candles =
     candlesByMarket.get(market.marketId) ?? [];
 
@@ -576,6 +809,7 @@ export function getTrades(
   limit = MAX_TRADES
 ): LighterTrade[] {
   const market = resolveMarket(symbol);
+
   const trades =
     tradesByMarket.get(market.marketId) ?? [];
 
@@ -587,7 +821,10 @@ export function getMarketTimeframe(
 ): string | null {
   const market = resolveMarket(symbol);
 
-  return clients.get(market.marketId)?.timeframe ?? null;
+  return (
+    clients.get(market.marketId)?.timeframe ??
+    null
+  );
 }
 
 export function isMarketDataStarted(
@@ -600,6 +837,7 @@ export function getMarkPrice(
   symbol: string
 ): number | null {
   const market = resolveMarket(symbol);
+
   const price =
     pricesByMarket.get(market.marketId);
 
@@ -616,9 +854,12 @@ export function getExitPrice(
   side: 'long' | 'short'
 ): number | null {
   const market = resolveMarket(symbol);
+
   const price =
     pricesByMarket.get(market.marketId);
 
+  // Логику цены выхода сохраняем отдельно
+  // от новых обязательных проверок входа.
   if (side === 'long') {
     return (
       price?.bestBid ??
@@ -652,72 +893,190 @@ export function getMarketPrice(
   const market = resolveMarket(symbol);
 
   return (
-    pricesByMarket.get(market.marketId) ?? null
+    pricesByMarket.get(market.marketId) ??
+    null
   );
+}
+
+/**
+ * Единая выборка книги и OFI на один момент now.
+ * В botRunner предпочтительно использовать эту функцию,
+ * а не вызывать отдельные getters с разным временем.
+ */
+export function getOrderBookAnalysis(
+  symbol: string,
+  now = Date.now(),
+  depth = 5
+): OrderBookAnalysis {
+  const market = resolveMarket(symbol);
+  const marketId = market.marketId;
+
+  if (!Number.isFinite(now)) {
+    return {
+      bookImbalance: null,
+      spread: null,
+      bookAgeMs: null,
+      ofi: unavailableOfi(
+        'Invalid order book query time'
+      )
+    };
+  }
+
+  const book = orderBooksByMarket.get(marketId);
+
+  if (!book) {
+    ofiTrackersByMarket.get(marketId)?.reset();
+
+    return {
+      bookImbalance: null,
+      spread: null,
+      bookAgeMs: null,
+      ofi: unavailableOfi(
+        'Order book is unavailable'
+      )
+    };
+  }
+
+  const bookAgeMs = now - book.receivedAt;
+
+  if (
+    !Number.isFinite(bookAgeMs) ||
+    bookAgeMs < 0 ||
+    bookAgeMs > MAX_ORDER_BOOK_AGE_MS
+  ) {
+    resetOrderBookState(marketId);
+
+    const validAge =
+      Number.isFinite(bookAgeMs) &&
+      bookAgeMs >= 0
+        ? bookAgeMs
+        : null;
+
+    return {
+      bookImbalance: null,
+      spread: null,
+      bookAgeMs: validAge,
+      ofi: unavailableOfi(
+        bookAgeMs < 0
+          ? 'Order book clock moved backwards'
+          : 'Order book is stale',
+        validAge
+      )
+    };
+  }
+
+  const bestBid = book.bids[0];
+  const bestAsk = book.asks[0];
+
+  if (
+    !bestBid ||
+    !bestAsk ||
+    !Number.isFinite(bestBid.price) ||
+    !Number.isFinite(bestAsk.price) ||
+    !Number.isFinite(bestBid.size) ||
+    !Number.isFinite(bestAsk.size) ||
+    bestBid.price <= 0 ||
+    bestAsk.price <= bestBid.price ||
+    bestBid.size <= 0 ||
+    bestAsk.size <= 0
+  ) {
+    resetOrderBookState(marketId);
+
+    return {
+      bookImbalance: null,
+      spread: null,
+      bookAgeMs,
+      ofi: unavailableOfi(
+        'Order book best quotes are invalid',
+        bookAgeMs
+      )
+    };
+  }
+
+  const tracker =
+    ofiTrackersByMarket.get(marketId);
+
+  const ofi = tracker
+    ? tracker.getResult(now)
+    : unavailableOfi(
+        'OFI tracker is not initialized',
+        bookAgeMs
+      );
+
+  return {
+    bookImbalance:
+      calculateBookImbalance(book, depth),
+
+    // Без fallback на market_stats:
+    // spread и imbalance относятся к одной книге.
+    spread: bestAsk.price - bestBid.price,
+
+    bookAgeMs,
+    ofi
+  };
 }
 
 export function getBookImbalance(
   symbol: string,
-  depth = 5
+  depth = 5,
+  now = Date.now()
 ): number | null {
-  const market = resolveMarket(symbol);
-  const book = orderBooksByMarket.get(market.marketId);
-
-  if (!book) {
-    return null;
-  }
-
-  const bids = book.bids.slice(0, depth);
-  const asks = book.asks.slice(0, depth);
-
-  if (bids.length === 0 || asks.length === 0) {
-    return null;
-  }
-
-  const bidDepth = bids.reduce(
-    (sum, level) => sum + level.price * level.size,
-    0
-  );
-
-  const askDepth = asks.reduce(
-    (sum, level) => sum + level.price * level.size,
-    0
-  );
-
-  const total = bidDepth + askDepth;
-
-  if (!Number.isFinite(total) || total <= 0) {
-    return null;
-  }
-
-  return (bidDepth - askDepth) / total;
+  return getOrderBookAnalysis(
+    symbol,
+    now,
+    depth
+  ).bookImbalance;
 }
 
-export function getSpread(symbol: string): number | null {
-  const market = resolveMarket(symbol);
-  const price = pricesByMarket.get(market.marketId);
+export function getSpread(
+  symbol: string,
+  now = Date.now()
+): number | null {
+  return getOrderBookAnalysis(
+    symbol,
+    now
+  ).spread;
+}
 
-  const bestBid = price?.bestBid;
-  const bestAsk = price?.bestAsk;
+export function getOrderFlowImbalance(
+  symbol: string,
+  now = Date.now()
+): OfiResult {
+  return getOrderBookAnalysis(
+    symbol,
+    now
+  ).ofi;
+}
+
+export function getOrderBookAgeMs(
+  symbol: string,
+  now = Date.now()
+): number | null {
+  const market = resolveMarket(symbol);
+
+  const book =
+    orderBooksByMarket.get(market.marketId);
 
   if (
-    bestBid == null ||
-    bestAsk == null ||
-    !Number.isFinite(bestBid) ||
-    !Number.isFinite(bestAsk) ||
-    bestBid <= 0 ||
-    bestAsk <= 0 ||
-    bestAsk < bestBid
+    !book ||
+    !Number.isFinite(now) ||
+    !Number.isFinite(book.receivedAt)
   ) {
     return null;
   }
 
-  return bestAsk - bestBid;
+  const age = now - book.receivedAt;
+
+  return age >= 0 ? age : null;
 }
 
 export function stopMarketDataByMarketId(
   marketId: number
 ): void {
+  // Отменяем отложенное подключение после загрузки свечей.
+  startupTokensByMarket.delete(marketId);
+  startingMarkets.delete(marketId);
+
   clients.get(marketId)?.client.stop();
 
   clients.delete(marketId);
@@ -725,7 +1084,10 @@ export function stopMarketDataByMarketId(
   pricesByMarket.delete(marketId);
   tradesByMarket.delete(marketId);
   baselineTrackersByMarket.delete(marketId);
-  orderBooksByMarket.delete(marketId);
+
+  resetOrderBookState(marketId);
+  ofiTrackersByMarket.delete(marketId);
+
   seenTradeIdsByMarket.delete(marketId);
 
   unregisterDynamicMarket(marketId);
