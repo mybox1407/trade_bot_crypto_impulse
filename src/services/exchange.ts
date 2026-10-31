@@ -2,7 +2,8 @@ import {
   LighterWsClient,
   type Candle,
   type LighterTrade,
-  type MarketPrice
+  type MarketPrice,
+  type OrderBookSnapshot
 } from './lighterWs';
 
 import {
@@ -48,6 +49,9 @@ const tradesByMarket =
 
 const baselineTrackersByMarket =
   new Map<number, TradeFlowBaselineTracker>();
+
+const orderBooksByMarket =
+  new Map<number, OrderBookSnapshot>();
 
 const clients =
   new Map<number, MarketClient>();
@@ -173,7 +177,7 @@ export function unregisterDynamicMarket(
 ): void {
   for (const [symbol, market] of dynamicMarketsBySymbol) {
     if (market.marketId === marketId) {
-      dynamicMarketsBySymbol.delete(symbol);
+      dynamicMarketsBySymbol.delete(marketId);
     }
   }
 }
@@ -300,7 +304,10 @@ export function getTradeFlowBaselineTracker(
 
   if (!tracker) {
     tracker = new TradeFlowBaselineTracker();
-    baselineTrackersByMarket.set(market.marketId, tracker);
+    baselineTrackersByMarket.set(
+      market.marketId,
+      tracker
+    );
   }
 
   return tracker;
@@ -438,6 +445,9 @@ function attachClient(
     },
     trade => {
       publishTrade(market, trade);
+    },
+    book => {
+      orderBooksByMarket.set(marketId, book);
     }
   );
 
@@ -646,6 +656,65 @@ export function getMarketPrice(
   );
 }
 
+export function getBookImbalance(
+  symbol: string,
+  depth = 5
+): number | null {
+  const market = resolveMarket(symbol);
+  const book = orderBooksByMarket.get(market.marketId);
+
+  if (!book) {
+    return null;
+  }
+
+  const bids = book.bids.slice(0, depth);
+  const asks = book.asks.slice(0, depth);
+
+  if (bids.length === 0 || asks.length === 0) {
+    return null;
+  }
+
+  const bidDepth = bids.reduce(
+    (sum, level) => sum + level.price * level.size,
+    0
+  );
+
+  const askDepth = asks.reduce(
+    (sum, level) => sum + level.price * level.size,
+    0
+  );
+
+  const total = bidDepth + askDepth;
+
+  if (!Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+
+  return (bidDepth - askDepth) / total;
+}
+
+export function getSpread(symbol: string): number | null {
+  const market = resolveMarket(symbol);
+  const price = pricesByMarket.get(market.marketId);
+
+  const bestBid = price?.bestBid;
+  const bestAsk = price?.bestAsk;
+
+  if (
+    bestBid == null ||
+    bestAsk == null ||
+    !Number.isFinite(bestBid) ||
+    !Number.isFinite(bestAsk) ||
+    bestBid <= 0 ||
+    bestAsk <= 0 ||
+    bestAsk < bestBid
+  ) {
+    return null;
+  }
+
+  return bestAsk - bestBid;
+}
+
 export function stopMarketDataByMarketId(
   marketId: number
 ): void {
@@ -656,6 +725,7 @@ export function stopMarketDataByMarketId(
   pricesByMarket.delete(marketId);
   tradesByMarket.delete(marketId);
   baselineTrackersByMarket.delete(marketId);
+  orderBooksByMarket.delete(marketId);
   seenTradeIdsByMarket.delete(marketId);
 
   unregisterDynamicMarket(marketId);
