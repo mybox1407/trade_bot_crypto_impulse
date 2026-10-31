@@ -28,6 +28,11 @@ export const FLOW_MIN_TRADES_IN_WINDOW = 10;
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
+// Фильтры книги и исполнения.
+export const FLOW_REQUIRE_BOOK_CONFIRMATION = true;
+export const FLOW_MIN_BOOK_IMBALANCE = 0.2;
+export const FLOW_MAX_SPREAD_ATR = 0.5;
+
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
 export interface TradeFlowIndicators {
@@ -45,6 +50,9 @@ export interface TradeFlowIndicators {
   baselineNonEmptyBuckets: number;
   largeTradeNotional: number;
   largeTradeShare: number;
+  bookImbalance: number | null;
+  spread: number | null;
+  spreadAtr: number | null;
 }
 
 export interface TradeFlowResult {
@@ -80,6 +88,9 @@ export interface TradeFlowConfig {
   minTradesInWindow: number;
   minLargeTradeShare: number;
   largeTradeNotional: number;
+  requireBookConfirmation: boolean;
+  minBookImbalance: number;
+  maxSpreadAtr: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -97,7 +108,10 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
   minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
   minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
-  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL
+  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
+  requireBookConfirmation: FLOW_REQUIRE_BOOK_CONFIRMATION,
+  minBookImbalance: FLOW_MIN_BOOK_IMBALANCE,
+  maxSpreadAtr: FLOW_MAX_SPREAD_ATR
 };
 
 export interface TradeFlowBaseline {
@@ -385,6 +399,8 @@ export function analyzeTradeFlow(
     atr?: number | null;
     config?: Partial<TradeFlowConfig>;
     baselineTracker?: TradeFlowBaselineTracker;
+    bookImbalance?: number | null;
+    spread?: number | null;
   }
 ): TradeFlowResult {
   const config: TradeFlowConfig = {
@@ -507,6 +523,24 @@ export function analyzeTradeFlow(
       ? options.atr
       : null;
 
+  const bookImbalance =
+    options?.bookImbalance != null &&
+    Number.isFinite(options.bookImbalance)
+      ? options.bookImbalance
+      : null;
+
+  const spread =
+    options?.spread != null &&
+    Number.isFinite(options.spread) &&
+    options.spread >= 0
+      ? options.spread
+      : null;
+
+  const spreadAtr =
+    spread != null && atr != null
+      ? spread / atr
+      : null;
+
   const referencePrice = current.firstPrice;
 
   const priceMove =
@@ -534,7 +568,10 @@ export function analyzeTradeFlow(
     excludedLiquidationCount,
     baselineNonEmptyBuckets: nonEmptyBaselineBuckets,
     largeTradeNotional: current.largeTradeNotional,
-    largeTradeShare
+    largeTradeShare,
+    bookImbalance,
+    spread,
+    spreadAtr
   };
 
   if (!latestTrade || price <= 0) {
@@ -574,6 +611,22 @@ export function analyzeTradeFlow(
       price,
       now,
       'ATR unavailable',
+      indicators
+    );
+  }
+
+  if (
+    config.requireBookConfirmation &&
+    spreadAtr != null &&
+    spreadAtr > config.maxSpreadAtr
+  ) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Spread too wide: ` +
+        `${spreadAtr.toFixed(3)} ATR > ` +
+        `${config.maxSpreadAtr.toFixed(3)} ATR`,
       indicators
     );
   }
@@ -641,6 +694,26 @@ export function analyzeTradeFlow(
       'Aggressor-side imbalance threshold not met',
       indicators
     );
+  }
+
+  if (
+    config.requireBookConfirmation &&
+    bookImbalance != null
+  ) {
+    const bookConfirms =
+      side === 'long'
+        ? bookImbalance >= config.minBookImbalance
+        : bookImbalance <= -config.minBookImbalance;
+
+    if (!bookConfirms) {
+      return emptyResult(
+        symbol,
+        price,
+        now,
+        'Book imbalance does not confirm trade flow direction',
+        indicators
+      );
+    }
   }
 
   const directionalMoveAtr =
