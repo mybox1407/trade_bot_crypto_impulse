@@ -254,7 +254,7 @@ interface Aggregate {
   largeTradeNotional: number;
 }
 
-function isValidTrade(trade: LighterTrade): boolean {
+export function isValidTrade(trade: LighterTrade): boolean {
   return (
     Number.isFinite(trade.time) &&
     Number.isFinite(trade.receivedAt) &&
