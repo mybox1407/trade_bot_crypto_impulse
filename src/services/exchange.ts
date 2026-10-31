@@ -177,7 +177,7 @@ export function unregisterDynamicMarket(
 ): void {
   for (const [symbol, market] of dynamicMarketsBySymbol) {
     if (market.marketId === marketId) {
-      dynamicMarketsBySymbol.delete(marketId);
+      dynamicMarketsBySymbol.delete(symbol);
     }
   }
 }
