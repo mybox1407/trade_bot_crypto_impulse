@@ -25,7 +25,7 @@ export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
 // Дополнительные фильтры качества потока.
 export const FLOW_MIN_TRADES_IN_WINDOW = 10;
-export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
+export const FLOW_MIN_LARGE_TRADE_SHARE = 0.60;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
 // Фильтры книги и исполнения.
