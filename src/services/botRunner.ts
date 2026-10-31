@@ -7,7 +7,9 @@ import {
 
 import {
   getTrades,
-  getTradeFlowBaselineTracker
+  getTradeFlowBaselineTracker,
+  getBookImbalance,
+  getSpread
 } from './exchange';
 
 import type {
@@ -126,7 +128,9 @@ export function runTradeFlowOnce(
   return analyzeTradeFlow(symbol, trades, {
     now,
     atr,
-    baselineTracker
+    baselineTracker,
+    bookImbalance: getBookImbalance(symbol),
+    spread: getSpread(symbol)
   });
 }
 
