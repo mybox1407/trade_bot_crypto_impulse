@@ -5,8 +5,7 @@ import {
   getMarketTimeframe,
   getTrades,
   getTradeFlowBaselineTracker,
-  getBookImbalance,
-  getSpread
+  getOrderBookAnalysis
 } from './exchange';
 
 import {
@@ -19,7 +18,9 @@ import type {
   LighterTrade
 } from './lighterWs';
 
-function calculateAtr(candles: Candle[]): number | null {
+function calculateAtr(
+  candles: Candle[]
+): number | null {
   if (candles.length < 15) {
     return null;
   }
@@ -46,20 +47,32 @@ export function runTradeFlowOnce(
   symbol: string,
   now = Date.now()
 ): TradeFlowResult {
-  const trades: LighterTrade[] = getTrades(symbol);
-  const timeframe = getMarketTimeframe(symbol) ?? '15m';
+  const trades: LighterTrade[] =
+    getTrades(symbol);
+
+  const timeframe =
+    getMarketTimeframe(symbol) ?? '15m';
+
   const candles: Candle[] =
     getCandles(symbol, timeframe, 250);
+
   const atr = calculateAtr(candles);
+
   const baselineTracker =
     getTradeFlowBaselineTracker(symbol);
+
+  // Единая выборка: книга, спред и OFI
+  // проверяются относительно одного момента now.
+  const book =
+    getOrderBookAnalysis(symbol, now);
 
   return analyzeTradeFlow(symbol, trades, {
     now,
     atr,
     baselineTracker,
-    bookImbalance: getBookImbalance(symbol),
-    spread: getSpread(symbol)
+    bookImbalance: book.bookImbalance,
+    spread: book.spread,
+    ofi: book.ofi
   });
 }
 
