@@ -1,5 +1,10 @@
 import type { LighterTrade } from './lighterWs';
 
+import {
+  DEFAULT_OFI_CONFIG,
+  type OfiResult
+} from './orderFlowImbalance';
+
 // Сохранены для совместимости с positionState.ts.
 export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
@@ -10,8 +15,7 @@ export const FLOW_WINDOW_MS = 5_000;
 export const FLOW_BASELINE_MS = 60_000;
 export const FLOW_BASELINE_BUCKETS = 10;
 
-// После исправления нормализации baseline.
-// 6.0 означает: текущий объём за 5 секунд >= 6x среднего объёма за 5 секунд.
+// Текущий объём окна >= 6x среднего объёма такой же длительности.
 export const FLOW_SPIKE_MULTIPLIER = 6.0;
 
 export const FLOW_MIN_IMBALANCE = 0.80;
@@ -30,10 +34,16 @@ export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
 // Фильтры книги и исполнения.
 export const FLOW_REQUIRE_BOOK_CONFIRMATION = true;
-export const FLOW_MIN_BOOK_IMBALANCE = 0.2;
-export const FLOW_MAX_SPREAD_ATR = 0.5;
+export const FLOW_MIN_BOOK_IMBALANCE = 0.20;
+export const FLOW_MAX_SPREAD_ATR = 0.50;
 
-export type TradeFlowSide = 'long' | 'short' | 'none';
+// Обязательное подтверждение динамикой лучших bid/ask.
+export const FLOW_REQUIRE_OFI_CONFIRMATION = true;
+
+export type TradeFlowSide =
+  | 'long'
+  | 'short'
+  | 'none';
 
 export interface TradeFlowIndicators {
   windowMs: number;
@@ -53,6 +63,12 @@ export interface TradeFlowIndicators {
   bookImbalance: number | null;
   spread: number | null;
   spreadAtr: number | null;
+
+  ofi1s: number | null;
+  ofiReady: boolean;
+  ofiUpdateCount: number;
+  bookAgeMs: number | null;
+  ofiReason: string | null;
 }
 
 export interface TradeFlowResult {
@@ -91,6 +107,7 @@ export interface TradeFlowConfig {
   requireBookConfirmation: boolean;
   minBookImbalance: number;
   maxSpreadAtr: number;
+  requireOfiConfirmation: boolean;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -111,7 +128,8 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
   requireBookConfirmation: FLOW_REQUIRE_BOOK_CONFIRMATION,
   minBookImbalance: FLOW_MIN_BOOK_IMBALANCE,
-  maxSpreadAtr: FLOW_MAX_SPREAD_ATR
+  maxSpreadAtr: FLOW_MAX_SPREAD_ATR,
+  requireOfiConfirmation: FLOW_REQUIRE_OFI_CONFIRMATION
 };
 
 export interface TradeFlowBaseline {
@@ -127,7 +145,8 @@ export interface TradeFlowBaseline {
  * на каждом новом WS trade event.
  */
 export class TradeFlowBaselineTracker {
-  private readonly secondBuckets = new Map<number, number>();
+  private readonly secondBuckets =
+    new Map<number, number>();
 
   constructor(
     private readonly config: TradeFlowConfig =
@@ -147,7 +166,10 @@ export class TradeFlowBaselineTracker {
 
     const notional = getNotional(trade);
 
-    if (!Number.isFinite(notional) || notional <= 0) {
+    if (
+      !Number.isFinite(notional) ||
+      notional <= 0
+    ) {
       return;
     }
 
@@ -156,28 +178,39 @@ export class TradeFlowBaselineTracker {
 
     this.secondBuckets.set(
       bucketTimestamp,
-      (this.secondBuckets.get(bucketTimestamp) ?? 0) + notional
+      (
+        this.secondBuckets.get(bucketTimestamp) ?? 0
+      ) + notional
     );
 
     this.prune(trade.receivedAt);
   }
 
-  getBaseline(now = Date.now()): TradeFlowBaseline {
+  getBaseline(
+    now = Date.now()
+  ): TradeFlowBaseline {
     this.prune(now);
 
     const baselineStart =
-      now - this.config.windowMs - this.config.baselineMs;
+      now -
+      this.config.windowMs -
+      this.config.baselineMs;
 
     const baselineEnd =
       now - this.config.windowMs;
 
     const bucketDuration =
-      this.config.baselineMs / this.config.baselineBuckets;
+      this.config.baselineMs /
+      this.config.baselineBuckets;
 
     const bucketVolumes =
-      Array<number>(this.config.baselineBuckets).fill(0);
+      Array<number>(
+        this.config.baselineBuckets
+      ).fill(0);
 
-    for (const [timestamp, volume] of this.secondBuckets) {
+    for (
+      const [timestamp, volume] of this.secondBuckets
+    ) {
       if (
         timestamp < baselineStart ||
         timestamp >= baselineEnd
@@ -188,7 +221,8 @@ export class TradeFlowBaselineTracker {
       const bucketIndex = Math.min(
         this.config.baselineBuckets - 1,
         Math.floor(
-          (timestamp - baselineStart) / bucketDuration
+          (timestamp - baselineStart) /
+          bucketDuration
         )
       );
 
@@ -198,31 +232,43 @@ export class TradeFlowBaselineTracker {
     }
 
     const nonEmptyBuckets =
-      bucketVolumes.filter(volume => volume > 0).length;
+      bucketVolumes.filter(
+        volume => volume > 0
+      ).length;
 
-    if (nonEmptyBuckets < this.config.minBaselineBuckets) {
+    if (
+      nonEmptyBuckets <
+      this.config.minBaselineBuckets
+    ) {
       return {
         ready: false,
         nonEmptyBuckets,
         volumePerWindow: null,
         reason:
-          `Warming trade-flow baseline: ` +
-          `${nonEmptyBuckets}/${this.config.minBaselineBuckets} ` +
-          `active buckets`
+          'Warming trade-flow baseline: ' +
+          `${nonEmptyBuckets}/` +
+          `${this.config.minBaselineBuckets} ` +
+          'active buckets'
       };
     }
 
     const baselineTotalVolume =
-      bucketVolumes.reduce((sum, volume) => sum + volume, 0);
+      bucketVolumes.reduce(
+        (sum, volume) => sum + volume,
+        0
+      );
 
-    // Приводим baseline к длительности текущего trade-flow window.
-    // Например: при windowMs=5000 и baselineMs=60000
-    // коэффициент равен 5000 / 60000 = 0.0833.
     const volumePerWindow =
       baselineTotalVolume *
-      (this.config.windowMs / this.config.baselineMs);
+      (
+        this.config.windowMs /
+        this.config.baselineMs
+      );
 
-    if (!Number.isFinite(volumePerWindow) || volumePerWindow <= 0) {
+    if (
+      !Number.isFinite(volumePerWindow) ||
+      volumePerWindow <= 0
+    ) {
       return {
         ready: false,
         nonEmptyBuckets,
@@ -250,7 +296,9 @@ export class TradeFlowBaselineTracker {
       this.config.baselineMs -
       2_000;
 
-    for (const timestamp of this.secondBuckets.keys()) {
+    for (
+      const timestamp of this.secondBuckets.keys()
+    ) {
       if (timestamp < oldestKeptTimestamp) {
         this.secondBuckets.delete(timestamp);
       }
@@ -268,7 +316,9 @@ interface Aggregate {
   largeTradeNotional: number;
 }
 
-export function isValidTrade(trade: LighterTrade): boolean {
+export function isValidTrade(
+  trade: LighterTrade
+): boolean {
   return (
     Number.isFinite(trade.time) &&
     Number.isFinite(trade.receivedAt) &&
@@ -283,7 +333,9 @@ export function isValidTrade(trade: LighterTrade): boolean {
   );
 }
 
-function getNotional(trade: LighterTrade): number {
+function getNotional(
+  trade: LighterTrade
+): number {
   if (
     trade.usdAmount != null &&
     Number.isFinite(trade.usdAmount) &&
@@ -317,15 +369,27 @@ function aggregate(
         trade.receivedAt >= fromTime &&
         trade.receivedAt < toTime
     )
-    .sort((a, b) => a.receivedAt - b.receivedAt);
+    .sort(
+      (a, b) => a.receivedAt - b.receivedAt
+    );
 
   for (const trade of sorted) {
-    if (excludeLiquidations && trade.isLiquidation) {
+    if (
+      excludeLiquidations &&
+      trade.isLiquidation
+    ) {
       excludedLiquidationCount += 1;
       continue;
     }
 
     const volume = getNotional(trade);
+
+    if (
+      !Number.isFinite(volume) ||
+      volume <= 0
+    ) {
+      continue;
+    }
 
     if (trade.aggressorSide === 'buy') {
       buyVolume += volume;
@@ -342,7 +406,7 @@ function aggregate(
 
     count += 1;
 
-    if (firstPrice == null) {
+    if (firstPrice === null) {
       firstPrice = trade.price;
     }
 
@@ -357,6 +421,76 @@ function aggregate(
     lastPrice,
     excludedLiquidationCount,
     largeTradeNotional
+  };
+}
+
+/**
+ * Повторно проверяем входной результат OFI.
+ * Не доверяем одному флагу ready без значения,
+ * счётчика изменений и возраста книги.
+ */
+function normalizeOfi(
+  input?: OfiResult | null
+): OfiResult {
+  if (!input) {
+    return {
+      ready: false,
+      value: null,
+      updateCount: 0,
+      bookAgeMs: null,
+      reason: 'OFI data is unavailable'
+    };
+  }
+
+  const value =
+    input.value != null &&
+    Number.isFinite(input.value)
+      ? input.value
+      : null;
+
+  const updateCount =
+    Number.isInteger(input.updateCount) &&
+    input.updateCount >= 0
+      ? input.updateCount
+      : 0;
+
+  const bookAgeMs =
+    input.bookAgeMs != null &&
+    Number.isFinite(input.bookAgeMs) &&
+    input.bookAgeMs >= 0
+      ? input.bookAgeMs
+      : null;
+
+  let reason: string | null = null;
+
+  if (
+    bookAgeMs === null ||
+    bookAgeMs > DEFAULT_OFI_CONFIG.maxBookAgeMs
+  ) {
+    reason =
+      input.reason ??
+      'OFI order book is unavailable or stale';
+  } else if (input.ready !== true) {
+    reason =
+      input.reason ??
+      'OFI history is not ready';
+  } else if (value === null) {
+    reason = 'OFI value is invalid';
+  } else if (
+    updateCount < DEFAULT_OFI_CONFIG.minUpdates
+  ) {
+    reason =
+      'Not enough OFI quote changes: ' +
+      `${updateCount}/` +
+      `${DEFAULT_OFI_CONFIG.minUpdates}`;
+  }
+
+  return {
+    ready: reason === null,
+    value,
+    updateCount,
+    bookAgeMs,
+    reason
   };
 }
 
@@ -388,8 +522,10 @@ function emptyResult(
 /**
  * Анализирует поток сделок.
  *
- * baselineTracker обязателен для рабочего rolling-baseline:
- * его нужно отдельно обновлять через addTrade() при каждом WS-событии.
+ * baselineTracker обновляется через addTrade()
+ * при каждом новом WS trade event.
+ *
+ * ofi передаётся из getOrderBookAnalysis(symbol, now).
  */
 export function analyzeTradeFlow(
   symbol: string,
@@ -401,6 +537,7 @@ export function analyzeTradeFlow(
     baselineTracker?: TradeFlowBaselineTracker;
     bookImbalance?: number | null;
     spread?: number | null;
+    ofi?: OfiResult | null;
   }
 ): TradeFlowResult {
   const config: TradeFlowConfig = {
@@ -410,15 +547,26 @@ export function analyzeTradeFlow(
 
   const now = options?.now ?? Date.now();
 
+  if (
+    !Number.isFinite(now) ||
+    Math.abs(now) > 8_640_000_000_000_000
+  ) {
+    throw new Error('Invalid trade-flow analysis time');
+  }
+
   const valid = trades
     .filter(isValidTrade)
-    .filter(trade => trade.receivedAt <= now)
+    .filter(
+      trade => trade.receivedAt <= now
+    )
     .filter(
       trade =>
         now - trade.receivedAt <=
         config.baselineMs + config.windowMs
     )
-    .sort((a, b) => a.receivedAt - b.receivedAt);
+    .sort(
+      (a, b) => a.receivedAt - b.receivedAt
+    );
 
   const current = aggregate(
     valid,
@@ -440,22 +588,30 @@ export function analyzeTradeFlow(
   let excludedLiquidationCount =
     current.excludedLiquidationCount;
 
-  // Fallback позволяет работать без tracker, если передан полный
-  // исторический буфер достаточной длины.
+  // Fallback для полного исторического буфера.
   if (!options?.baselineTracker) {
     const baselineStart =
-      now - config.windowMs - config.baselineMs;
+      now -
+      config.windowMs -
+      config.baselineMs;
 
     const baselineEnd =
       now - config.windowMs;
 
     const bucketDuration =
-      config.baselineMs / config.baselineBuckets;
+      config.baselineMs /
+      config.baselineBuckets;
 
     const bucketVolumes =
-      Array<number>(config.baselineBuckets).fill(0);
+      Array<number>(
+        config.baselineBuckets
+      ).fill(0);
 
-    for (let i = 0; i < config.baselineBuckets; i += 1) {
+    for (
+      let i = 0;
+      i < config.baselineBuckets;
+      i += 1
+    ) {
       const bucketStart =
         baselineStart + i * bucketDuration;
 
@@ -479,19 +635,39 @@ export function analyzeTradeFlow(
     }
 
     nonEmptyBaselineBuckets =
-      bucketVolumes.filter(volume => volume > 0).length;
+      bucketVolumes.filter(
+        volume => volume > 0
+      ).length;
 
-    if (nonEmptyBaselineBuckets >= config.minBaselineBuckets) {
+    if (
+      nonEmptyBaselineBuckets >=
+      config.minBaselineBuckets
+    ) {
       const baselineTotalVolume =
-        bucketVolumes.reduce((sum, volume) => sum + volume, 0);
+        bucketVolumes.reduce(
+          (sum, volume) => sum + volume,
+          0
+        );
 
       const value =
         baselineTotalVolume *
         (config.windowMs / config.baselineMs);
 
       baselineVolumePerWindow =
-        value > 0 ? value : null;
+        Number.isFinite(value) && value > 0
+          ? value
+          : null;
     }
+  }
+
+  if (
+    baselineVolumePerWindow !== null &&
+    (
+      !Number.isFinite(baselineVolumePerWindow) ||
+      baselineVolumePerWindow <= 0
+    )
+  ) {
+    baselineVolumePerWindow = null;
   }
 
   const totalVolume =
@@ -499,12 +675,14 @@ export function analyzeTradeFlow(
 
   const imbalance =
     totalVolume > 0
-      ? (current.buyVolume - current.sellVolume) / totalVolume
+      ? (
+          current.buyVolume -
+          current.sellVolume
+        ) / totalVolume
       : 0;
 
   const volumeMultiple =
-    baselineVolumePerWindow != null &&
-    baselineVolumePerWindow > 0
+    baselineVolumePerWindow !== null
       ? totalVolume / baselineVolumePerWindow
       : null;
 
@@ -525,7 +703,8 @@ export function analyzeTradeFlow(
 
   const bookImbalance =
     options?.bookImbalance != null &&
-    Number.isFinite(options.bookImbalance)
+    Number.isFinite(options.bookImbalance) &&
+    Math.abs(options.bookImbalance) <= 1
       ? options.bookImbalance
       : null;
 
@@ -537,20 +716,22 @@ export function analyzeTradeFlow(
       : null;
 
   const spreadAtr =
-    spread != null && atr != null
+    spread !== null && atr !== null
       ? spread / atr
       : null;
+
+  const ofi = normalizeOfi(options?.ofi);
 
   const referencePrice = current.firstPrice;
 
   const priceMove =
-    current.lastPrice != null &&
-    referencePrice != null
+    current.lastPrice !== null &&
+    referencePrice !== null
       ? current.lastPrice - referencePrice
       : null;
 
   const priceMoveAtr =
-    priceMove != null && atr != null
+    priceMove !== null && atr !== null
       ? priceMove / atr
       : null;
 
@@ -566,183 +747,220 @@ export function analyzeTradeFlow(
     referencePrice,
     priceMoveAtr,
     excludedLiquidationCount,
-    baselineNonEmptyBuckets: nonEmptyBaselineBuckets,
-    largeTradeNotional: current.largeTradeNotional,
+    baselineNonEmptyBuckets:
+      nonEmptyBaselineBuckets,
+    largeTradeNotional:
+      current.largeTradeNotional,
     largeTradeShare,
     bookImbalance,
     spread,
-    spreadAtr
+    spreadAtr,
+
+    ofi1s: ofi.value,
+    ofiReady: ofi.ready,
+    ofiUpdateCount: ofi.updateCount,
+    bookAgeMs: ofi.bookAgeMs,
+    ofiReason: ofi.reason
   };
 
+  const reject = (
+    reason: string
+  ): TradeFlowResult => emptyResult(
+    symbol,
+    price,
+    now,
+    reason,
+    indicators
+  );
+
   if (!latestTrade || price <= 0) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'No valid recent trades',
-      indicators
-    );
+    return reject('No valid recent trades');
   }
 
-  if (now - latestTrade.receivedAt > config.maxTradeAgeMs) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'Trade stream is stale',
-      indicators
-    );
+  if (
+    now - latestTrade.receivedAt >
+    config.maxTradeAgeMs
+  ) {
+    return reject('Trade stream is stale');
   }
 
-  if (baselineVolumePerWindow == null) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
+  if (
+    baselineVolumePerWindow === null ||
+    (
+      trackerBaseline !== undefined &&
+      !trackerBaseline.ready
+    )
+  ) {
+    return reject(
       trackerBaseline?.reason ??
-        'Insufficient trade-flow baseline',
-      indicators
+      'Insufficient trade-flow baseline'
     );
   }
 
-  if (atr == null) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'ATR unavailable',
-      indicators
+  if (atr === null) {
+    return reject('ATR unavailable');
+  }
+
+  // Обязательная книга больше не пропускается при null.
+  if (config.requireBookConfirmation) {
+    if (bookImbalance === null) {
+      return reject(
+        'Order book imbalance is unavailable or invalid'
+      );
+    }
+
+    if (
+      spread === null ||
+      spreadAtr === null ||
+      !Number.isFinite(spreadAtr)
+    ) {
+      return reject(
+        'Order book spread is unavailable or invalid'
+      );
+    }
+
+    if (spreadAtr > config.maxSpreadAtr) {
+      return reject(
+        'Spread too wide: ' +
+        `${spreadAtr.toFixed(3)} ATR > ` +
+        `${config.maxSpreadAtr.toFixed(3)} ATR`
+      );
+    }
+  }
+
+  // Прогрев, отсутствие данных и устаревшая книга
+  // запрещают вход, когда OFI обязателен.
+  if (
+    config.requireOfiConfirmation &&
+    !ofi.ready
+  ) {
+    return reject(
+      ofi.reason ?? 'OFI data is not ready'
     );
   }
 
   if (
-    config.requireBookConfirmation &&
-    spreadAtr != null &&
-    spreadAtr > config.maxSpreadAtr
+    current.count === 0 ||
+    totalVolume <= 0
   ) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Spread too wide: ` +
-        `${spreadAtr.toFixed(3)} ATR > ` +
-        `${config.maxSpreadAtr.toFixed(3)} ATR`,
-      indicators
+    return reject(
+      'No eligible trades in current window'
     );
   }
 
-  if (current.count === 0 || totalVolume <= 0) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'No eligible trades in current window',
-      indicators
+  if (
+    !Number.isFinite(totalVolume) ||
+    !Number.isFinite(imbalance) ||
+    !Number.isFinite(largeTradeShare)
+  ) {
+    return reject('Trade-flow aggregate is invalid');
+  }
+
+  if (
+    current.count < config.minTradesInWindow
+  ) {
+    return reject(
+      'Not enough trades in current window: ' +
+      `${current.count}/` +
+      `${config.minTradesInWindow}`
     );
   }
 
-  if (current.count < config.minTradesInWindow) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Not enough trades in current window: ` +
-        `${current.count}/${config.minTradesInWindow}`,
-      indicators
-    );
-  }
-
-  if (largeTradeShare < config.minLargeTradeShare) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Flow is not supported by sufficiently large trades: ` +
-        `${(largeTradeShare * 100).toFixed(1)}% < ` +
-        `${(config.minLargeTradeShare * 100).toFixed(1)}%`,
-      indicators
+  if (
+    largeTradeShare < config.minLargeTradeShare
+  ) {
+    return reject(
+      'Flow is not supported by sufficiently large trades: ' +
+      `${(largeTradeShare * 100).toFixed(1)}% < ` +
+      `${(config.minLargeTradeShare * 100).toFixed(1)}%`
     );
   }
 
   const spikeConfirmed =
-    volumeMultiple != null &&
+    volumeMultiple !== null &&
+    Number.isFinite(volumeMultiple) &&
     volumeMultiple >= config.spikeMultiplier;
 
   if (!spikeConfirmed) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'Trade volume spike threshold not met',
-      indicators
+    return reject(
+      'Trade volume spike threshold not met'
     );
   }
 
-  let side: 'long' | 'short' | 'none' = 'none';
+  let side: TradeFlowSide = 'none';
 
   if (imbalance >= config.minImbalance) {
     side = 'long';
-  } else if (imbalance <= -config.minImbalance) {
+  } else if (
+    imbalance <= -config.minImbalance
+  ) {
     side = 'short';
   }
 
   if (side === 'none') {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'Aggressor-side imbalance threshold not met',
-      indicators
+    return reject(
+      'Aggressor-side imbalance threshold not met'
     );
   }
 
-  if (
-    config.requireBookConfirmation &&
-    bookImbalance != null
-  ) {
+  if (config.requireBookConfirmation) {
     const bookConfirms =
-      side === 'long'
-        ? bookImbalance >= config.minBookImbalance
-        : bookImbalance <= -config.minBookImbalance;
+      bookImbalance !== null &&
+      (
+        side === 'long'
+          ? bookImbalance >= config.minBookImbalance
+          : bookImbalance <= -config.minBookImbalance
+      );
 
     if (!bookConfirms) {
-      return emptyResult(
-        symbol,
-        price,
-        now,
-        'Book imbalance does not confirm trade flow direction',
-        indicators
+      return reject(
+        'Book imbalance does not confirm trade flow direction'
+      );
+    }
+  }
+
+  // Нулевой OFI не подтверждает ни long, ни short.
+  if (config.requireOfiConfirmation) {
+    const ofiConfirms =
+      ofi.ready &&
+      ofi.value !== null &&
+      (
+        side === 'long'
+          ? ofi.value > 0
+          : ofi.value < 0
+      );
+
+    if (!ofiConfirms) {
+      return reject(
+        'OFI does not confirm trade flow direction: ' +
+        `side=${side}, ofi=${ofi.value}`
       );
     }
   }
 
   const directionalMoveAtr =
-    priceMoveAtr == null
+    priceMoveAtr === null
       ? null
       : side === 'long'
         ? priceMoveAtr
         : -priceMoveAtr;
 
   if (
-    directionalMoveAtr == null ||
-    directionalMoveAtr < config.minDirectionalMoveAtr
+    directionalMoveAtr === null ||
+    !Number.isFinite(directionalMoveAtr) ||
+    directionalMoveAtr <
+      config.minDirectionalMoveAtr
   ) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'Price has not confirmed flow direction',
-      indicators
+    return reject(
+      'Price has not confirmed flow direction'
     );
   }
 
-  if (directionalMoveAtr > config.maxChaseAtr) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      'Price already moved too far from flow trigger',
-      indicators
+  if (
+    directionalMoveAtr > config.maxChaseAtr
+  ) {
+    return reject(
+      'Price already moved too far from flow trigger'
     );
   }
 
@@ -762,7 +980,29 @@ export function analyzeTradeFlow(
       ? price + targetDistance
       : price - targetDistance;
 
+  if (
+    !Number.isFinite(stopDistance) ||
+    !Number.isFinite(targetDistance) ||
+    stopDistance <= 0 ||
+    targetDistance <= 0 ||
+    !Number.isFinite(stopLossPrice) ||
+    !Number.isFinite(takeProfitPrice) ||
+    stopLossPrice <= 0 ||
+    takeProfitPrice <= 0
+  ) {
+    return reject(
+      'Invalid stop-loss or take-profit calculation'
+    );
+  }
+
   const signalTime = latestTrade.time;
+
+  if (
+    Math.abs(signalTime) >
+    8_640_000_000_000_000
+  ) {
+    return reject('Invalid signal timestamp');
+  }
 
   return {
     symbol,
@@ -777,12 +1017,15 @@ export function analyzeTradeFlow(
     regime: 'aggressive_trade_flow_spike',
     skipReason: null,
     signalTime,
-    signalTimeIso: new Date(signalTime).toISOString(),
+    signalTimeIso:
+      new Date(signalTime).toISOString(),
     indicators
   };
 }
 
-export function detectMarketRegime(_candles: unknown[]): {
+export function detectMarketRegime(
+  _candles: unknown[]
+): {
   regime: 'unknown';
   ready: false;
   indicators: null;
