@@ -47,7 +47,8 @@ import {
 } from './positionState';
 
 import {
-  TRADE_FEE_RATE
+  TRADE_FEE_RATE,
+  FLOW_MAX_CHASE_ATR
 } from './strategy';
 
 import {
@@ -393,99 +394,12 @@ function stopBalanceSyncLoop(): void {
   balanceSyncInterval = null;
 }
 
-/*async function hasPendingRemoteOrder(
-  marketId: number
-): Promise<boolean> {
-  if (PAPER_TRADING || !signerClient) {
-    return false;
-  }
-
-  const accountIndex = Number(
-    process.env.LIGHTER_ACCOUNT_INDEX ?? 0
-  );
-  const apiKeyIndex = Number(
-    process.env.LIGHTER_API_KEY_INDEX ?? 0
-  );
-  const authorization =
-    signerClient.create_auth_token_with_expiry(
-      60 * 60,
-      undefined,
-      apiKeyIndex
-    )[0] ?? '';
-
-  try {
-    const baseUrl =
-      process.env.LIGHTER_API_URL ??
-      'https://mainnet.zklighter.elliot.ai';
-
-    const responses = await Promise.all([
-      fetch(
-        `${baseUrl}/api/v1/accountActiveOrders` +
-          `?account_index=${accountIndex}&limit=100`,
-        {
-          headers: {
-            Accept: 'application/json',
-            Authorization: authorization
-          }
-        }
-      ),
-      fetch(
-        `${baseUrl}/api/v1/accountInactiveOrders` +
-          `?account_index=${accountIndex}&limit=100`,
-        {
-          headers: {
-            Accept: 'application/json',
-            Authorization: authorization
-          }
-        }
-      )
-    ]);
-
-    const data = await Promise.all(
-      responses.map(async response => {
-        if (!response.ok) {
-          throw new Error(
-            `Orders request failed: ${response.status}`
-          );
-        }
-
-        return response.json() as Promise<any>;
-      })
-    );
-
-    const orders = data.flatMap(item =>
-      Array.isArray(item?.orders)
-        ? item.orders
-        : []
-    );
-
-    return orders.some((order: any) =>
-      Number(order.market_index) === marketId &&
-      [
-        'submitted',
-        'partially_filled',
-        'open',
-        'pending',
-        'in-progress'
-      ].includes(
-        String(order.status).toLowerCase()
-      )
-    );
-  } catch (error) {
-    tradeError(
-      'REMOTE_ORDER_SYNC_FAILED',
-      error,
-      { accountIndex, marketId }
-    );
-    throw error;
-  }
-}*/
-
 function buildPositionMetadata(
   regime: string,
   indicators: Record<string, unknown>,
-  signalTime?: number,
-  signalTimeIso?: string
+  signalTime: number | undefined,
+  signalTimeIso: string | undefined,
+  side: 'long' | 'short'
 ) {
   const numeric = (
     name: string,
@@ -499,8 +413,20 @@ function buildPositionMetadata(
       : fallback;
   };
 
+  const priceMoveAtr =
+    numeric('priceMoveAtr', 0);
+
+  const directionalMoveAtr =
+    side === 'long'
+      ? priceMoveAtr
+      : -priceMoveAtr;
+
+  const chasePass =
+    directionalMoveAtr <= FLOW_MAX_CHASE_ATR;
+
   return {
     regime,
+
     macdCrossUp: false,
     macdCrossDown: false,
     lastRsi: 0,
@@ -516,10 +442,12 @@ function buildPositionMetadata(
     entryTooExtended: false,
     entryDistanceFromEma20: 0,
     entryDistanceFromEma20Atr: 0,
+
     signalTime: signalTime ?? Date.now(),
     signalTimeIso:
       signalTimeIso ?? new Date().toISOString(),
 
+    // Полный набор данных trade flow.
     tradeFlowWindowMs: numeric('windowMs'),
     tradeFlowWindowTradeCount: numeric('windowTradeCount'),
     tradeFlowBuyVolume: numeric('buyVolume'),
@@ -530,9 +458,26 @@ function buildPositionMetadata(
     ),
     tradeFlowVolumeMultiple: numeric('volumeMultiple'),
     tradeFlowImbalance: numeric('imbalance'),
-    tradeFlowPriceMoveAtr: numeric('priceMoveAtr'),
+
+    tradeFlowReferencePrice: numeric('referencePrice'),
+    tradeFlowSignalPrice: numeric('price'),
+    tradeFlowPriceMoveAtr: priceMoveAtr,
+    tradeFlowDirectionalMoveAtr: directionalMoveAtr,
+
+    tradeFlowMaxChaseAtr: FLOW_MAX_CHASE_ATR,
+    tradeFlowChasePass: chasePass,
+
     tradeFlowExcludedLiquidations: numeric(
       'excludedLiquidationCount'
+    ),
+    tradeFlowBaselineNonEmptyBuckets: numeric(
+      'baselineNonEmptyBuckets'
+    ),
+    tradeFlowLargeTradeNotional: numeric(
+      'largeTradeNotional'
+    ),
+    tradeFlowLargeTradeShare: numeric(
+      'largeTradeShare'
     )
   };
 }
@@ -580,7 +525,8 @@ function buildOpenPositionInput(input: PendingFilledOpen) {
       input.regime,
       input.indicators,
       input.signalTime,
-      input.signalTimeIso
+      input.signalTimeIso,
+      input.side
     ),
     executionOrderId: input.orderId,
     clientOrderId: input.clientOrderId
@@ -816,16 +762,6 @@ async function handleTradeEvent(
       `trade-flow signal ${symbol}`
     );
 
-    /*if (await hasPendingRemoteOrder(marketId)) {
-      tradeLog('TRADE_SIGNAL_BLOCKED_PENDING_ORDER', {
-        symbol,
-        marketId,
-        tradeId
-      });
-
-      return;
-    }*/
-
     const result = runTradeFlowOnce(symbol);
 
     tradeLog('TRADE_FLOW_CHECK', {
@@ -911,7 +847,8 @@ async function handleTradeEvent(
       stopLossPrice: result.stopLossPrice,
       takeProfitPrice: result.takeProfitPrice,
       clientOrderId,
-      signalTradeId: tradeId
+      signalTradeId: tradeId,
+      indicators: result.indicators
     });
 
     let openingFinished = false;
@@ -933,16 +870,16 @@ async function handleTradeEvent(
 
       const averageFillPrice =
         executionResult.averageFillPrice;
-      
+
       const fillConfirmed =
         executionResult.filledQuantity > 0 &&
         averageFillPrice != null &&
         Number.isFinite(averageFillPrice);
-      
+
       if (!fillConfirmed) {
         const reason =
           executionResult.message ?? 'Execution failed';
-      
+
         tradeError(
           'POSITION_OPEN_FAILED',
           reason,
@@ -958,14 +895,14 @@ async function handleTradeEvent(
             averageFillPrice: averageFillPrice ?? null
           }
         );
-      
+
         if (executionResult.status === 'unknown') {
           markReconciliationPending(symbol);
         }
-      
+
         return;
       }
-      
+
       const signalIndicators = {
         ...result.indicators,
         atr: stopDistance
@@ -978,7 +915,7 @@ async function handleTradeEvent(
         requestedQuantity: quantity,
         filledQuantity: executionResult.filledQuantity,
         expectedPrice,
-        averageFillPrice, 
+        averageFillPrice,
         takeProfitPrice: result.takeProfitPrice,
         stopLossPrice: result.stopLossPrice,
         exchangeStopLossPrice: result.stopLossPrice,
@@ -1020,7 +957,7 @@ async function handleTradeEvent(
             {
               symbol,
               marketId,
-              side: result.side,
+              side: pending.side,
               quantity: pending.filledQuantity,
               orderId: pending.orderId ?? null
             }
@@ -1048,7 +985,8 @@ async function handleTradeEvent(
         protectionConfirmed: Boolean(
           pending.protectionStopLossOrderId &&
             pending.protectionTakeProfitOrderId
-        )
+        ),
+        indicators: result.indicators
       });
 
       const position = getPositions().find(
