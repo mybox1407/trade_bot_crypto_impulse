@@ -40,6 +40,11 @@ export const FLOW_MAX_SPREAD_ATR = 0.50;
 // Обязательное подтверждение динамикой лучших bid/ask.
 export const FLOW_REQUIRE_OFI_CONFIRMATION = true;
 
+// Минимальная сила OFI относительно средней глубины
+// лучших bid/ask за последнюю секунду.
+// Экспериментальный порог, а не доказанный оптимум.
+export const FLOW_MIN_NORMALIZED_OFI = 0.10;
+
 export type TradeFlowSide =
   | 'long'
   | 'short'
@@ -65,6 +70,7 @@ export interface TradeFlowIndicators {
   spreadAtr: number | null;
 
   ofi1s: number | null;
+  ofiNormalized1s: number | null;
   ofiReady: boolean;
   ofiUpdateCount: number;
   bookAgeMs: number | null;
@@ -108,6 +114,7 @@ export interface TradeFlowConfig {
   minBookImbalance: number;
   maxSpreadAtr: number;
   requireOfiConfirmation: boolean;
+  minNormalizedOfi: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -129,7 +136,8 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   requireBookConfirmation: FLOW_REQUIRE_BOOK_CONFIRMATION,
   minBookImbalance: FLOW_MIN_BOOK_IMBALANCE,
   maxSpreadAtr: FLOW_MAX_SPREAD_ATR,
-  requireOfiConfirmation: FLOW_REQUIRE_OFI_CONFIRMATION
+  requireOfiConfirmation: FLOW_REQUIRE_OFI_CONFIRMATION,
+  minNormalizedOfi: FLOW_MIN_NORMALIZED_OFI
 };
 
 export interface TradeFlowBaseline {
@@ -436,6 +444,7 @@ function normalizeOfi(
     return {
       ready: false,
       value: null,
+      normalizedValue: null,
       updateCount: 0,
       bookAgeMs: null,
       reason: 'OFI data is unavailable'
@@ -446,6 +455,12 @@ function normalizeOfi(
     input.value != null &&
     Number.isFinite(input.value)
       ? input.value
+      : null;
+
+  const normalizedValue =
+    input.normalizedValue != null &&
+    Number.isFinite(input.normalizedValue)
+      ? input.normalizedValue
       : null;
 
   const updateCount =
@@ -476,6 +491,8 @@ function normalizeOfi(
       'OFI history is not ready';
   } else if (value === null) {
     reason = 'OFI value is invalid';
+  } else if (normalizedValue === null) {
+    reason = 'OFI normalized value is invalid';
   } else if (
     updateCount < DEFAULT_OFI_CONFIG.minUpdates
   ) {
@@ -488,6 +505,7 @@ function normalizeOfi(
   return {
     ready: reason === null,
     value,
+    normalizedValue,
     updateCount,
     bookAgeMs,
     reason
@@ -757,6 +775,7 @@ export function analyzeTradeFlow(
     spreadAtr,
 
     ofi1s: ofi.value,
+    ofiNormalized1s: ofi.normalizedValue,
     ofiReady: ofi.ready,
     ofiUpdateCount: ofi.updateCount,
     bookAgeMs: ofi.bookAgeMs,
@@ -919,21 +938,27 @@ export function analyzeTradeFlow(
     }
   }
 
-  // Нулевой OFI не подтверждает ни long, ни short.
+  // OFI должен быть не только в нужную сторону,
+  // но и достаточно сильным относительно глубины книги.
   if (config.requireOfiConfirmation) {
+    const normalizedOfi = ofi.normalizedValue;
+
     const ofiConfirms =
       ofi.ready &&
-      ofi.value !== null &&
+      normalizedOfi !== null &&
+      Number.isFinite(normalizedOfi) &&
       (
         side === 'long'
-          ? ofi.value > 0
-          : ofi.value < 0
+          ? normalizedOfi >= config.minNormalizedOfi
+          : normalizedOfi <= -config.minNormalizedOfi
       );
 
     if (!ofiConfirms) {
       return reject(
         'OFI does not confirm trade flow direction: ' +
-        `side=${side}, ofi=${ofi.value}`
+        `side=${side}, ` +
+        `normalizedOfi=${normalizedOfi}, ` +
+        `required=${side === 'long' ? '+' : '-'}${config.minNormalizedOfi}`
       );
     }
   }
