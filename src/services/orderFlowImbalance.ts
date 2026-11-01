@@ -14,6 +14,7 @@ export interface OfiConfig {
 export interface OfiResult {
   ready: boolean;
   value: number | null;
+  normalizedValue: number | null;
   updateCount: number;
   bookAgeMs: number | null;
   reason: string | null;
@@ -22,6 +23,7 @@ export interface OfiResult {
 interface OfiEvent {
   receivedAt: number;
   contribution: number;
+  depth: number;
 }
 
 export const DEFAULT_OFI_CONFIG: Readonly<OfiConfig> = {
@@ -30,7 +32,9 @@ export const DEFAULT_OFI_CONFIG: Readonly<OfiConfig> = {
   maxBookAgeMs: 500
 };
 
-function isValidQuote(quote: OfiBestQuote): boolean {
+function isValidQuote(
+  quote: OfiBestQuote
+): boolean {
   return (
     Number.isFinite(quote.bidPrice) &&
     Number.isFinite(quote.askPrice) &&
@@ -89,12 +93,23 @@ function calculateContribution(
 export class OrderFlowImbalanceTracker {
   private readonly config: OfiConfig;
 
-  private previousQuote: OfiBestQuote | null = null;
-  private historyStartedAt: number | null = null;
-  private lastBookReceivedAt: number | null = null;
+  private previousQuote:
+    | OfiBestQuote
+    | null = null;
+
+  private historyStartedAt:
+    | number
+    | null = null;
+
+  private lastBookReceivedAt:
+    | number
+    | null = null;
+
   private events: OfiEvent[] = [];
 
-  constructor(config: Partial<OfiConfig> = {}) {
+  constructor(
+    config: Partial<OfiConfig> = {}
+  ) {
     this.config = {
       ...DEFAULT_OFI_CONFIG,
       ...config
@@ -108,13 +123,17 @@ export class OrderFlowImbalanceTracker {
       !Number.isFinite(this.config.maxBookAgeMs) ||
       this.config.maxBookAgeMs <= 0
     ) {
-      throw new Error('Invalid OFI configuration');
+      throw new Error(
+        'Invalid OFI configuration'
+      );
     }
   }
 
   /**
-   * Передавать только best bid/ask корректно восстановленной книги.
-   * receivedAt — локальное время получения обновления, в миллисекундах.
+   * Передавать только best bid/ask корректно
+   * восстановленной книги.
+   * receivedAt — локальное время получения
+   * обновления, в миллисекундах.
    */
   update(
     quote: OfiBestQuote,
@@ -144,7 +163,9 @@ export class OrderFlowImbalanceTracker {
       this.reset();
     }
 
-    const current: OfiBestQuote = { ...quote };
+    const current: OfiBestQuote = {
+      ...quote
+    };
 
     this.lastBookReceivedAt = receivedAt;
 
@@ -154,13 +175,19 @@ export class OrderFlowImbalanceTracker {
       return;
     }
 
-    if (quoteChanged(this.previousQuote, current)) {
+    if (
+      quoteChanged(this.previousQuote, current)
+    ) {
+      const depth =
+        (current.bidSize + current.askSize) / 2;
+
       this.events.push({
         receivedAt,
         contribution: calculateContribution(
           this.previousQuote,
           current
-        )
+        ),
+        depth
       });
     }
 
@@ -168,19 +195,25 @@ export class OrderFlowImbalanceTracker {
     this.prune(receivedAt);
   }
 
-  getResult(now = Date.now()): OfiResult {
+  getResult(
+    now = Date.now()
+  ): OfiResult {
     if (!Number.isFinite(now)) {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount: 0,
         bookAgeMs: null,
         reason: 'Invalid OFI query time'
       };
     }
 
-    const lastReceivedAt = this.lastBookReceivedAt;
-    const historyStartedAt = this.historyStartedAt;
+    const lastReceivedAt =
+      this.lastBookReceivedAt;
+
+    const historyStartedAt =
+      this.historyStartedAt;
 
     if (
       lastReceivedAt === null ||
@@ -190,13 +223,16 @@ export class OrderFlowImbalanceTracker {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount: 0,
         bookAgeMs: null,
-        reason: 'OFI order book is unavailable'
+        reason:
+          'OFI order book is unavailable'
       };
     }
 
-    const bookAgeMs = now - lastReceivedAt;
+    const bookAgeMs =
+      now - lastReceivedAt;
 
     if (bookAgeMs < 0) {
       this.reset();
@@ -204,6 +240,7 @@ export class OrderFlowImbalanceTracker {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount: 0,
         bookAgeMs: null,
         reason: 'OFI clock moved backwards'
@@ -212,44 +249,57 @@ export class OrderFlowImbalanceTracker {
 
     this.prune(now);
 
-    if (bookAgeMs > this.config.maxBookAgeMs) {
+    if (
+      bookAgeMs > this.config.maxBookAgeMs
+    ) {
       this.reset();
 
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount: 0,
         bookAgeMs,
         reason: 'OFI order book is stale'
       };
     }
 
-    const updateCount = this.events.length;
+    const updateCount =
+      this.events.length;
 
-    if (now - historyStartedAt < this.config.windowMs) {
+    if (
+      now - historyStartedAt <
+      this.config.windowMs
+    ) {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount,
         bookAgeMs,
         reason: 'OFI history is warming up'
       };
     }
 
-    if (updateCount < this.config.minUpdates) {
+    if (
+      updateCount < this.config.minUpdates
+    ) {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount,
         bookAgeMs,
         reason:
           'Not enough OFI quote changes: ' +
-          `${updateCount}/${this.config.minUpdates}`
+          `${updateCount}/` +
+          `${this.config.minUpdates}`
       };
     }
 
     const value = this.events.reduce(
-      (sum, event) => sum + event.contribution,
+      (sum, event) =>
+        sum + event.contribution,
       0
     );
 
@@ -259,15 +309,46 @@ export class OrderFlowImbalanceTracker {
       return {
         ready: false,
         value: null,
+        normalizedValue: null,
         updateCount: 0,
         bookAgeMs,
         reason: 'Invalid OFI value'
       };
     }
 
+    const depthTotal = this.events.reduce(
+      (sum, event) => sum + event.depth,
+      0
+    );
+
+    const averageDepth =
+      this.events.length > 0
+        ? depthTotal / this.events.length
+        : 0;
+
+    const normalizedValue =
+      averageDepth > 0
+        ? value / averageDepth
+        : null;
+
+    if (
+      normalizedValue === null ||
+      !Number.isFinite(normalizedValue)
+    ) {
+      return {
+        ready: false,
+        value,
+        normalizedValue: null,
+        updateCount,
+        bookAgeMs,
+        reason: 'OFI depth is unavailable'
+      };
+    }
+
     return {
       ready: true,
       value,
+      normalizedValue,
       updateCount,
       bookAgeMs,
       reason: null
@@ -282,13 +363,15 @@ export class OrderFlowImbalanceTracker {
   }
 
   private prune(now: number): void {
-    const windowStart = now - this.config.windowMs;
+    const windowStart =
+      now - this.config.windowMs;
 
     let removeCount = 0;
 
     while (
       removeCount < this.events.length &&
-      this.events[removeCount].receivedAt <= windowStart
+      this.events[removeCount].receivedAt <=
+        windowStart
     ) {
       removeCount += 1;
     }
