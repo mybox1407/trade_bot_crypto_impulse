@@ -86,6 +86,25 @@ export interface VirtualPosition {
     entryDistanceFromEma20Atr?: number;
     signalTime?: number;
     signalTimeIso?: string;
+
+    tradeFlowWindowMs?: number;
+    tradeFlowWindowTradeCount?: number;
+    tradeFlowBuyVolume?: number;
+    tradeFlowSellVolume?: number;
+    tradeFlowTotalVolume?: number;
+    tradeFlowBaselineVolume?: number;
+    tradeFlowVolumeMultiple?: number;
+    tradeFlowImbalance?: number;
+    tradeFlowReferencePrice?: number;
+    tradeFlowSignalPrice?: number;
+    tradeFlowPriceMoveAtr?: number;
+    tradeFlowDirectionalMoveAtr?: number;
+    tradeFlowMaxChaseAtr?: number;
+    tradeFlowChasePass?: boolean;
+    tradeFlowExcludedLiquidations?: number;
+    tradeFlowBaselineNonEmptyBuckets?: number;
+    tradeFlowLargeTradeNotional?: number;
+    tradeFlowLargeTradeShare?: number;
   };
 }
 
@@ -302,10 +321,6 @@ export function openPosition(data: {
   if (currentPositions.length >= MAX_PARALLEL_POSITIONS) return fail(`Max ${MAX_PARALLEL_POSITIONS} open positions reached`);
   if (hasOpenPosition(normalizedSymbol)) return fail(`Position for ${normalizedSymbol} is already open`);
 
-  // Deliberately no isPositionOpening() check here.
-  // A confirmed exchange fill is processed while the submission guard may
-  // still be active. The guard protects duplicate order submission only.
-
   if (data.marketId != null && (!Number.isInteger(data.marketId) || data.marketId < 0)) return fail(`Invalid marketId: ${data.marketId}`);
   if (!isValidLevels({ side: data.side, entryPrice: data.entryPrice, takeProfitPrice: data.takeProfitPrice, stopLossPrice: data.stopLossPrice })) return fail('Invalid entry / stop / take-profit levels');
   if (!isFinitePositive(data.quantity)) return fail('Invalid quantity');
@@ -362,9 +377,12 @@ export function openPosition(data: {
     balanceAfter: balance,
     riskCapital: getRiskCapital(),
     maxNotionalByPercent: getPositionNotional(),
-    stopDistance: data.side === 'long' ? data.entryPrice - data.stopLossPrice : data.stopLossPrice - data.entryPrice,
+    stopDistance: data.side === 'long'
+      ? data.entryPrice - data.stopLossPrice
+      : data.stopLossPrice - data.entryPrice,
     totalRiskPerUnit: 0,
     calculatedQuantity: data.quantity,
+
     regime: data.metadata?.regime ?? '',
     macdCrossUp: data.metadata?.macdCrossUp ?? false,
     macdCrossDown: data.metadata?.macdCrossDown ?? false,
@@ -377,13 +395,36 @@ export function openPosition(data: {
     ema50: data.metadata?.ema50 ?? 0,
     ema200: data.metadata?.ema200 ?? 0,
     entryDistanceFromEma20: data.metadata?.entryDistanceFromEma20 ?? 0,
-    entryDistanceFromEma20Percent: data.metadata?.entryDistanceFromEma20Atr != null && data.metadata?.lastAtr != null && data.metadata.lastAtr > 0
+    entryDistanceFromEma20Percent: data.metadata?.entryDistanceFromEma20Atr != null &&
+      data.metadata?.lastAtr != null &&
+      data.metadata.lastAtr > 0
       ? (data.metadata.entryDistanceFromEma20 ?? 0) / data.metadata.lastAtr * 100
       : 0,
     entryDistanceFromEma20Atr: data.metadata?.entryDistanceFromEma20Atr ?? 0,
     entryTooExtended: data.metadata?.entryTooExtended ?? false,
     signalTime: data.metadata?.signalTime,
-    signalTimeIso: data.metadata?.signalTimeIso
+    signalTimeIso: data.metadata?.signalTimeIso,
+
+    tradeFlowWindowMs: data.metadata?.tradeFlowWindowMs ?? 0,
+    tradeFlowWindowTradeCount: data.metadata?.tradeFlowWindowTradeCount ?? 0,
+    tradeFlowBuyVolume: data.metadata?.tradeFlowBuyVolume ?? 0,
+    tradeFlowSellVolume: data.metadata?.tradeFlowSellVolume ?? 0,
+    tradeFlowTotalVolume: data.metadata?.tradeFlowTotalVolume ?? 0,
+    tradeFlowBaselineVolume: data.metadata?.tradeFlowBaselineVolume ?? 0,
+    tradeFlowVolumeMultiple: data.metadata?.tradeFlowVolumeMultiple ?? 0,
+    tradeFlowImbalance: data.metadata?.tradeFlowImbalance ?? 0,
+
+    tradeFlowReferencePrice: data.metadata?.tradeFlowReferencePrice ?? 0,
+    tradeFlowSignalPrice: data.metadata?.tradeFlowSignalPrice ?? 0,
+    tradeFlowPriceMoveAtr: data.metadata?.tradeFlowPriceMoveAtr ?? 0,
+    tradeFlowDirectionalMoveAtr: data.metadata?.tradeFlowDirectionalMoveAtr ?? 0,
+    tradeFlowMaxChaseAtr: data.metadata?.tradeFlowMaxChaseAtr ?? 0,
+    tradeFlowChasePass: data.metadata?.tradeFlowChasePass ?? false,
+
+    tradeFlowExcludedLiquidations: data.metadata?.tradeFlowExcludedLiquidations ?? 0,
+    tradeFlowBaselineNonEmptyBuckets: data.metadata?.tradeFlowBaselineNonEmptyBuckets ?? 0,
+    tradeFlowLargeTradeNotional: data.metadata?.tradeFlowLargeTradeNotional ?? 0,
+    tradeFlowLargeTradeShare: data.metadata?.tradeFlowLargeTradeShare ?? 0
   });
 
   notifyPositionOpen({
@@ -413,7 +454,16 @@ export function openPosition(data: {
   };
 }
 
-export function closePosition(positionId: string, exitPrice: number, reason: PositionCloseReason, options?: { executionOrderId?: string; clientOrderId?: string; fee?: number }) {
+export function closePosition(
+  positionId: string,
+  exitPrice: number,
+  reason: PositionCloseReason,
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
+) {
   const index = currentPositions.findIndex(position => position.id === positionId);
   if (index === -1) return { ok: false as const, message: 'No open position' };
   if (!isFinitePositive(exitPrice)) return { ok: false as const, message: 'Invalid exit price' };
@@ -422,7 +472,9 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
   const balanceBefore = balance;
   const reservedCapitalBefore = reservedCapital;
   const availableBalanceBefore = getAvailableBalance();
-  const realizedPnL = position.side === 'long' ? (exitPrice - position.entryPrice) * position.quantity : (position.entryPrice - exitPrice) * position.quantity;
+  const realizedPnL = position.side === 'long'
+    ? (exitPrice - position.entryPrice) * position.quantity
+    : (position.entryPrice - exitPrice) * position.quantity;
   const exitFee = options?.fee ?? exitPrice * position.quantity * TRADE_FEE_RATE;
   if (!Number.isFinite(exitFee) || exitFee < 0) return { ok: false as const, message: 'Invalid exit fee' };
 
@@ -466,12 +518,16 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     quantity: position.quantity,
     notional: position.notional,
     realizedPnL,
-    realizedPnLPercent: position.notional > 0 ? realizedPnL / position.notional * 100 : 0,
+    realizedPnLPercent: position.notional > 0
+      ? realizedPnL / position.notional * 100
+      : 0,
     entryFee: position.entryFee,
     exitFee,
     totalFee: position.entryFee + exitFee,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent: position.notional > 0
+      ? netPnL / position.notional * 100
+      : 0,
     balanceBefore,
     balanceAfter: balance,
     reason,
@@ -497,7 +553,9 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
     notional: position.notional,
     realizedPnL,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent: position.notional > 0
+      ? netPnL / position.notional * 100
+      : 0,
     reason,
     positionAgeSeconds,
     balance,
@@ -518,21 +576,36 @@ export function closePosition(positionId: string, exitPrice: number, reason: Pos
   };
 }
 
-export function partialClosePosition(positionId: string, quantityToClose: number, exitPrice: number, options?: { executionOrderId?: string; clientOrderId?: string; fee?: number }): { ok: true; realizedPnL: number; position: VirtualPosition } | { ok: false; message: string } {
+export function partialClosePosition(
+  positionId: string,
+  quantityToClose: number,
+  exitPrice: number,
+  options?: {
+    executionOrderId?: string;
+    clientOrderId?: string;
+    fee?: number;
+  }
+): { ok: true; realizedPnL: number; position: VirtualPosition } | { ok: false; message: string } {
   const index = currentPositions.findIndex(position => position.id === positionId);
   if (index === -1) return { ok: false, message: 'No open position' };
   if (!isFinitePositive(exitPrice)) return { ok: false, message: 'Invalid exit price' };
+
   const position = currentPositions[index];
-  if (!isFinitePositive(quantityToClose) || quantityToClose >= position.quantity) return { ok: false, message: 'Invalid quantity for partial close' };
+  if (!isFinitePositive(quantityToClose) || quantityToClose >= position.quantity) {
+    return { ok: false, message: 'Invalid quantity for partial close' };
+  }
 
   const exitFee = options?.fee ?? exitPrice * quantityToClose * TRADE_FEE_RATE;
   if (!Number.isFinite(exitFee) || exitFee < 0) return { ok: false, message: 'Invalid partial close fee' };
 
-  const realizedPnL = position.side === 'long' ? (exitPrice - position.entryPrice) * quantityToClose : (position.entryPrice - exitPrice) * quantityToClose;
+  const realizedPnL = position.side === 'long'
+    ? (exitPrice - position.entryPrice) * quantityToClose
+    : (position.entryPrice - exitPrice) * quantityToClose;
   const proportionalEntryFee = position.entryFee * quantityToClose / position.quantity;
   const netPnL = realizedPnL - exitFee - proportionalEntryFee;
   const newQuantity = position.quantity - quantityToClose;
   const newNotional = newQuantity * position.entryPrice;
+
   const updatedPosition: VirtualPosition = {
     ...position,
     quantity: newQuantity,
@@ -540,6 +613,8 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     reservedCapital: newNotional,
     entryFee: Math.max(0, position.entryFee - proportionalEntryFee),
     metadata: {
+      ...position.metadata,
+
       regime: position.metadata?.regime ?? '',
       macdCrossUp: position.metadata?.macdCrossUp ?? false,
       macdCrossDown: position.metadata?.macdCrossDown ?? false,
@@ -573,7 +648,10 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     }
   };
 
-  currentPositions = currentPositions.map(current => current.id === positionId ? updatedPosition : current);
+  currentPositions = currentPositions.map(current =>
+    current.id === positionId ? updatedPosition : current
+  );
+
   balance += netPnL;
   syncReservedCapital();
   schedulePersistence();
@@ -590,32 +668,69 @@ export function partialClosePosition(positionId: string, quantityToClose: number
     originalNotional: position.notional,
     remainingNotional: newNotional,
     realizedPnL,
-    realizedPnLPercent: position.notional > 0 ? realizedPnL / position.notional * 100 : 0,
+    realizedPnLPercent: position.notional > 0
+      ? realizedPnL / position.notional * 100
+      : 0,
     entryFee: proportionalEntryFee,
     exitFee,
     totalFee: proportionalEntryFee + exitFee,
     netPnL,
-    netPnLPercent: position.notional > 0 ? netPnL / position.notional * 100 : 0,
+    netPnLPercent: position.notional > 0
+      ? netPnL / position.notional * 100
+      : 0,
     balanceBefore: balance - netPnL,
     balanceAfter: balance,
     executionOrderId: options?.executionOrderId,
     clientOrderId: options?.clientOrderId
   });
 
-  return { ok: true, realizedPnL: netPnL, position: { ...updatedPosition, metadata: updatedPosition.metadata ? { ...updatedPosition.metadata } : undefined } };
+  return {
+    ok: true,
+    realizedPnL: netPnL,
+    position: {
+      ...updatedPosition,
+      metadata: updatedPosition.metadata
+        ? { ...updatedPosition.metadata }
+        : undefined
+    }
+  };
 }
 
-export function updatePositionMetadata(positionId: string, updates: Partial<NonNullable<VirtualPosition['metadata']>>): boolean {
+export function updatePositionMetadata(
+  positionId: string,
+  updates: Partial<NonNullable<VirtualPosition['metadata']>>
+): boolean {
   if (!currentPositions.some(position => position.id === positionId)) return false;
-  currentPositions = currentPositions.map(position => position.id === positionId ? { ...position, metadata: { ...(position.metadata ?? {}), ...updates } as NonNullable<VirtualPosition['metadata']> } : position);
+
+  currentPositions = currentPositions.map(position =>
+    position.id === positionId
+      ? {
+          ...position,
+          metadata: {
+            ...(position.metadata ?? {}),
+            ...updates
+          } as NonNullable<VirtualPosition['metadata']>
+        }
+      : position
+  );
+
   schedulePersistence();
   return true;
 }
 
-export function updatePositionStopLoss(positionId: string, newStopLossPrice: number): boolean {
+export function updatePositionStopLoss(
+  positionId: string,
+  newStopLossPrice: number
+): boolean {
   if (!isFinitePositive(newStopLossPrice)) return false;
   if (!currentPositions.some(position => position.id === positionId)) return false;
-  currentPositions = currentPositions.map(position => position.id === positionId ? { ...position, stopLossPrice: newStopLossPrice } : position);
+
+  currentPositions = currentPositions.map(position =>
+    position.id === positionId
+      ? { ...position, stopLossPrice: newStopLossPrice }
+      : position
+  );
+
   schedulePersistence();
   return true;
 }
