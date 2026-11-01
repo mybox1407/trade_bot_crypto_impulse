@@ -15,7 +15,7 @@ export const FLOW_BASELINE_BUCKETS = 10;
 export const FLOW_SPIKE_MULTIPLIER = 6.0;
 
 export const FLOW_MIN_IMBALANCE = 0.80;
-export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.30;
+export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
 export const FLOW_MAX_CHASE_ATR = 0.40;
 export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
 export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
