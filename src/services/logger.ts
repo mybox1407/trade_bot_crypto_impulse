@@ -68,6 +68,7 @@ const FILE_HEADERS: Record<
     'stopDistance',
     'totalRiskPerUnit',
     'calculatedQuantity',
+
     'regime',
     'macdCrossUp',
     'macdCrossDown',
@@ -84,7 +85,28 @@ const FILE_HEADERS: Record<
     'entryDistanceFromEma20Atr',
     'entryTooExtended',
     'signalTime',
-    'signalTimeIso'
+    'signalTimeIso',
+
+    'tradeFlowWindowMs',
+    'tradeFlowWindowTradeCount',
+    'tradeFlowBuyVolume',
+    'tradeFlowSellVolume',
+    'tradeFlowTotalVolume',
+    'tradeFlowBaselineVolume',
+    'tradeFlowVolumeMultiple',
+    'tradeFlowImbalance',
+
+    'tradeFlowReferencePrice',
+    'tradeFlowSignalPrice',
+    'tradeFlowPriceMoveAtr',
+    'tradeFlowDirectionalMoveAtr',
+    'tradeFlowMaxChaseAtr',
+    'tradeFlowChasePass',
+
+    'tradeFlowExcludedLiquidations',
+    'tradeFlowBaselineNonEmptyBuckets',
+    'tradeFlowLargeTradeNotional',
+    'tradeFlowLargeTradeShare'
   ],
 
   'position_check_log.csv': [
@@ -313,6 +335,7 @@ export function logPositionOpen(row: {
   stopDistance: number;
   totalRiskPerUnit: number;
   calculatedQuantity: number;
+
   regime: string;
   macdCrossUp: boolean;
   macdCrossDown: boolean;
@@ -330,6 +353,27 @@ export function logPositionOpen(row: {
   entryTooExtended: boolean;
   signalTime?: number;
   signalTimeIso?: string;
+
+  tradeFlowWindowMs?: number;
+  tradeFlowWindowTradeCount?: number;
+  tradeFlowBuyVolume?: number;
+  tradeFlowSellVolume?: number;
+  tradeFlowTotalVolume?: number;
+  tradeFlowBaselineVolume?: number;
+  tradeFlowVolumeMultiple?: number;
+  tradeFlowImbalance?: number;
+
+  tradeFlowReferencePrice?: number;
+  tradeFlowSignalPrice?: number;
+  tradeFlowPriceMoveAtr?: number;
+  tradeFlowDirectionalMoveAtr?: number;
+  tradeFlowMaxChaseAtr?: number;
+  tradeFlowChasePass?: boolean;
+
+  tradeFlowExcludedLiquidations?: number;
+  tradeFlowBaselineNonEmptyBuckets?: number;
+  tradeFlowLargeTradeNotional?: number;
+  tradeFlowLargeTradeShare?: number;
 }): void {
   writeRow(
     'position_open_log.csv',
