@@ -388,6 +388,7 @@ function unavailableOfi(
   return {
     ready: false,
     value: null,
+    normalizedValue: null,
     updateCount: 0,
     bookAgeMs,
     reason
