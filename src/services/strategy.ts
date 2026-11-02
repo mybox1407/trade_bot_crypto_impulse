@@ -16,7 +16,7 @@ export const FLOW_SPIKE_MULTIPLIER = 6.0;
 
 export const FLOW_MIN_IMBALANCE = 0.80;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
-export const FLOW_MAX_CHASE_ATR = 0.40;
+export const FLOW_MAX_CHASE_ATR = 0.55;
 export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
 export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
 export const FLOW_MIN_BASELINE_BUCKETS = 6;
@@ -25,8 +25,8 @@ export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
 // Дополнительные фильтры качества потока.
 export const FLOW_MIN_TRADES_IN_WINDOW = 10;
-export const FLOW_MIN_LARGE_TRADE_SHARE = 0.70;
-export const FLOW_LARGE_TRADE_NOTIONAL = 3_000;
+export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
+export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
