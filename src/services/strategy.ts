@@ -14,6 +14,10 @@ export const FLOW_BASELINE_BUCKETS = 10;
 // 6.0 означает: текущий объём за 5 секунд >= 6x среднего объёма за 5 секунд.
 export const FLOW_SPIKE_MULTIPLIER = 6.0;
 
+// Верхняя граница spike: аномально экстремальные всплески объёма
+// часто означают кульминацию движения, а не его начало.
+export const FLOW_MAX_SPIKE_MULTIPLIER = 90;
+
 export const FLOW_MIN_IMBALANCE = 0.80;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
 export const FLOW_MAX_CHASE_ATR = 0.55;
@@ -27,6 +31,10 @@ export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 export const FLOW_MIN_TRADES_IN_WINDOW = 10;
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
+
+// Верхняя граница large-trade share: почти весь объём от 1-2 гигантских
+// сделок — признак разового ордера/ликвидации, а не устойчивого потока.
+export const FLOW_MAX_LARGE_TRADE_SHARE = 0.90;
 
 // Overlay: минимальная активность flow-окна.
 export const FLOW_MIN_WINDOW_TRADES = 50;
@@ -78,6 +86,7 @@ export interface TradeFlowConfig {
   baselineMs: number;
   baselineBuckets: number;
   spikeMultiplier: number;
+  maxSpikeMultiplier: number;
   minImbalance: number;
   minDirectionalMoveAtr: number;
   maxChaseAtr: number;
@@ -88,6 +97,7 @@ export interface TradeFlowConfig {
   excludeLiquidations: boolean;
   minTradesInWindow: number;
   minLargeTradeShare: number;
+  maxLargeTradeShare: number;
   largeTradeNotional: number;
   minWindowTrades: number;
   minAbsImbalance: number;
@@ -99,6 +109,7 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   baselineMs: FLOW_BASELINE_MS,
   baselineBuckets: FLOW_BASELINE_BUCKETS,
   spikeMultiplier: FLOW_SPIKE_MULTIPLIER,
+  maxSpikeMultiplier: FLOW_MAX_SPIKE_MULTIPLIER,
   minImbalance: FLOW_MIN_IMBALANCE,
   minDirectionalMoveAtr: FLOW_MIN_DIRECTIONAL_MOVE_ATR,
   maxChaseAtr: FLOW_MAX_CHASE_ATR,
@@ -109,6 +120,7 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
   minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
   minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
+  maxLargeTradeShare: FLOW_MAX_LARGE_TRADE_SHARE,
   largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
   minWindowTrades: FLOW_MIN_WINDOW_TRADES,
   minAbsImbalance: FLOW_MIN_ABS_IMBALANCE,
@@ -655,11 +667,39 @@ export function analyzeTradeFlow(
     );
   }
 
+  if (largeTradeShare >= config.maxLargeTradeShare) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Large-trade share too high: ` +
+        `${(largeTradeShare * 100).toFixed(1)}% >= ` +
+        `${(config.maxLargeTradeShare * 100).toFixed(1)}%`,
+      indicators
+    );
+  }
+
   const spikeConfirmed =
     volumeMultiple != null &&
-    volumeMultiple >= config.spikeMultiplier;
+    volumeMultiple >= config.spikeMultiplier &&
+    volumeMultiple < config.maxSpikeMultiplier;
 
   if (!spikeConfirmed) {
+    if (
+      volumeMultiple != null &&
+      volumeMultiple >= config.maxSpikeMultiplier
+    ) {
+      return emptyResult(
+        symbol,
+        price,
+        now,
+        `Trade volume spike too extreme: ` +
+          `${volumeMultiple.toFixed(2)}x >= ` +
+          `${config.maxSpikeMultiplier}x`,
+        indicators
+      );
+    }
+
     return emptyResult(
       symbol,
       price,
