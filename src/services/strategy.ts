@@ -28,6 +28,15 @@ export const FLOW_MIN_TRADES_IN_WINDOW = 10;
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
 
+// Overlay: минимальная активность flow-окна.
+export const FLOW_MIN_WINDOW_TRADES = 50;
+
+// Overlay: допустимый коридор абсолютного imbalance.
+// Для long: +0.85 <= imbalance < +0.95
+// Для short: -0.95 < imbalance <= -0.85
+export const FLOW_MIN_ABS_IMBALANCE = 0.85;
+export const FLOW_MAX_ABS_IMBALANCE = 0.95;
+
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
 export interface TradeFlowIndicators {
@@ -80,6 +89,9 @@ export interface TradeFlowConfig {
   minTradesInWindow: number;
   minLargeTradeShare: number;
   largeTradeNotional: number;
+  minWindowTrades: number;
+  minAbsImbalance: number;
+  maxAbsImbalance: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -97,7 +109,10 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
   minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
   minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
-  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL
+  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
+  minWindowTrades: FLOW_MIN_WINDOW_TRADES,
+  minAbsImbalance: FLOW_MIN_ABS_IMBALANCE,
+  maxAbsImbalance: FLOW_MAX_ABS_IMBALANCE
 };
 
 export interface TradeFlowBaseline {
@@ -595,6 +610,35 @@ export function analyzeTradeFlow(
       now,
       `Not enough trades in current window: ` +
         `${current.count}/${config.minTradesInWindow}`,
+      indicators
+    );
+  }
+
+  if (current.count < config.minWindowTrades) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Flow window activity below overlay threshold: ` +
+        `${current.count}/${config.minWindowTrades} trades`,
+      indicators
+    );
+  }
+
+  const absImbalance = Math.abs(imbalance);
+
+  if (
+    absImbalance < config.minAbsImbalance ||
+    absImbalance >= config.maxAbsImbalance
+  ) {
+    return emptyResult(
+      symbol,
+      price,
+      now,
+      `Absolute imbalance outside overlay range: ` +
+        `${absImbalance.toFixed(3)} not in ` +
+        `[${config.minAbsImbalance.toFixed(2)}, ` +
+        `${config.maxAbsImbalance.toFixed(2)})`,
       indicators
     );
   }
