@@ -6,44 +6,23 @@ export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
 // Стратегия исследовательская; значения — стартовые параметры.
-export const FLOW_WINDOW_MS = 5_000;
+export const FLOW_WINDOW_MS = 3_000;
 export const FLOW_BASELINE_MS = 60_000;
 export const FLOW_BASELINE_BUCKETS = 10;
-
-// После исправления нормализации baseline.
-// 6.0 означает: текущий объём за 5 секунд >= 6x среднего объёма за 5 секунд.
-export const FLOW_SPIKE_MULTIPLIER = 6.0;
-
-// Верхняя граница spike: аномально экстремальные всплески объёма
-// часто означают кульминацию движения, а не его начало.
-export const FLOW_MAX_SPIKE_MULTIPLIER = 90;
-
+export const FLOW_SPIKE_MULTIPLIER = 4.0;
 export const FLOW_MIN_IMBALANCE = 0.80;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
 export const FLOW_MAX_CHASE_ATR = 0.55;
 export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
 export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
 export const FLOW_MIN_BASELINE_BUCKETS = 6;
-export const FLOW_MAX_TRADE_AGE_MS = 5_000;
+export const FLOW_MAX_TRADE_AGE_MS = 4_000;
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
 // Дополнительные фильтры качества потока.
 export const FLOW_MIN_TRADES_IN_WINDOW = 10;
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
-
-// Верхняя граница large-trade share: почти весь объём от 1-2 гигантских
-// сделок — признак разового ордера/ликвидации, а не устойчивого потока.
-export const FLOW_MAX_LARGE_TRADE_SHARE = 0.90;
-
-// Overlay: минимальная активность flow-окна.
-export const FLOW_MIN_WINDOW_TRADES = 50;
-
-// Overlay: допустимый коридор абсолютного imbalance.
-// Для long: +0.85 <= imbalance < +0.95
-// Для short: -0.95 < imbalance <= -0.85
-export const FLOW_MIN_ABS_IMBALANCE = 0.85;
-export const FLOW_MAX_ABS_IMBALANCE = 0.95;
 
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
@@ -86,7 +65,6 @@ export interface TradeFlowConfig {
   baselineMs: number;
   baselineBuckets: number;
   spikeMultiplier: number;
-  maxSpikeMultiplier: number;
   minImbalance: number;
   minDirectionalMoveAtr: number;
   maxChaseAtr: number;
@@ -97,11 +75,7 @@ export interface TradeFlowConfig {
   excludeLiquidations: boolean;
   minTradesInWindow: number;
   minLargeTradeShare: number;
-  maxLargeTradeShare: number;
   largeTradeNotional: number;
-  minWindowTrades: number;
-  minAbsImbalance: number;
-  maxAbsImbalance: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -109,7 +83,6 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   baselineMs: FLOW_BASELINE_MS,
   baselineBuckets: FLOW_BASELINE_BUCKETS,
   spikeMultiplier: FLOW_SPIKE_MULTIPLIER,
-  maxSpikeMultiplier: FLOW_MAX_SPIKE_MULTIPLIER,
   minImbalance: FLOW_MIN_IMBALANCE,
   minDirectionalMoveAtr: FLOW_MIN_DIRECTIONAL_MOVE_ATR,
   maxChaseAtr: FLOW_MAX_CHASE_ATR,
@@ -120,11 +93,7 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
   minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
   minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
-  maxLargeTradeShare: FLOW_MAX_LARGE_TRADE_SHARE,
-  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
-  minWindowTrades: FLOW_MIN_WINDOW_TRADES,
-  minAbsImbalance: FLOW_MIN_ABS_IMBALANCE,
-  maxAbsImbalance: FLOW_MAX_ABS_IMBALANCE
+  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL
 };
 
 export interface TradeFlowBaseline {
@@ -180,10 +149,8 @@ export class TradeFlowBaselineTracker {
 
     const baselineStart =
       now - this.config.windowMs - this.config.baselineMs;
-
     const baselineEnd =
       now - this.config.windowMs;
-
     const bucketDuration =
       this.config.baselineMs / this.config.baselineBuckets;
 
@@ -225,15 +192,9 @@ export class TradeFlowBaselineTracker {
       };
     }
 
-    const baselineTotalVolume =
-      bucketVolumes.reduce((sum, volume) => sum + volume, 0);
-
-    // Приводим baseline к длительности текущего trade-flow window.
-    // Например: при windowMs=5000 и baselineMs=60000
-    // коэффициент равен 5000 / 60000 = 0.0833.
     const volumePerWindow =
-      baselineTotalVolume *
-      (this.config.windowMs / this.config.baselineMs);
+      bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
+      this.config.baselineBuckets;
 
     if (!Number.isFinite(volumePerWindow) || volumePerWindow <= 0) {
       return {
@@ -456,10 +417,8 @@ export function analyzeTradeFlow(
   if (!options?.baselineTracker) {
     const baselineStart =
       now - config.windowMs - config.baselineMs;
-
     const baselineEnd =
       now - config.windowMs;
-
     const bucketDuration =
       config.baselineMs / config.baselineBuckets;
 
@@ -469,7 +428,6 @@ export function analyzeTradeFlow(
     for (let i = 0; i < config.baselineBuckets; i += 1) {
       const bucketStart =
         baselineStart + i * bucketDuration;
-
       const bucketEnd =
         i === config.baselineBuckets - 1
           ? baselineEnd
@@ -493,12 +451,9 @@ export function analyzeTradeFlow(
       bucketVolumes.filter(volume => volume > 0).length;
 
     if (nonEmptyBaselineBuckets >= config.minBaselineBuckets) {
-      const baselineTotalVolume =
-        bucketVolumes.reduce((sum, volume) => sum + volume, 0);
-
       const value =
-        baselineTotalVolume *
-        (config.windowMs / config.baselineMs);
+        bucketVolumes.reduce((sum, volume) => sum + volume, 0) /
+        config.baselineBuckets;
 
       baselineVolumePerWindow =
         value > 0 ? value : null;
@@ -626,35 +581,6 @@ export function analyzeTradeFlow(
     );
   }
 
-  if (current.count < config.minWindowTrades) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Flow window activity below overlay threshold: ` +
-        `${current.count}/${config.minWindowTrades} trades`,
-      indicators
-    );
-  }
-
-  const absImbalance = Math.abs(imbalance);
-
-  if (
-    absImbalance < config.minAbsImbalance ||
-    absImbalance >= config.maxAbsImbalance
-  ) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Absolute imbalance outside overlay range: ` +
-        `${absImbalance.toFixed(3)} not in ` +
-        `[${config.minAbsImbalance.toFixed(2)}, ` +
-        `${config.maxAbsImbalance.toFixed(2)})`,
-      indicators
-    );
-  }
-
   if (largeTradeShare < config.minLargeTradeShare) {
     return emptyResult(
       symbol,
@@ -667,39 +593,11 @@ export function analyzeTradeFlow(
     );
   }
 
-  if (largeTradeShare >= config.maxLargeTradeShare) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Large-trade share too high: ` +
-        `${(largeTradeShare * 100).toFixed(1)}% >= ` +
-        `${(config.maxLargeTradeShare * 100).toFixed(1)}%`,
-      indicators
-    );
-  }
-
   const spikeConfirmed =
     volumeMultiple != null &&
-    volumeMultiple >= config.spikeMultiplier &&
-    volumeMultiple < config.maxSpikeMultiplier;
+    volumeMultiple >= config.spikeMultiplier;
 
   if (!spikeConfirmed) {
-    if (
-      volumeMultiple != null &&
-      volumeMultiple >= config.maxSpikeMultiplier
-    ) {
-      return emptyResult(
-        symbol,
-        price,
-        now,
-        `Trade volume spike too extreme: ` +
-          `${volumeMultiple.toFixed(2)}x >= ` +
-          `${config.maxSpikeMultiplier}x`,
-        indicators
-      );
-    }
-
     return emptyResult(
       symbol,
       price,
