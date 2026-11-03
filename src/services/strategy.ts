@@ -13,8 +13,8 @@ export const FLOW_SPIKE_MULTIPLIER = 4.0;
 export const FLOW_MIN_IMBALANCE = 0.80;
 export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
 export const FLOW_MAX_CHASE_ATR = 0.55;
-export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
-export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
+export const FLOW_STOP_ATR_MULTIPLIER = 0.75;
+export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 3.0;
 export const FLOW_MIN_BASELINE_BUCKETS = 6;
 export const FLOW_MAX_TRADE_AGE_MS = 4_000;
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
@@ -23,6 +23,11 @@ export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 export const FLOW_MIN_TRADES_IN_WINDOW = 10;
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
+
+// Фильтр подтверждающей 15m-свечи (dir + body + wick).
+export const CANDLE_DIR_FILTER_ENABLED = true;
+export const CANDLE_BODY_MIN_RATIO = 0.5;
+export const CANDLE_WICK_MAX_RATIO = 0.4;
 
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
