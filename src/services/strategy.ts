@@ -5,24 +5,48 @@ export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
-// Стратегия исследовательская; значения — стартовые параметры.
-export const FLOW_WINDOW_MS = 3_000;
+// Ловим импульс в окне 1 секунда.
+export const FLOW_WINDOW_MS = 1_000;
+
+// Baseline остаётся минутным, но теперь состоит из 60 секундных корзин.
 export const FLOW_BASELINE_MS = 60_000;
-export const FLOW_BASELINE_BUCKETS = 10;
-export const FLOW_SPIKE_MULTIPLIER = 4.0;
-export const FLOW_MIN_IMBALANCE = 0.80;
-export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.25;
-export const FLOW_MAX_CHASE_ATR = 0.55;
-export const FLOW_STOP_ATR_MULTIPLIER = 1.0;
-export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 1.5;
-export const FLOW_MIN_BASELINE_BUCKETS = 6;
-export const FLOW_MAX_TRADE_AGE_MS = 4_000;
+export const FLOW_BASELINE_BUCKETS = 60;
+
+// На 1-секундном окне порог всплеска должен быть выше,
+// иначе обычный секундный объём будет давать слишком много сигналов.
+export const FLOW_SPIKE_MULTIPLIER = 8.0;
+
+// Сильное преобладание агрессивных покупок или продаж.
+export const FLOW_MIN_IMBALANCE = 0.85;
+
+// Цена уже должна подтвердить направление импульса.
+export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.15;
+
+// Но не входим, если цена уже ушла слишком далеко.
+export const FLOW_MAX_CHASE_ATR = 0.45;
+
+// Короткие SL/TP для быстрого импульсного входа.
+// ATR по-прежнему берётся с текущего 15m таймфрейма.
+export const FLOW_STOP_ATR_MULTIPLIER = 0.5;
+export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 0.8;
+
+// Для baseline из 60 секундных корзин требуется минимум 30 активных.
+export const FLOW_MIN_BASELINE_BUCKETS = 30;
+
+// Не используем устаревший поток сделок.
+export const FLOW_MAX_TRADE_AGE_MS = 1_500;
+
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
-// Дополнительные фильтры качества потока.
-export const FLOW_MIN_TRADES_IN_WINDOW = 10;
-export const FLOW_MIN_LARGE_TRADE_SHARE = 0.45;
+// На 1 секунде 10 сделок — слишком жёсткий фильтр.
+export const FLOW_MIN_TRADES_IN_WINDOW = 4;
+
+// Импульс должен поддерживаться крупными сделками.
+export const FLOW_MIN_LARGE_TRADE_SHARE = 0.40;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
+
+// Принудительный выход, если TP не достигнут за 2 минуты.
+export const MAX_POSITION_AGE_MS = 120_000;
 
 export type TradeFlowSide = 'long' | 'short' | 'none';
 
@@ -149,8 +173,10 @@ export class TradeFlowBaselineTracker {
 
     const baselineStart =
       now - this.config.windowMs - this.config.baselineMs;
+
     const baselineEnd =
       now - this.config.windowMs;
+
     const bucketDuration =
       this.config.baselineMs / this.config.baselineBuckets;
 
@@ -417,8 +443,10 @@ export function analyzeTradeFlow(
   if (!options?.baselineTracker) {
     const baselineStart =
       now - config.windowMs - config.baselineMs;
+
     const baselineEnd =
       now - config.windowMs;
+
     const bucketDuration =
       config.baselineMs / config.baselineBuckets;
 
@@ -428,6 +456,7 @@ export function analyzeTradeFlow(
     for (let i = 0; i < config.baselineBuckets; i += 1) {
       const bucketStart =
         baselineStart + i * bucketDuration;
+
       const bucketEnd =
         i === config.baselineBuckets - 1
           ? baselineEnd
@@ -683,7 +712,7 @@ export function analyzeTradeFlow(
     takeProfitPrice,
     stopLossPrice,
     positionSize: null,
-    regime: 'aggressive_trade_flow_spike',
+    regime: 'aggressive_trade_flow_spike_1s',
     skipReason: null,
     signalTime,
     signalTimeIso: new Date(signalTime).toISOString(),
