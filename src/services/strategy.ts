@@ -5,34 +5,32 @@ export const STARTING_BALANCE = 150;
 export const MAX_RISK_PER_TRADE = 0.01;
 export const TRADE_FEE_RATE = 0.0;
 
-// Основное окно импульса — 1 секунда.
+// Ловим импульс в окне 1 секунда.
 export const FLOW_WINDOW_MS = 1_000;
 
-// Baseline — 60 секунд, посекундно.
+// Baseline остаётся минутным, но теперь состоит из 60 секундных корзин.
 export const FLOW_BASELINE_MS = 60_000;
 export const FLOW_BASELINE_BUCKETS = 60;
 
-// Порог всплеска по полному 1-секундному окну.
-export const FLOW_SPIKE_MULTIPLIER = 8.0;
+// На 1-секундном окне порог всплеска должен быть выше,
+// иначе обычный секундный объём будет давать слишком много сигналов.
+export const FLOW_SPIKE_MULTIPLIER = 4.0;
 
 // Сильное преобладание агрессивных покупок или продаж.
-export const FLOW_MIN_IMBALANCE = 0.85;
+export const FLOW_MIN_IMBALANCE = 0.75;
 
-// Ранний вход: минимальное подтверждение движения.
-export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.03;
+// Цена уже должна подтвердить направление импульса.
+export const FLOW_MIN_DIRECTIONAL_MOVE_ATR = 0.0;
 
-// Старый chase-фильтр в ATR(15m) оставляем как страховку.
-export const FLOW_MAX_CHASE_ATR = 0.60;
+// Но не входим, если цена уже ушла слишком далеко.
+export const FLOW_MAX_CHASE_ATR = 0.30;
 
-// Новый анти-пик фильтр: если за окно цена уже ушла больше 0.15%,
-// импульс считается отработанным — не входим.
-export const FLOW_MAX_CHASE_PCT = 0.0015;
-
-// Короткие SL/TP относительно 15m ATR.
+// Короткие SL/TP для быстрого импульсного входа.
+// ATR по-прежнему берётся с текущего 15m таймфрейма.
 export const FLOW_STOP_ATR_MULTIPLIER = 0.5;
 export const FLOW_TAKE_PROFIT_ATR_MULTIPLIER = 0.8;
 
-// Для baseline из 60 секундных корзин.
+// Для baseline из 60 секундных корзин требуется минимум 30 активных.
 export const FLOW_MIN_BASELINE_BUCKETS = 30;
 
 // Не используем устаревший поток сделок.
@@ -40,19 +38,12 @@ export const FLOW_MAX_TRADE_AGE_MS = 1_500;
 
 export const FLOW_EXCLUDE_LIQUIDATIONS = true;
 
-export const FLOW_MIN_TRADES_IN_WINDOW = 4;
+// На 1 секунде 10 сделок — слишком жёсткий фильтр.
+export const FLOW_MIN_TRADES_IN_WINDOW = 3;
 
+// Импульс должен поддерживаться крупными сделками.
 export const FLOW_MIN_LARGE_TRADE_SHARE = 0.40;
 export const FLOW_LARGE_TRADE_NOTIONAL = 2_000;
-
-// === РАННИЙ ТРИГГЕР ===
-// Если за последние 300 мс было >= 2 крупных сделки
-// в одну сторону и их суммарный объём >= 3x среднего
-// секундного объёма — входим сразу, не ждём полной секунды.
-export const FLOW_EARLY_WINDOW_MS = 300;
-export const FLOW_EARLY_MIN_LARGE_TRADES = 2;
-export const FLOW_EARLY_VOLUME_MULTIPLIER = 3.0;
-export const FLOW_EARLY_MIN_IMBALANCE = 0.90;
 
 // Принудительный выход, если TP не достигнут за 2 минуты.
 export const MAX_POSITION_AGE_MS = 120_000;
@@ -74,11 +65,6 @@ export interface TradeFlowIndicators {
   baselineNonEmptyBuckets: number;
   largeTradeNotional: number;
   largeTradeShare: number;
-  earlyTriggered: boolean;
-  earlyWindowTradeCount: number;
-  earlyLargeTradeCount: number;
-  earlyImbalance: number;
-  chasePct: number;
 }
 
 export interface TradeFlowResult {
@@ -106,7 +92,6 @@ export interface TradeFlowConfig {
   minImbalance: number;
   minDirectionalMoveAtr: number;
   maxChaseAtr: number;
-  maxChasePct: number;
   stopAtrMultiplier: number;
   takeProfitAtrMultiplier: number;
   minBaselineBuckets: number;
@@ -115,10 +100,6 @@ export interface TradeFlowConfig {
   minTradesInWindow: number;
   minLargeTradeShare: number;
   largeTradeNotional: number;
-  earlyWindowMs: number;
-  earlyMinLargeTrades: number;
-  earlyVolumeMultiplier: number;
-  earlyMinImbalance: number;
 }
 
 export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
@@ -129,7 +110,6 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   minImbalance: FLOW_MIN_IMBALANCE,
   minDirectionalMoveAtr: FLOW_MIN_DIRECTIONAL_MOVE_ATR,
   maxChaseAtr: FLOW_MAX_CHASE_ATR,
-  maxChasePct: FLOW_MAX_CHASE_PCT,
   stopAtrMultiplier: FLOW_STOP_ATR_MULTIPLIER,
   takeProfitAtrMultiplier: FLOW_TAKE_PROFIT_ATR_MULTIPLIER,
   minBaselineBuckets: FLOW_MIN_BASELINE_BUCKETS,
@@ -137,11 +117,7 @@ export const DEFAULT_TRADE_FLOW_CONFIG: TradeFlowConfig = {
   excludeLiquidations: FLOW_EXCLUDE_LIQUIDATIONS,
   minTradesInWindow: FLOW_MIN_TRADES_IN_WINDOW,
   minLargeTradeShare: FLOW_MIN_LARGE_TRADE_SHARE,
-  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL,
-  earlyWindowMs: FLOW_EARLY_WINDOW_MS,
-  earlyMinLargeTrades: FLOW_EARLY_MIN_LARGE_TRADES,
-  earlyVolumeMultiplier: FLOW_EARLY_VOLUME_MULTIPLIER,
-  earlyMinImbalance: FLOW_EARLY_MIN_IMBALANCE
+  largeTradeNotional: FLOW_LARGE_TRADE_NOTIONAL
 };
 
 export interface TradeFlowBaseline {
@@ -151,6 +127,11 @@ export interface TradeFlowBaseline {
   reason: string | null;
 }
 
+/**
+ * Накапливает USD-объём в секундных buckets.
+ * Создавать отдельный экземпляр на каждый рынок и обновлять
+ * на каждом новом WS trade event.
+ */
 export class TradeFlowBaselineTracker {
   private readonly secondBuckets = new Map<number, number>();
 
@@ -281,7 +262,6 @@ interface Aggregate {
   buyVolume: number;
   sellVolume: number;
   count: number;
-  largeCount: number;
   firstPrice: number | null;
   lastPrice: number | null;
   excludedLiquidationCount: number;
@@ -325,7 +305,6 @@ function aggregate(
   let buyVolume = 0;
   let sellVolume = 0;
   let count = 0;
-  let largeCount = 0;
   let firstPrice: number | null = null;
   let lastPrice: number | null = null;
   let excludedLiquidationCount = 0;
@@ -358,7 +337,6 @@ function aggregate(
       largeTradeNotionalThreshold > 0 &&
       volume >= largeTradeNotionalThreshold
     ) {
-      largeCount += 1;
       largeTradeNotional += volume;
     }
 
@@ -375,7 +353,6 @@ function aggregate(
     buyVolume,
     sellVolume,
     count,
-    largeCount,
     firstPrice,
     lastPrice,
     excludedLiquidationCount,
@@ -408,6 +385,12 @@ function emptyResult(
   };
 }
 
+/**
+ * Анализирует поток сделок.
+ *
+ * baselineTracker обязателен для рабочего rolling-baseline:
+ * его нужно отдельно обновлять через addTrade() при каждом WS-событии.
+ */
 export function analyzeTradeFlow(
   symbol: string,
   trades: LighterTrade[],
@@ -443,15 +426,6 @@ export function analyzeTradeFlow(
     config.largeTradeNotional
   );
 
-  // Микро-окно для раннего входа.
-  const early = aggregate(
-    valid,
-    now - config.earlyWindowMs,
-    now + 1,
-    config.excludeLiquidations,
-    config.largeTradeNotional
-  );
-
   const trackerBaseline =
     options?.baselineTracker?.getBaseline(now);
 
@@ -464,6 +438,8 @@ export function analyzeTradeFlow(
   let excludedLiquidationCount =
     current.excludedLiquidationCount;
 
+  // Fallback позволяет работать без tracker, если передан полный
+  // исторический буфер достаточной длины.
   if (!options?.baselineTracker) {
     const baselineStart =
       now - config.windowMs - config.baselineMs;
@@ -555,34 +531,6 @@ export function analyzeTradeFlow(
       ? priceMove / atr
       : null;
 
-  const chasePct =
-    referencePrice != null &&
-    referencePrice > 0 &&
-    price > 0
-      ? Math.abs(price - referencePrice) / referencePrice
-      : 0;
-
-  const earlyTotal =
-    early.buyVolume + early.sellVolume;
-
-  const earlyImbalance =
-    earlyTotal > 0
-      ? (early.buyVolume - early.sellVolume) / earlyTotal
-      : 0;
-
-  const earlyVolumeThreshold =
-    baselineVolumePerWindow != null
-      ? baselineVolumePerWindow *
-        config.earlyVolumeMultiplier *
-        (config.earlyWindowMs / 1_000)
-      : Infinity;
-
-  const earlyTriggered =
-    early.largeCount >= config.earlyMinLargeTrades &&
-    earlyTotal >= earlyVolumeThreshold &&
-    Math.abs(earlyImbalance) >=
-      config.earlyMinImbalance;
-
   const indicators: TradeFlowIndicators = {
     windowMs: config.windowMs,
     windowTradeCount: current.count,
@@ -597,12 +545,7 @@ export function analyzeTradeFlow(
     excludedLiquidationCount,
     baselineNonEmptyBuckets: nonEmptyBaselineBuckets,
     largeTradeNotional: current.largeTradeNotional,
-    largeTradeShare,
-    earlyTriggered,
-    earlyWindowTradeCount: early.count,
-    earlyLargeTradeCount: early.largeCount,
-    earlyImbalance,
-    chasePct
+    largeTradeShare
   };
 
   if (!latestTrade || price <= 0) {
@@ -656,59 +599,6 @@ export function analyzeTradeFlow(
     );
   }
 
-  // Анти-пик: импульс уже отработал — не входим.
-  if (chasePct > config.maxChasePct) {
-    return emptyResult(
-      symbol,
-      price,
-      now,
-      `Impulse already exhausted: ` +
-        `chase ${(chasePct * 100).toFixed(3)}% > ` +
-        `${(config.maxChasePct * 100).toFixed(3)}%`,
-      indicators
-    );
-  }
-
-  // Ранний вход по крупным принтам.
-  if (earlyTriggered) {
-    const earlySide: 'long' | 'short' =
-      earlyImbalance > 0 ? 'long' : 'short';
-
-    const stopDistance =
-      atr * config.stopAtrMultiplier;
-
-    const targetDistance =
-      atr * config.takeProfitAtrMultiplier;
-
-    const stopLossPrice =
-      earlySide === 'long'
-        ? price - stopDistance
-        : price + stopDistance;
-
-    const takeProfitPrice =
-      earlySide === 'long'
-        ? price + targetDistance
-        : price - targetDistance;
-
-    return {
-      symbol,
-      ready: true,
-      buy: earlySide === 'long',
-      sell: earlySide === 'short',
-      side: earlySide,
-      price,
-      takeProfitPrice,
-      stopLossPrice,
-      positionSize: null,
-      regime: 'early_large_print_spike',
-      skipReason: null,
-      signalTime: latestTrade.time,
-      signalTimeIso: new Date(latestTrade.time).toISOString(),
-      indicators
-    };
-  }
-
-  // Обычный путь: подтверждённый 1-секундный всплеск.
   if (current.count < config.minTradesInWindow) {
     return emptyResult(
       symbol,
@@ -810,6 +700,8 @@ export function analyzeTradeFlow(
       ? price + targetDistance
       : price - targetDistance;
 
+  const signalTime = latestTrade.time;
+
   return {
     symbol,
     ready: true,
@@ -822,8 +714,8 @@ export function analyzeTradeFlow(
     positionSize: null,
     regime: 'aggressive_trade_flow_spike_1s',
     skipReason: null,
-    signalTime: latestTrade.time,
-    signalTimeIso: new Date(latestTrade.time).toISOString(),
+    signalTime,
+    signalTimeIso: new Date(signalTime).toISOString(),
     indicators
   };
 }
