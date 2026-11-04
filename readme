@@ -8,6 +8,10 @@ npm install protobufjs
 npm install -D @types/protobufjs
 npm install
 docker compose up -d --build
-
-
 docker compose logs -f trade_bot
+
+
+cd ~/lighter_trade_live
+docker compose logs --no-color trade_bot | grep -E '"ready":true|"event":"POSITION_OPENED"|"event":"POSITION_CLOSED"|"event":"POSITION_OPEN_REQUEST"' > trades_only.log
+wc -l trades_only.log
+head -3 trades_only.log
